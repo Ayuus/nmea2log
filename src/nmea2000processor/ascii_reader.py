@@ -26,7 +26,7 @@ from __future__ import annotations
 import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Iterator, Optional, Union
+from typing import Iterable, Iterator, Optional, Union
 
 from .model import Frame
 
@@ -94,14 +94,25 @@ def _parse_line(line: str, roller: _RollingDate) -> Optional[Frame]:
     )
 
 
+def iter_frames_from_lines(lines: Iterable[str], start_date: date) -> Iterator[Frame]:
+    """Zet een reeks tekstregels (uit een bestand óf een live socket-stream) om in Frame's.
+
+    Wordt gedeeld door :func:`iter_frames` (bestand) en ``network_reader.iter_frames_tcp``
+    (live TCP-verbinding met de W2K-2) zodat beide dezelfde parsing- en
+    middernacht-doorgang-logica gebruiken.
+    """
+    roller = _RollingDate(start_date)
+    for line in lines:
+        if not line.startswith("A"):
+            continue
+        frame = _parse_line(line, roller)
+        if frame is not None:
+            yield frame
+
+
 def iter_frames(path: Union[str, Path], start_date: Optional[date] = None) -> Iterator[Frame]:
     """Lees een N2K ASCII-logbestand en geef er gedecodeerde Frame's van terug, in bestandsvolgorde."""
     path = Path(path)
-    roller = _RollingDate(start_date if start_date is not None else _guess_start_date(path))
+    resolved_start_date = start_date if start_date is not None else _guess_start_date(path)
     with path.open("r", encoding="ascii", errors="replace") as handle:
-        for line in handle:
-            if not line.startswith("A"):
-                continue
-            frame = _parse_line(line, roller)
-            if frame is not None:
-                yield frame
+        yield from iter_frames_from_lines(handle, resolved_start_date)
