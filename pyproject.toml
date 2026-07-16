@@ -1,0 +1,20 @@
+[project]
+name = "nmea2000processor"
+version = "0.1.0"
+description = "Zet Actisense W2K-2 NMEA2000-logbestanden om in een vaarlogboek: havens, brandstofverbruik (motordata) en draaiuren."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.scripts]
+nmea2000logboek = "nmea2000processor.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
