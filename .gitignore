@@ -8,3 +8,4 @@ build/
 dist/
 .geocode_cache.json
 logboek.csv
+.claude/

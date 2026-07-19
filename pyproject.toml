@@ -10,7 +10,7 @@ dependencies = []
 test = ["pytest"]
 
 [project.scripts]
-nmea2000logboek = "nmea2000processor.cli:main"
+nmea2log = "nmea2000processor.cli:main"
 
 [build-system]
 requires = ["setuptools>=61"]

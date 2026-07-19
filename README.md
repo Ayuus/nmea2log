@@ -48,13 +48,13 @@ bestand bij voorkeur met een datum erin, bijvoorbeeld `2026-07-15.raw` — dat w
 middernacht-doorgangen correct te herkennen (het tijdstip in het formaat bevat zelf geen datum).
 
 ```bash
-nmea2000logboek 2026-07-15.raw -o logboek.csv
+nmea2log 2026-07-15.raw -o logboek.csv
 ```
 
 Meerdere bestanden (bijvoorbeeld één per dag) in één keer verwerken:
 
 ```bash
-nmea2000logboek 2026-07-14.raw 2026-07-15.raw 2026-07-16.raw -o logboek.csv
+nmea2log 2026-07-14.raw 2026-07-15.raw 2026-07-16.raw -o logboek.csv
 ```
 
 ### Optie B: live meelezen
@@ -63,7 +63,7 @@ Verbind rechtstreeks met de W2K-2 terwijl je vaart. Vervang `192.168.4.1` door h
 van de W2K-2 op jouw netwerk (te vinden op de statuspagina/webinterface van het apparaat):
 
 ```bash
-nmea2000logboek --live 192.168.4.1 -o logboek.csv
+nmea2log --live 192.168.4.1 -o logboek.csv
 ```
 
 De sessie loopt door tot je op Ctrl+C drukt (of tot `--duration` verstrijkt); daarna wordt het
@@ -73,7 +73,7 @@ aankomsthaven. Met `--tee` bewaar je tegelijk de ruwe ASCII-stream naar een best
 zowel live verwerkt als een permanent logbestand overhoudt:
 
 ```bash
-nmea2000logboek --live 192.168.4.1:60001 --tee 2026-07-16.raw -o logboek.csv
+nmea2log --live 192.168.4.1:60001 --tee 2026-07-16.raw -o logboek.csv
 ```
 
 ### Nuttige opties

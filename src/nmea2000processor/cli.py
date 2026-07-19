@@ -64,7 +64,7 @@ def _parse_host_port(value: str, default_port: int) -> Tuple[str, int]:
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="nmea2000logboek",
+        prog="nmea2log",
         description="Zet NMEA2000-data van een Actisense W2K-2 (N2K ASCII) om in een vaarlogboek (CSV), "
         "uit opgeslagen logbestanden of live via een TCP-verbinding.",
     )
