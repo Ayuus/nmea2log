@@ -12,7 +12,7 @@ if "%~1"=="" (
 
 set "OUTPUT=%~dp1logboek.csv"
 
-"C:\Users\ruijs\AppData\Local\Programs\Python\Python313\Scripts\nmea2log.exe" %* -o "%OUTPUT%"
+py -m nmea2000processor %* -o "%OUTPUT%"
 
 echo.
 echo Klaar. Druk op een toets om dit venster te sluiten.
