@@ -148,9 +148,11 @@ pytest
   echt logbestand tegen de regex in `ascii_reader.py` (`_LINE_RE`) en pas die aan als het afwijkt.
 - **EBL-formaat (SD-kaartlog)**: dit formaat is door Actisense nooit officieel gepubliceerd.
   `ebl_reader.py` is gebaseerd op reverse-engineering door de open-source Go-bibliotheek
-  `github.com/aldas/go-nmea-client` (framing, byte-stuffing, CAN-ID-decodering) — met de hand
-  geverifieerd tegen de testvectoren daarin, maar **nog niet tegen een echt EBL-bestand van een
-  W2K-2**. Bekende beperkingen/aannames:
+  [aldas/go-nmea-client](https://github.com/aldas/go-nmea-client) (specifiek
+  [`actisense/eblreader.go`](https://github.com/aldas/go-nmea-client/blob/main/actisense/eblreader.go) —
+  framing, byte-stuffing, CAN-ID-decodering) — met de hand geverifieerd tegen de testvectoren
+  daarin, maar **nog niet tegen een echt EBL-bestand van een W2K-2**. Bekende
+  beperkingen/aannames:
   - De eigen 2-byte tijdteller per record wordt genegeerd (de betekenis ervan is nergens
     betrouwbaar gedocumenteerd — zelfs de referentie-implementatie gokt ernaar). In plaats
     daarvan wordt de absolute tijd afgeleid uit PGN 126992 (System Time) elders in de stream.
