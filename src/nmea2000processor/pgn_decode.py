@@ -13,6 +13,7 @@ from typing import Optional, Tuple
 PGN_POSITION_RAPID = 129025  # Position, Rapid Update
 PGN_COG_SOG_RAPID = 129026  # COG & SOG, Rapid Update
 PGN_ENGINE_DYNAMIC = 127489  # Engine Parameters, Dynamic
+PGN_TRIP_FUEL_ENGINE = 127497  # Trip Parameters, Engine
 
 
 def _extract(data: bytes, bit_offset: int, bit_length: int, *, signed: bool) -> Optional[int]:
@@ -67,3 +68,13 @@ def decode_engine_dynamic(data: bytes) -> Optional[Tuple[int, Optional[float], O
     hours_raw = _extract(data, 88, 32, signed=False)
     fuel_lph = fuel_raw * 0.1 if fuel_raw is not None else None
     return instance, fuel_lph, hours_raw
+
+
+def decode_trip_fuel_engine(data: bytes) -> Optional[Tuple[int, Optional[float]]]:
+    """PGN 127497: motor-instance en de triptmeter-brandstofstand van de motor zelf, in liter."""
+    instance = _extract(data, 0, 8, signed=False)
+    if instance is None:
+        return None
+    trip_fuel_raw = _extract(data, 8, 16, signed=False)
+    trip_fuel_l = float(trip_fuel_raw) if trip_fuel_raw is not None else None
+    return instance, trip_fuel_l

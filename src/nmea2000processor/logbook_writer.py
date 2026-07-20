@@ -17,7 +17,8 @@ _FIELDNAMES = [
     "aankomsthaven",
     "vaartijd",
     "afstand_nm",
-    "brandstof_L",
+    "brandstof_L_berekend",
+    "brandstof_L_motorteller",
     "gem_verbruik_L_per_uur",
     "draaiuren",
 ]
@@ -53,7 +54,10 @@ def write_csv(trips: Iterable[TripLeg], path: Path) -> None:
                     "aankomsthaven": trip.arrive_place,
                     "vaartijd": _format_duration(duration),
                     "afstand_nm": _nl_num(trip.distance_nm),
-                    "brandstof_L": _nl_num(trip.fuel_liters),
+                    "brandstof_L_berekend": _nl_num(trip.fuel_liters),
+                    "brandstof_L_motorteller": _nl_num(trip.fuel_liters_device)
+                    if trip.fuel_liters_device is not None
+                    else "",
                     "gem_verbruik_L_per_uur": _nl_num(avg_consumption) if avg_consumption is not None else "",
                     "draaiuren": draaiuren,
                 }

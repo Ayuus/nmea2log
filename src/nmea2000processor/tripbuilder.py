@@ -16,7 +16,7 @@ from itertools import groupby
 from typing import Dict, List, Optional, Tuple
 
 from .geocode import Geocoder, NoGeocoder
-from .model import EngineSample, PositionFix, SogSample
+from .model import EngineSample, PositionFix, SogSample, TripFuelSample
 
 _KNOT_IN_MS = 0.514444
 _EARTH_RADIUS_NM = 3440.065
@@ -47,7 +47,8 @@ class TripLeg:
     depart_place: str
     arrive_place: str
     distance_nm: float
-    fuel_liters: float
+    fuel_liters: float  # berekend door brandstofdebiet (PGN 127489) te integreren over de tijd
+    fuel_liters_device: Optional[float]  # motor-eigen triptmeter (PGN 127497), None = niet beschikbaar
     engine_hours: Dict[int, float]  # motor-instance -> gedraaide uren tijdens deze reis
     track: List[NavSample]  # GPS-punten van deze reis, voor bv. GPX-export
 
@@ -137,10 +138,37 @@ def _fuel_liters(samples: List[EngineSample], start: datetime, end: datetime) ->
     return total
 
 
+def _device_fuel_delta(
+    samples: List[TripFuelSample], start: datetime, end: datetime
+) -> Optional[float]:
+    """Verschil tussen begin- en eindstand van de motor-eigen triptmeter binnen het tijdvak.
+
+    Geeft None terug als deze PGN niet (voldoende) beschikbaar was voor deze reis — bijvoorbeeld
+    omdat het apparaat 'm niet verstuurt — in plaats van een misleidende 0.
+    """
+    by_instance: Dict[int, List[TripFuelSample]] = {}
+    for sample in samples:
+        if sample.trip_fuel_used_l is None:
+            continue
+        by_instance.setdefault(sample.instance, []).append(sample)
+
+    total = 0.0
+    found_any = False
+    for seq in by_instance.values():
+        window = sorted((s for s in seq if start <= s.time <= end), key=lambda s: s.time)
+        if len(window) < 2:
+            continue
+        delta = window[-1].trip_fuel_used_l - window[0].trip_fuel_used_l
+        total += max(delta, 0.0)
+        found_any = True
+    return total if found_any else None
+
+
 def build_trips(
     fixes: List[PositionFix],
     sogs: List[SogSample],
     engine_samples: List[EngineSample],
+    trip_fuel_samples: Optional[List[TripFuelSample]] = None,
     *,
     geocoder: Optional[object] = None,
     speed_threshold_kn: float = 0.5,
@@ -148,6 +176,8 @@ def build_trips(
 ) -> List[TripLeg]:
     if geocoder is None:
         geocoder = NoGeocoder()
+    if trip_fuel_samples is None:
+        trip_fuel_samples = []
 
     samples = _merge_nav_samples(fixes, sogs)
     if len(samples) < 2:
@@ -193,6 +223,7 @@ def build_trips(
                 arrive_place=arrive_place,
                 distance_nm=distance_nm,
                 fuel_liters=_fuel_liters(engine_samples, depart_time, arrive_time),
+                fuel_liters_device=_device_fuel_delta(trip_fuel_samples, depart_time, arrive_time),
                 engine_hours=_engine_hours_delta(engine_samples, depart_time, arrive_time),
                 track=group,
             )

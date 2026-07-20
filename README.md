@@ -13,16 +13,22 @@ dev-dependency voor de tests.
 1. **Inlezen** (`ascii_reader.py`): leest een *N2K ASCII*-logbestand zoals de W2K-2 dat
    wegschrijft. Elke regel is al door de Actisense-hardware herassembleerd (fast-packet/
    multi-packet), dus er is geen CAN-framereassemblage nodig.
-2. **Decoderen** (`pgn_decode.py`): pikt drie PGN's uit de stroom:
+2. **Decoderen** (`pgn_decode.py`): pikt vier PGN's uit de stroom:
    - **127489** (*Engine Parameters, Dynamic*) → brandstofdebiet (L/uur) en de cumulatieve
      draaiurenteller van de motor. Dit is motordata, dus expliciet niet de tankinhoud-sensor.
+   - **127497** (*Trip Parameters, Engine*) → optioneel: de triptmeter-brandstofstand die de
+     motor/ECU zelf bijhoudt (in liter), als het apparaat deze PGN verstuurt.
    - **129025** (*Position, Rapid Update*) → GPS-positie.
    - **129026** (*COG & SOG, Rapid Update*) → vaart over de grond.
 3. **Reizen herkennen** (`tripbuilder.py`): periodes waarin de boot lang genoeg stilligt
    (standaard ≥ 10 minuten, instelbaar) gelden als havenbezoek; de periodes daartussen zijn
-   de reizen. Brandstofverbruik per reis wordt berekend door het brandstofdebiet te
-   integreren over de tijd; draaiuren per reis zijn het verschil tussen de motoruren-teller
-   bij vertrek en aankomst.
+   de reizen. Brandstofverbruik per reis wordt op twee manieren getoond: **berekend** door het
+   brandstofdebiet (PGN 127489) te integreren over de tijd, en — als beschikbaar — het verschil
+   tussen begin- en eindstand van de **motor-eigen triptmeter** (PGN 127497). Let op: die
+   triptmeter is een teller die de motor zelf beheert en kan door de gebruiker op het display
+   gereset zijn, dus hij hoeft niet exact overeen te komen met onze eigen vertrek/aankomst-
+   indeling. Draaiuren per reis zijn het verschil tussen de motoruren-teller bij vertrek en
+   aankomst.
 4. **Havennamen** (`geocode.py`): de GPS-positie van elk havenbezoek wordt via
    OpenStreetMap/Nominatim (reverse geocoding) omgezet naar een plaatsnaam, met lokale
    caching zodat je nooit twee keer dezelfde positie opvraagt.

@@ -21,6 +21,7 @@ def test_write_gpx_basic(tmp_path: Path):
         arrive_place="Marina B",
         distance_nm=6.3,
         fuel_liters=4.0,
+        fuel_liters_device=3.8,
         engine_hours={0: 0.5},
         track=track,
     )
@@ -39,7 +40,8 @@ def test_write_gpx_basic(tmp_path: Path):
 
     desc = trk.find("gpx:desc", _NS).text
     assert "Vaartijd" in desc
-    assert "Brandstof: 4,0 L" in desc
+    assert "Brandstof (berekend): 4,0 L" in desc
+    assert "Brandstof (motorteller): 3,8 L" in desc
     assert "motor 0: 0,5 u" in desc
 
     points = trk.findall("gpx:trkseg/gpx:trkpt", _NS)
@@ -57,6 +59,7 @@ def test_write_gpx_skips_trips_without_track(tmp_path: Path):
         arrive_place="B",
         distance_nm=1.0,
         fuel_liters=1.0,
+        fuel_liters_device=None,
         engine_hours={},
         track=[],
     )

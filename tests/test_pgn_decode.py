@@ -6,6 +6,7 @@ from nmea2000processor.pgn_decode import (
     decode_engine_dynamic,
     decode_position_rapid,
     decode_sog,
+    decode_trip_fuel_engine,
 )
 
 
@@ -73,3 +74,22 @@ def test_decode_engine_dynamic_fuel_not_available():
     assert instance == 1
     assert fuel_lph is None
     assert hours_s == 500
+
+
+def test_decode_trip_fuel_engine():
+    # instance(1B) + tripFuelUsed(2B) + fuelRateAverage(2B) + fuelRateEconomy(2B) + instantaneousFuelEconomy(2B)
+    data = struct.pack("<BHhhh", 0, 123, 50, 45, 60)
+
+    instance, trip_fuel_l = decode_trip_fuel_engine(data)
+
+    assert instance == 0
+    assert trip_fuel_l == pytest.approx(123.0)
+
+
+def test_decode_trip_fuel_engine_not_available():
+    data = struct.pack("<BHhhh", 2, 0xFFFF, 0x7FFF, 0x7FFF, 0x7FFF)
+
+    instance, trip_fuel_l = decode_trip_fuel_engine(data)
+
+    assert instance == 2
+    assert trip_fuel_l is None

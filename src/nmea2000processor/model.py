@@ -36,3 +36,10 @@ class EngineSample:
     instance: int
     fuel_rate_lph: Optional[float]  # brandstofverbruik in L/uur, None = niet beschikbaar
     total_hours_s: Optional[int]  # cumulatieve draaiurenteller van de motor, in seconden
+
+
+@dataclass(frozen=True)
+class TripFuelSample:
+    time: datetime
+    instance: int
+    trip_fuel_used_l: Optional[float]  # triptmeter van de motor zelf (PGN 127497), in liter

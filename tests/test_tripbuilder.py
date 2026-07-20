@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 
-from nmea2000processor.model import EngineSample, PositionFix, SogSample
+from nmea2000processor.model import EngineSample, PositionFix, SogSample, TripFuelSample
 from nmea2000processor.tripbuilder import build_trips
 
 
@@ -59,8 +59,31 @@ def test_build_trips_single_leg():
     assert trip.fuel_liters > 0
     assert 0 in trip.engine_hours
     assert trip.engine_hours[0] > 0
+    assert trip.fuel_liters_device is None  # geen PGN 127497 meegegeven
     # geocoder moet niet vaker dan het aantal havenbezoeken zijn aangeroepen
     assert len(geocoder.calls) == 2
+
+
+def test_trip_fuel_device_delta():
+    fixes, sogs, engine_samples = _build_scenario()
+    geocoder = _StubGeocoder()
+
+    # motor-eigen triptmeter: loopt gestaag op, alleen tijdens het varen relevant voor de reis
+    trip_fuel_samples = [
+        TripFuelSample(_dt(m), 0, 100.0 + m * 0.2) for m in range(0, 54)
+    ]
+
+    trips = build_trips(
+        fixes, sogs, engine_samples, trip_fuel_samples,
+        geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+    )
+
+    assert len(trips) == 1
+    trip = trips[0]
+    assert trip.fuel_liters_device is not None
+    assert trip.fuel_liters_device > 0
+    # verschil tussen begin- en eindstand van de reis, niet van de hele periode
+    assert trip.fuel_liters_device < (100.0 + 53 * 0.2) - 100.0
 
 
 def test_short_stop_does_not_split_trip():

@@ -11,27 +11,30 @@ from .ascii_reader import iter_frames
 from .geocode import Geocoder, NoGeocoder
 from .gpx_writer import write_gpx
 from .logbook_writer import write_csv
-from .model import EngineSample, Frame, PositionFix, SogSample
+from .model import EngineSample, Frame, PositionFix, SogSample, TripFuelSample
 from .network_reader import DEFAULT_PORT, iter_frames_tcp
 from .pgn_decode import (
     PGN_COG_SOG_RAPID,
     PGN_ENGINE_DYNAMIC,
     PGN_POSITION_RAPID,
+    PGN_TRIP_FUEL_ENGINE,
     decode_engine_dynamic,
     decode_position_rapid,
     decode_sog,
+    decode_trip_fuel_engine,
 )
 from .tripbuilder import build_trips
 
 
 def _collect_samples(
     frames: Iterable[Frame], *, deadline: Optional[float] = None
-) -> Tuple[List[PositionFix], List[SogSample], List[EngineSample]]:
+) -> Tuple[List[PositionFix], List[SogSample], List[EngineSample], List[TripFuelSample]]:
     """Verwerkt frames tot samples. Stopt netjes op Ctrl+C of als de deadline verstrijkt,
     zodat een live-sessie altijd een logboek oplevert van wat er tot dan toe binnen is."""
     fixes: List[PositionFix] = []
     sogs: List[SogSample] = []
     engine_samples: List[EngineSample] = []
+    trip_fuel_samples: List[TripFuelSample] = []
     try:
         for frame in frames:
             if deadline is not None and time.monotonic() >= deadline:
@@ -51,9 +54,14 @@ def _collect_samples(
                 if decoded is not None:
                     instance, fuel_lph, hours_s = decoded
                     engine_samples.append(EngineSample(frame.time, instance, fuel_lph, hours_s))
+            elif frame.pgn == PGN_TRIP_FUEL_ENGINE:
+                decoded = decode_trip_fuel_engine(frame.data)
+                if decoded is not None:
+                    instance, trip_fuel_l = decoded
+                    trip_fuel_samples.append(TripFuelSample(frame.time, instance, trip_fuel_l))
     except KeyboardInterrupt:
         print("\nOnderbroken door gebruiker; logboek wordt geschreven met de tot nu toe verzamelde data...", file=sys.stderr)
-    return fixes, sogs, engine_samples
+    return fixes, sogs, engine_samples, trip_fuel_samples
 
 
 def _parse_host_port(value: str, default_port: int) -> Tuple[str, int]:
@@ -146,6 +154,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     all_fixes: List[PositionFix] = []
     all_sogs: List[SogSample] = []
     all_engine: List[EngineSample] = []
+    all_trip_fuel: List[TripFuelSample] = []
 
     if args.live:
         host, port = _parse_host_port(args.live, DEFAULT_PORT)
@@ -156,7 +165,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"Kon niet verbinden met {host}:{port}: {exc}", file=sys.stderr)
             return 1
         deadline = time.monotonic() + args.duration if args.duration else None
-        all_fixes, all_sogs, all_engine = _collect_samples(frames, deadline=deadline)
+        all_fixes, all_sogs, all_engine, all_trip_fuel = _collect_samples(frames, deadline=deadline)
     else:
         start_date = date.fromisoformat(args.start_date) if args.start_date else None
         for index, path in enumerate(args.logfiles):
@@ -164,10 +173,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(f"Logbestand niet gevonden: {path}", file=sys.stderr)
                 return 1
             frames = iter_frames(path, start_date=start_date if index == 0 else None)
-            fixes, sogs, engine = _collect_samples(frames)
+            fixes, sogs, engine, trip_fuel = _collect_samples(frames)
             all_fixes += fixes
             all_sogs += sogs
             all_engine += engine
+            all_trip_fuel += trip_fuel
 
     if not all_fixes:
         print("Geen positiedata (PGN 129025) gevonden.", file=sys.stderr)
@@ -179,6 +189,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         all_fixes,
         all_sogs,
         all_engine,
+        all_trip_fuel,
         geocoder=geocoder,
         speed_threshold_kn=args.speed_threshold_kn,
         min_stop_minutes=args.min_stop_minutes,

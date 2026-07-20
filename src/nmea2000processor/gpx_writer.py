@@ -26,8 +26,10 @@ def _trip_description(trip: TripLeg) -> str:
     parts = [
         f"Vaartijd: {_format_duration(duration)}",
         f"Afstand: {_nl_num(trip.distance_nm)} nm",
-        f"Brandstof: {_nl_num(trip.fuel_liters)} L",
+        f"Brandstof (berekend): {_nl_num(trip.fuel_liters)} L",
     ]
+    if trip.fuel_liters_device is not None:
+        parts.append(f"Brandstof (motorteller): {_nl_num(trip.fuel_liters_device)} L")
     draaiuren = ", ".join(
         f"motor {instance}: {_nl_num(hours)} u" for instance, hours in sorted(trip.engine_hours.items())
     )
