@@ -2,7 +2,8 @@
 
 Pure Python-applicatie die NMEA2000-logbestanden van een **Actisense W2K-2** omzet naar een
 vaarlogboek (CSV): vertrek-/aankomsthaven, brandstofverbruik (uit motordata, niet uit een
-tanksensor) en gedraaide motoruren.
+tanksensor) en gedraaide motoruren. Schrijft daarnaast een **GPX-bestand** met de gevaren
+route per reis, te openen in navigatiesoftware (OpenCPN, Navionics, etc.).
 
 Geen enkele runtime-dependency buiten de Python-standaardbibliotheek — alleen `pytest` als
 dev-dependency voor de tests.
@@ -27,6 +28,10 @@ dev-dependency voor de tests.
    caching zodat je nooit twee keer dezelfde positie opvraagt.
 5. **Logboek wegschrijven** (`logbook_writer.py`): CSV met `;` als scheidingsteken en `,` als
    decimaalteken — opent direct correct in de Nederlandse Excel.
+6. **Route wegschrijven** (`gpx_writer.py`): naast de CSV wordt altijd ook een GPX-bestand
+   geschreven (zelfde bestandsnaam, `.gpx`-extensie) met één track per reis. Klik je in een
+   kaartprogramma op een track, dan zie je naam en beschrijving met vaartijd, afstand,
+   brandstof en draaiuren van die reis.
 
 ## Installatie
 
@@ -50,6 +55,8 @@ middernacht-doorgangen correct te herkennen (het tijdstip in het formaat bevat z
 ```bash
 nmea2log 2026-07-15.raw -o logboek.csv
 ```
+
+Dit schrijft zowel `logboek.csv` als `logboek.gpx` (de route per reis).
 
 Meerdere bestanden (bijvoorbeeld één per dag) in één keer verwerken:
 

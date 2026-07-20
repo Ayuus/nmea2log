@@ -15,6 +15,7 @@ def test_write_csv_basic(tmp_path: Path):
         distance_nm=12.3,
         fuel_liters=9.75,
         engine_hours={0: 1.5},
+        track=[],
     )
     out_path = tmp_path / "logboek.csv"
 

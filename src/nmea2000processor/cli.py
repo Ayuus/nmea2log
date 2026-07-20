@@ -9,6 +9,7 @@ from typing import Iterable, List, Optional, Tuple
 
 from .ascii_reader import iter_frames
 from .geocode import Geocoder, NoGeocoder
+from .gpx_writer import write_gpx
 from .logbook_writer import write_csv
 from .model import EngineSample, Frame, PositionFix, SogSample
 from .network_reader import DEFAULT_PORT, iter_frames_tcp
@@ -191,7 +192,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1
 
     write_csv(trips, args.output)
+    gpx_path = args.output.with_suffix(".gpx")
+    write_gpx(trips, gpx_path)
     print(f"Logboek geschreven: {args.output} ({len(trips)} reis/reizen)")
+    print(f"Route geschreven: {gpx_path}")
     return 0
 
 

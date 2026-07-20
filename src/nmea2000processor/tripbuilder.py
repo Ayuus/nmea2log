@@ -49,6 +49,7 @@ class TripLeg:
     distance_nm: float
     fuel_liters: float
     engine_hours: Dict[int, float]  # motor-instance -> gedraaide uren tijdens deze reis
+    track: List[NavSample]  # GPS-punten van deze reis, voor bv. GPX-export
 
 
 def _haversine_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -193,6 +194,7 @@ def build_trips(
                 distance_nm=distance_nm,
                 fuel_liters=_fuel_liters(engine_samples, depart_time, arrive_time),
                 engine_hours=_engine_hours_delta(engine_samples, depart_time, arrive_time),
+                track=group,
             )
         )
     return trips
