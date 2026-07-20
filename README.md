@@ -63,10 +63,17 @@ op twee manieren gebruiken:
 
 ### Optie A: opgeslagen logbestanden
 
-Leg de stream vooraf vast naar een bestand (bijvoorbeeld met de SD-kaart-logfunctie van de
-W2K-2, of door met een terminalprogramma de TCP-stream naar een bestand te loggen). Noem het
-bestand bij voorkeur met een datum erin, bijvoorbeeld `2026-07-15.raw` — dat wordt gebruikt om
+Leg de N2K ASCII-stream van een Data Server vooraf vast naar een bestand — bijvoorbeeld door
+`nmea2log --live ... --tee 2026-07-15.raw` te draaien (zie Optie B), of met een ander
+terminalprogramma dat de TCP-stream naar een bestand wegschrijft. Noem het bestand bij
+voorkeur met een datum erin, bijvoorbeeld `2026-07-15.raw` — dat wordt gebruikt om
 middernacht-doorgangen correct te herkennen (het tijdstip in het formaat bevat zelf geen datum).
+
+**Let op**: de ingebouwde **SD-kaart-logfunctie** van de W2K-2 is hiervoor *niet* geverifieerd
+en waarschijnlijk niet bruikbaar — die logt in Actisense's eigen EBL-formaat (zichtbaar als
+"EBL"-mappen in de webinterface onder "Download Logs"), niet in N2K ASCII. Deze app kan
+EBL-bestanden niet lezen. Gebruik voor opgeslagen bestanden dus `--tee` (Optie B) i.p.v. de
+SD-kaart, tenzij je een manier vindt om EBL naar N2K ASCII te converteren.
 
 ```bash
 nmea2log 2026-07-15.raw -o logboek.csv
