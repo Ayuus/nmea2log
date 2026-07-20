@@ -143,9 +143,13 @@ pytest
 ## Aannames & beperkingen
 
 - **Regelformaat (N2K ASCII)**: de parser is gebouwd op basis van de officiële Actisense-
-  documentatie ("NMEA 2000 ASCII Output format") en het canboat-PGN-woordenboek. Ik heb dit niet
-  tegen een echte log van jouw W2K-2 kunnen testen — controleer de eerste paar regels van een
-  echt logbestand tegen de regex in `ascii_reader.py` (`_LINE_RE`) en pas die aan als het afwijkt.
+  documentatie op de website — het kennisbank-artikel
+  ["NMEA 2000 ASCII Output format"](https://actisense.com/knowledge-base/nmea-2000/w2k-1-nmea-2000-to-wifi-gateway/nmea-2000-ascii-output-format/)
+  en de [W2K-2 User Manual](https://actisense.com/products/w2k-2-nmea-2000-wifi-gateway/) (zie
+  productpagina, downloads-tab) — en het [canboat](https://github.com/canboat/canboat)-PGN-
+  woordenboek. Ik heb dit niet tegen een echte log van jouw W2K-2 kunnen testen — controleer de
+  eerste paar regels van een echt logbestand tegen de regex in `ascii_reader.py` (`_LINE_RE`) en
+  pas die aan als het afwijkt.
 - **EBL-formaat (SD-kaartlog)**: dit formaat is door Actisense nooit officieel gepubliceerd.
   `ebl_reader.py` is gebaseerd op reverse-engineering door de open-source Go-bibliotheek
   [aldas/go-nmea-client](https://github.com/aldas/go-nmea-client) (specifiek
