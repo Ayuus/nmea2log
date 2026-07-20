@@ -10,10 +10,15 @@ dev-dependency voor de tests.
 
 ## Hoe het werkt
 
-1. **Inlezen** (`ascii_reader.py`): leest een *N2K ASCII*-logbestand zoals de W2K-2 dat
-   wegschrijft. Elke regel is al door de Actisense-hardware herassembleerd (fast-packet/
-   multi-packet), dus er is geen CAN-framereassemblage nodig.
-2. **Decoderen** (`pgn_decode.py`): pikt vijf PGN's uit de stroom:
+1. **Inlezen** — twee bestandsformaten, automatisch gekozen op basis van de extensie:
+   - `.ebl` (`ebl_reader.py`): het binaire formaat van de **SD-kaart-logfunctie** van de W2K-2
+     (BST-95 CAN-raw). Hier moet de app zelf NMEA2000 Fast-Packet-frames herassembleren (zie
+     "Aannames & beperkingen" hieronder — dit is reverse-engineered en nog niet tegen een echt
+     bestand geverifieerd).
+   - overig, bv. `.raw`/`.n2k` (`ascii_reader.py`): een *N2K ASCII*-logbestand, zoals je dat met
+     `--live --tee` kunt vastleggen. Elke regel is al door de Actisense-hardware herassembleerd
+     (fast-packet/multi-packet), dus daar is geen reassemblage nodig.
+2. **Decoderen** (`pgn_decode.py`): pikt zes PGN's uit de stroom:
    - **127489** (*Engine Parameters, Dynamic*) → brandstofdebiet, draaiurenteller, en
      gezondheidsindicatoren (olie-druk/-temperatuur, koelvloeistoftemperatuur, alternator-
      spanning, motorbelasting) plus de twee "Discrete Status"-waarschuwingsvelden. Dit is
@@ -23,6 +28,8 @@ dev-dependency voor de tests.
    - **128267** (*Water Depth*) → waterdiepte onder de transducer.
    - **129025** (*Position, Rapid Update*) → GPS-positie.
    - **129026** (*COG & SOG, Rapid Update*) → vaart over de grond.
+   - **126992** (*System Time*) → alleen gebruikt bij `.ebl`-bestanden, om frames van een
+     absolute datum/tijd te voorzien (zie hieronder).
 3. **Reizen herkennen** (`tripbuilder.py`): periodes waarin de boot lang genoeg stilligt
    (standaard ≥ 10 minuten, instelbaar) gelden als havenbezoek; de periodes daartussen zijn
    de reizen. Per reis wordt berekend:
@@ -63,17 +70,24 @@ op twee manieren gebruiken:
 
 ### Optie A: opgeslagen logbestanden
 
-Leg de N2K ASCII-stream van een Data Server vooraf vast naar een bestand — bijvoorbeeld door
-`nmea2log --live ... --tee 2026-07-15.raw` te draaien (zie Optie B), of met een ander
-terminalprogramma dat de TCP-stream naar een bestand wegschrijft. Noem het bestand bij
-voorkeur met een datum erin, bijvoorbeeld `2026-07-15.raw` — dat wordt gebruikt om
-middernacht-doorgangen correct te herkennen (het tijdstip in het formaat bevat zelf geen datum).
+**Van de SD-kaart** (geen live verbinding nodig — aanbevolen als je niet afhankelijk wilt zijn
+van een verbinding tijdens het varen): download de `.ebl`-bestanden via de webinterface van de
+W2K-2 ("Download Logs") en geef ze direct mee:
 
-**Let op**: de ingebouwde **SD-kaart-logfunctie** van de W2K-2 is hiervoor *niet* geverifieerd
-en waarschijnlijk niet bruikbaar — die logt in Actisense's eigen EBL-formaat (zichtbaar als
-"EBL"-mappen in de webinterface onder "Download Logs"), niet in N2K ASCII. Deze app kan
-EBL-bestanden niet lezen. Gebruik voor opgeslagen bestanden dus `--tee` (Optie B) i.p.v. de
-SD-kaart, tenzij je een manier vindt om EBL naar N2K ASCII te converteren.
+```bash
+nmea2log logboek_20260715.ebl -o logboek.csv
+```
+
+⚠️ Dit EBL-pad is **reverse-engineered en nog niet tegen een echt bestand van een W2K-2
+geverifieerd** (zie "Aannames & beperkingen"). Test dit met een klein bestand voordat je erop
+vertrouwt, en deel een fragment zodat het samen gecontroleerd kan worden.
+
+**Alternatief**: leg de N2K ASCII-stream van een Data Server vast naar een bestand, bijvoorbeeld
+door `nmea2log --live ... --tee 2026-07-15.raw` te draaien (zie Optie B), of met een ander
+terminalprogramma dat de TCP-stream naar een bestand wegschrijft. Noem het bestand bij voorkeur
+met een datum erin, bijvoorbeeld `2026-07-15.raw` — dat wordt gebruikt om middernacht-
+doorgangen correct te herkennen (het tijdstip in het formaat bevat zelf geen datum; `.ebl`-
+bestanden hebben dit probleem niet, die halen hun tijd uit de data zelf).
 
 ```bash
 nmea2log 2026-07-15.raw -o logboek.csv
@@ -81,10 +95,11 @@ nmea2log 2026-07-15.raw -o logboek.csv
 
 Dit schrijft zowel `logboek.csv` als `logboek.gpx` (de route per reis).
 
-Meerdere bestanden (bijvoorbeeld één per dag) in één keer verwerken:
+Meerdere bestanden (bijvoorbeeld één per dag, `.ebl` en `.raw` door elkaar) in één keer
+verwerken:
 
 ```bash
-nmea2log 2026-07-14.raw 2026-07-15.raw 2026-07-16.raw -o logboek.csv
+nmea2log 2026-07-14.raw 2026-07-15.ebl 2026-07-16.raw -o logboek.csv
 ```
 
 ### Optie B: live meelezen
@@ -127,10 +142,26 @@ pytest
 
 ## Aannames & beperkingen
 
-- **Regelformaat**: de parser is gebouwd op basis van de officiële Actisense-documentatie
-  ("NMEA 2000 ASCII Output format") en het canboat-PGN-woordenboek. Ik heb dit niet tegen een
-  echte log van jouw W2K-2 kunnen testen — controleer de eerste paar regels van een echt
-  logbestand tegen de regex in `ascii_reader.py` (`_LINE_RE`) en pas die aan als het afwijkt.
+- **Regelformaat (N2K ASCII)**: de parser is gebouwd op basis van de officiële Actisense-
+  documentatie ("NMEA 2000 ASCII Output format") en het canboat-PGN-woordenboek. Ik heb dit niet
+  tegen een echte log van jouw W2K-2 kunnen testen — controleer de eerste paar regels van een
+  echt logbestand tegen de regex in `ascii_reader.py` (`_LINE_RE`) en pas die aan als het afwijkt.
+- **EBL-formaat (SD-kaartlog)**: dit formaat is door Actisense nooit officieel gepubliceerd.
+  `ebl_reader.py` is gebaseerd op reverse-engineering door de open-source Go-bibliotheek
+  `github.com/aldas/go-nmea-client` (framing, byte-stuffing, CAN-ID-decodering) — met de hand
+  geverifieerd tegen de testvectoren daarin, maar **nog niet tegen een echt EBL-bestand van een
+  W2K-2**. Bekende beperkingen/aannames:
+  - De eigen 2-byte tijdteller per record wordt genegeerd (de betekenis ervan is nergens
+    betrouwbaar gedocumenteerd — zelfs de referentie-implementatie gokt ernaar). In plaats
+    daarvan wordt de absolute tijd afgeleid uit PGN 126992 (System Time) elders in de stream.
+    **Gevolg**: als je NMEA2000-netwerk geen bron heeft die PGN 126992 verstuurt (meestal een
+    GPS/kaartplotter), levert een `.ebl`-bestand niets op — frames vóór de eerste 126992-
+    boodschap worden overgeslagen, en zonder 126992 helemaal geen frames.
+  - Fast-Packet-reassemblage (nodig voor PGN 127489 en 127497, die beide >8 bytes zijn) is
+    geïmplementeerd volgens de standaard NMEA2000-conventie, maar niet tegen echte fast-packet-
+    data van een W2K-2 getest.
+  - Geef bij problemen een klein (paar honderd frames) `.ebl`-fragment door, dan wordt dit
+    samen tegen echte data gecontroleerd en zo nodig aangepast.
 - **Havenherkenning** is gebaseerd op stilligtijd + reverse geocoding, niet op een lijst van
   bekende marina's. Nominatim geeft niet altijd de exacte marinanaam terug (soms de plaatsnaam
   van de dichtstbijzijnde bebouwing). Wil je preciezere namen, dan is de volgende stap een

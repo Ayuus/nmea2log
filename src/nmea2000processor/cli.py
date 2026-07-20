@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
 
 from .ascii_reader import iter_frames
+from .ebl_reader import iter_frames as iter_frames_ebl
 from .geocode import Geocoder, NoGeocoder
 from .gpx_writer import write_gpx
 from .logbook_writer import write_csv
@@ -70,6 +71,14 @@ def _collect_samples(
     return fixes, sogs, engine_samples, trip_fuel_samples, depth_samples
 
 
+def _iter_frames_for_path(path: Path, start_date: Optional[date]) -> Iterable[Frame]:
+    """Kiest de juiste parser op basis van de bestandsextensie: .ebl -> binaire SD-kaartlog,
+    al het overige -> N2K ASCII (live-TCP-stream vastgelegd naar bestand, zie --tee)."""
+    if path.suffix.lower() == ".ebl":
+        return iter_frames_ebl(path)
+    return iter_frames(path, start_date=start_date)
+
+
 def _parse_host_port(value: str, default_port: int) -> Tuple[str, int]:
     if ":" in value:
         host, _, port_str = value.rpartition(":")
@@ -87,7 +96,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "logfiles",
         nargs="*",
         type=Path,
-        help="Eén of meer .raw/.n2k-logbestanden (N2K ASCII-formaat). Niet combineren met --live.",
+        help="Eén of meer logbestanden: .ebl (SD-kaartlog van de W2K-2) of .raw/.n2k (N2K ASCII, "
+        "bv. vastgelegd via --live --tee). Niet combineren met --live.",
     )
     parser.add_argument(
         "--live",
@@ -117,7 +127,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="Startdatum YYYY-MM-DD voor het eerste logbestand (anders geraden uit bestandsnaam of wijzigingsdatum). "
-        "Niet van toepassing bij --live (daar geldt de huidige datum).",
+        "Niet van toepassing bij --live of .ebl-bestanden (die halen hun datum/tijd uit de data zelf).",
     )
     parser.add_argument(
         "--speed-threshold-kn",
@@ -179,7 +189,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             if not path.exists():
                 print(f"Logbestand niet gevonden: {path}", file=sys.stderr)
                 return 1
-            frames = iter_frames(path, start_date=start_date if index == 0 else None)
+            frames = _iter_frames_for_path(path, start_date if index == 0 else None)
             fixes, sogs, engine, trip_fuel, depth = _collect_samples(frames)
             all_fixes += fixes
             all_sogs += sogs

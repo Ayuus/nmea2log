@@ -1,4 +1,5 @@
 import struct
+from datetime import date, datetime, timedelta
 
 import pytest
 
@@ -6,6 +7,7 @@ from nmea2000processor.pgn_decode import (
     decode_engine_dynamic,
     decode_position_rapid,
     decode_sog,
+    decode_system_time,
     decode_trip_fuel_engine,
     decode_water_depth,
 )
@@ -112,3 +114,22 @@ def test_decode_water_depth_not_available():
     data = struct.pack("<BIhB", 0, 0xFFFFFFFF, 0, 0)
 
     assert decode_water_depth(data) is None
+
+
+def test_decode_system_time():
+    when = datetime(2026, 7, 15, 9, 30, 15, 500000)
+    epoch_days = (when.date() - date(1970, 1, 1)).days
+    seconds_of_day = (when - datetime.combine(when.date(), datetime.min.time())).total_seconds()
+    time_raw = round(seconds_of_day / 0.0001)
+    # sid(1B) + source(4bit)/reserved(4bit) + date(2B) + time(4B)
+    data = struct.pack("<BBH", 0, 0, epoch_days) + struct.pack("<I", time_raw)
+
+    result = decode_system_time(data)
+
+    assert result == when
+
+
+def test_decode_system_time_not_available():
+    data = struct.pack("<BBH", 0, 0, 0xFFFF) + struct.pack("<I", 0)
+
+    assert decode_system_time(data) is None

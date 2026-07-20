@@ -8,6 +8,7 @@ zoals gebruikelijk in NMEA2000/J1939.
 
 from __future__ import annotations
 
+from datetime import date, datetime, timedelta
 from typing import Dict, FrozenSet, Optional, Tuple
 
 PGN_POSITION_RAPID = 129025  # Position, Rapid Update
@@ -15,6 +16,9 @@ PGN_COG_SOG_RAPID = 129026  # COG & SOG, Rapid Update
 PGN_ENGINE_DYNAMIC = 127489  # Engine Parameters, Dynamic
 PGN_TRIP_FUEL_ENGINE = 127497  # Trip Parameters, Engine
 PGN_WATER_DEPTH = 128267  # Water Depth
+PGN_SYSTEM_TIME = 126992  # System Time
+
+_EPOCH = date(1970, 1, 1)
 
 # Bitbetekenis van de twee "Discrete Status"-velden in PGN 127489, overgenomen uit canboat's
 # ENGINE_STATUS_1 / ENGINE_STATUS_2 lookup-enumeraties.
@@ -149,3 +153,17 @@ def decode_trip_fuel_engine(data: bytes) -> Optional[Tuple[int, Optional[float]]
     trip_fuel_raw = _extract(data, 8, 16, signed=False)
     trip_fuel_l = float(trip_fuel_raw) if trip_fuel_raw is not None else None
     return instance, trip_fuel_l
+
+
+def decode_system_time(data: bytes) -> Optional[datetime]:
+    """PGN 126992: absolute datum/tijd (UTC) — dagen sinds 1970-01-01 plus tijd-op-de-dag.
+
+    Gebruikt om EBL-logbestanden (die geen bruikbare eigen tijdstempel per record hebben) van
+    een absolute klok te voorzien, via de systeemtijd-PGN die elders in dezelfde N2K-stream zit.
+    """
+    date_raw = _extract(data, 16, 16, signed=False)
+    time_raw = _extract(data, 32, 32, signed=False)
+    if date_raw is None or time_raw is None:
+        return None
+    day = _EPOCH + timedelta(days=date_raw)
+    return datetime.combine(day, datetime.min.time()) + timedelta(seconds=time_raw * 0.0001)
