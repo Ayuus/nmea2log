@@ -7,6 +7,7 @@ from nmea2000processor.pgn_decode import (
     decode_position_rapid,
     decode_sog,
     decode_trip_fuel_engine,
+    decode_water_depth,
 )
 
 
@@ -34,46 +35,51 @@ def test_decode_sog():
     assert decode_sog(data) == pytest.approx(3.5)
 
 
-def test_decode_engine_dynamic():
-    fuel_raw = 45  # 0,1 L/uur per eenheid -> 4,5 L/uur
-    total_hours_s = 36000  # 10 uur
-
+def test_decode_engine_dynamic_full_fields():
     data = struct.pack(
         "<BHHHhhIHHBHHbb",
         0,  # instance
-        0xFFFF,  # oil pressure (n.v.t.)
-        0xFFFF,  # oil temperature (n.v.t.)
-        0xFFFF,  # temperature (n.v.t.)
-        0x7FFF,  # alternator potential (n.v.t.)
-        fuel_raw,  # fuel rate
-        total_hours_s,  # total engine hours
-        0xFFFF,  # coolant pressure (n.v.t.)
-        0xFFFF,  # fuel pressure (n.v.t.)
+        3000,  # oil pressure raw -> 300000 Pa
+        3531,  # oil temperature raw -> 353,1 K
+        35315,  # koelvloeistoftemperatuur raw -> 353,15 K
+        1420,  # alternatorspanning raw -> 14,20 V
+        45,  # fuel rate raw -> 4,5 L/uur
+        36000,  # total engine hours (s)
+        0xFFFF,  # coolant pressure (n.v.t., niet uitgelezen)
+        0xFFFF,  # fuel pressure (n.v.t., niet uitgelezen)
         0xFF,  # reserved
-        0xFFFF,  # discrete status 1 (n.v.t.)
-        0xFFFF,  # discrete status 2 (n.v.t.)
-        0x7F,  # engine load (n.v.t.)
-        0x7F,  # engine torque (n.v.t.)
+        0b0000000000000100,  # discrete status 1: bit 2 = Low Oil Pressure
+        0b0000000000001000,  # discrete status 2: bit 3 = Maintenance Needed
+        45,  # engine load (%)
+        0x7F,  # engine torque (n.v.t., niet uitgelezen)
     )
 
-    instance, fuel_lph, hours_s = decode_engine_dynamic(data)
+    result = decode_engine_dynamic(data)
 
-    assert instance == 0
-    assert fuel_lph == pytest.approx(4.5)
-    assert hours_s == total_hours_s
+    assert result["instance"] == 0
+    assert result["fuel_rate_lph"] == pytest.approx(4.5)
+    assert result["total_hours_s"] == 36000
+    assert result["oil_pressure_pa"] == pytest.approx(300000.0)
+    assert result["oil_temperature_k"] == pytest.approx(353.1)
+    assert result["coolant_temperature_k"] == pytest.approx(353.15)
+    assert result["alternator_voltage_v"] == pytest.approx(14.20)
+    assert result["engine_load_pct"] == pytest.approx(45.0)
+    assert result["warnings"] == frozenset({"Low Oil Pressure", "Maintenance Needed"})
 
 
-def test_decode_engine_dynamic_fuel_not_available():
+def test_decode_engine_dynamic_not_available():
     data = struct.pack(
         "<BHHHhhIHHBHHbb",
         1, 0xFFFF, 0xFFFF, 0xFFFF, 0x7FFF, 0x7FFF, 500, 0xFFFF, 0xFFFF, 0xFF, 0xFFFF, 0xFFFF, 0x7F, 0x7F,
     )
 
-    instance, fuel_lph, hours_s = decode_engine_dynamic(data)
+    result = decode_engine_dynamic(data)
 
-    assert instance == 1
-    assert fuel_lph is None
-    assert hours_s == 500
+    assert result["instance"] == 1
+    assert result["fuel_rate_lph"] is None
+    assert result["total_hours_s"] == 500
+    assert result["oil_pressure_pa"] is None
+    assert result["warnings"] == frozenset()
 
 
 def test_decode_trip_fuel_engine():
@@ -93,3 +99,16 @@ def test_decode_trip_fuel_engine_not_available():
 
     assert instance == 2
     assert trip_fuel_l is None
+
+
+def test_decode_water_depth():
+    # sid(1B) + depth(4B, res 0,01) + offset(2B) + range(1B)
+    data = struct.pack("<BIhB", 0, 250, 0, 0)
+
+    assert decode_water_depth(data) == pytest.approx(2.50)
+
+
+def test_decode_water_depth_not_available():
+    data = struct.pack("<BIhB", 0, 0xFFFFFFFF, 0, 0)
+
+    assert decode_water_depth(data) is None

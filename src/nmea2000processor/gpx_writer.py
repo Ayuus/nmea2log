@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Iterable
 from xml.etree.ElementTree import Element, ElementTree, SubElement, indent
 
-from .logbook_writer import _format_duration, _nl_num
+from .logbook_writer import _format_duration, _format_warnings, _nl_num
 from .tripbuilder import TripLeg
 
 _GPX_NAMESPACE = "http://www.topografix.com/GPX/1/1"
@@ -26,8 +26,10 @@ def _trip_description(trip: TripLeg) -> str:
     parts = [
         f"Vaartijd: {_format_duration(duration)}",
         f"Afstand: {_nl_num(trip.distance_nm)} nm",
-        f"Brandstof (berekend): {_nl_num(trip.fuel_liters)} L",
     ]
+    if trip.avg_speed_kn is not None and trip.max_speed_kn is not None:
+        parts.append(f"Snelheid: gem. {_nl_num(trip.avg_speed_kn)} kn, max {_nl_num(trip.max_speed_kn)} kn")
+    parts.append(f"Brandstof (berekend): {_nl_num(trip.fuel_liters)} L")
     if trip.fuel_liters_device is not None:
         parts.append(f"Brandstof (motorteller): {_nl_num(trip.fuel_liters_device)} L")
     draaiuren = ", ".join(
@@ -35,6 +37,11 @@ def _trip_description(trip: TripLeg) -> str:
     )
     if draaiuren:
         parts.append(f"Draaiuren: {draaiuren}")
+    warnings = _format_warnings(trip.engine_health)
+    if warnings:
+        parts.append(f"Waarschuwingen: {warnings}")
+    if trip.min_depth_m is not None:
+        parts.append(f"Min. diepte: {_nl_num(trip.min_depth_m)} m")
     return ", ".join(parts)
 
 

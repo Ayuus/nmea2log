@@ -13,14 +13,16 @@ import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from itertools import groupby
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, FrozenSet, List, Optional, Tuple
 
 from .geocode import Geocoder, NoGeocoder
-from .model import EngineSample, PositionFix, SogSample, TripFuelSample
+from .model import DepthSample, EngineSample, PositionFix, SogSample, TripFuelSample
 
 _KNOT_IN_MS = 0.514444
 _EARTH_RADIUS_NM = 3440.065
 _MAX_INTEGRATION_GAP_H = 1.0  # grotere gaten tussen motorsamples wijzen op een logonderbreking
+_KELVIN_TO_CELSIUS = 273.15
+_PA_TO_BAR = 1e-5
 
 
 @dataclass(frozen=True)
@@ -29,6 +31,7 @@ class NavSample:
     lat: float
     lon: float
     sog_ms: float
+    depth_m: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -41,15 +44,31 @@ class Stay:
 
 
 @dataclass(frozen=True)
+class EngineHealth:
+    oil_pressure_bar_avg: Optional[float]
+    oil_temperature_c_avg: Optional[float]
+    coolant_temperature_c_avg: Optional[float]
+    alternator_voltage_v_avg: Optional[float]
+    engine_load_pct_max: Optional[float]
+    warnings: FrozenSet[str]
+
+
+@dataclass(frozen=True)
 class TripLeg:
     depart_time: datetime
     arrive_time: datetime
     depart_place: str
     arrive_place: str
     distance_nm: float
+    avg_speed_kn: Optional[float]
+    max_speed_kn: Optional[float]
     fuel_liters: float  # berekend door brandstofdebiet (PGN 127489) te integreren over de tijd
     fuel_liters_device: Optional[float]  # motor-eigen triptmeter (PGN 127497), None = niet beschikbaar
     engine_hours: Dict[int, float]  # motor-instance -> gedraaide uren tijdens deze reis
+    engine_health: Dict[int, EngineHealth]  # motor-instance -> gezondheidsindicatoren + waarschuwingen
+    min_depth_m: Optional[float]  # ondiepste gemeten waterdiepte tijdens deze reis
+    min_depth_lat: Optional[float]
+    min_depth_lon: Optional[float]
     track: List[NavSample]  # GPS-punten van deze reis, voor bv. GPX-export
 
 
@@ -61,17 +80,25 @@ def _haversine_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * _EARTH_RADIUS_NM * math.asin(math.sqrt(a))
 
 
-def _merge_nav_samples(fixes: List[PositionFix], sogs: List[SogSample]) -> List[NavSample]:
-    """Combineert positie- en snelheidsmetingen chronologisch; snelheid wordt forward-filled."""
+def _merge_nav_samples(
+    fixes: List[PositionFix], sogs: List[SogSample], depths: Optional[List[DepthSample]] = None
+) -> List[NavSample]:
+    """Combineert positie-, snelheids- en diepte-metingen chronologisch; beide worden forward-filled."""
     sogs_sorted = sorted(sogs, key=lambda s: s.time)
+    depths_sorted = sorted(depths, key=lambda s: s.time) if depths else []
     samples: List[NavSample] = []
-    idx = 0
+    sog_idx = 0
+    depth_idx = 0
     last_sog = 0.0
+    last_depth: Optional[float] = None
     for fix in sorted(fixes, key=lambda f: f.time):
-        while idx < len(sogs_sorted) and sogs_sorted[idx].time <= fix.time:
-            last_sog = sogs_sorted[idx].sog_ms
-            idx += 1
-        samples.append(NavSample(fix.time, fix.lat, fix.lon, last_sog))
+        while sog_idx < len(sogs_sorted) and sogs_sorted[sog_idx].time <= fix.time:
+            last_sog = sogs_sorted[sog_idx].sog_ms
+            sog_idx += 1
+        while depth_idx < len(depths_sorted) and depths_sorted[depth_idx].time <= fix.time:
+            last_depth = depths_sorted[depth_idx].depth_m
+            depth_idx += 1
+        samples.append(NavSample(fix.time, fix.lat, fix.lon, last_sog, last_depth))
     return samples
 
 
@@ -164,11 +191,67 @@ def _device_fuel_delta(
     return total if found_any else None
 
 
+def _speed_stats_kn(track: List[NavSample]) -> Tuple[Optional[float], Optional[float]]:
+    if not track:
+        return None, None
+    speeds_kn = [s.sog_ms / _KNOT_IN_MS for s in track]
+    return sum(speeds_kn) / len(speeds_kn), max(speeds_kn)
+
+
+def _min_depth(track: List[NavSample]) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+    """Geeft (diepte_m, lat, lon) van het ondiepste gemeten punt, of (None, None, None)."""
+    candidates = [s for s in track if s.depth_m is not None]
+    if not candidates:
+        return None, None, None
+    shallowest = min(candidates, key=lambda s: s.depth_m)
+    return shallowest.depth_m, shallowest.lat, shallowest.lon
+
+
+def _engine_health(
+    samples: List[EngineSample], start: datetime, end: datetime
+) -> Dict[int, EngineHealth]:
+    by_instance: Dict[int, List[EngineSample]] = {}
+    for sample in samples:
+        by_instance.setdefault(sample.instance, []).append(sample)
+
+    def _avg(values: List[float]) -> Optional[float]:
+        return sum(values) / len(values) if values else None
+
+    result: Dict[int, EngineHealth] = {}
+    for instance, seq in by_instance.items():
+        window = [s for s in seq if start <= s.time <= end]
+        if not window:
+            continue
+        oil_pressure = [s.oil_pressure_pa for s in window if s.oil_pressure_pa is not None]
+        oil_temperature = [s.oil_temperature_k for s in window if s.oil_temperature_k is not None]
+        coolant_temperature = [s.coolant_temperature_k for s in window if s.coolant_temperature_k is not None]
+        alternator_voltage = [s.alternator_voltage_v for s in window if s.alternator_voltage_v is not None]
+        engine_load = [s.engine_load_pct for s in window if s.engine_load_pct is not None]
+        warnings: FrozenSet[str] = frozenset().union(*(s.warnings for s in window))
+
+        oil_pressure_avg = _avg(oil_pressure)
+        oil_temperature_avg = _avg(oil_temperature)
+        coolant_temperature_avg = _avg(coolant_temperature)
+
+        result[instance] = EngineHealth(
+            oil_pressure_bar_avg=oil_pressure_avg * _PA_TO_BAR if oil_pressure_avg is not None else None,
+            oil_temperature_c_avg=oil_temperature_avg - _KELVIN_TO_CELSIUS if oil_temperature_avg is not None else None,
+            coolant_temperature_c_avg=coolant_temperature_avg - _KELVIN_TO_CELSIUS
+            if coolant_temperature_avg is not None
+            else None,
+            alternator_voltage_v_avg=_avg(alternator_voltage),
+            engine_load_pct_max=max(engine_load) if engine_load else None,
+            warnings=warnings,
+        )
+    return result
+
+
 def build_trips(
     fixes: List[PositionFix],
     sogs: List[SogSample],
     engine_samples: List[EngineSample],
     trip_fuel_samples: Optional[List[TripFuelSample]] = None,
+    depth_samples: Optional[List[DepthSample]] = None,
     *,
     geocoder: Optional[object] = None,
     speed_threshold_kn: float = 0.5,
@@ -179,7 +262,7 @@ def build_trips(
     if trip_fuel_samples is None:
         trip_fuel_samples = []
 
-    samples = _merge_nav_samples(fixes, sogs)
+    samples = _merge_nav_samples(fixes, sogs, depth_samples)
     if len(samples) < 2:
         return []
 
@@ -214,6 +297,8 @@ def build_trips(
         distance_nm = sum(
             _haversine_nm(a.lat, a.lon, b.lat, b.lon) for a, b in zip(group, group[1:])
         )
+        avg_speed_kn, max_speed_kn = _speed_stats_kn(group)
+        min_depth_m, min_depth_lat, min_depth_lon = _min_depth(group)
 
         trips.append(
             TripLeg(
@@ -222,9 +307,15 @@ def build_trips(
                 depart_place=depart_place,
                 arrive_place=arrive_place,
                 distance_nm=distance_nm,
+                avg_speed_kn=avg_speed_kn,
+                max_speed_kn=max_speed_kn,
                 fuel_liters=_fuel_liters(engine_samples, depart_time, arrive_time),
                 fuel_liters_device=_device_fuel_delta(trip_fuel_samples, depart_time, arrive_time),
                 engine_hours=_engine_hours_delta(engine_samples, depart_time, arrive_time),
+                engine_health=_engine_health(engine_samples, depart_time, arrive_time),
+                min_depth_m=min_depth_m,
+                min_depth_lat=min_depth_lat,
+                min_depth_lon=min_depth_lon,
                 track=group,
             )
         )

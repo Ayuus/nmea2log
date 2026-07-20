@@ -13,22 +13,32 @@ dev-dependency voor de tests.
 1. **Inlezen** (`ascii_reader.py`): leest een *N2K ASCII*-logbestand zoals de W2K-2 dat
    wegschrijft. Elke regel is al door de Actisense-hardware herassembleerd (fast-packet/
    multi-packet), dus er is geen CAN-framereassemblage nodig.
-2. **Decoderen** (`pgn_decode.py`): pikt vier PGN's uit de stroom:
-   - **127489** (*Engine Parameters, Dynamic*) → brandstofdebiet (L/uur) en de cumulatieve
-     draaiurenteller van de motor. Dit is motordata, dus expliciet niet de tankinhoud-sensor.
+2. **Decoderen** (`pgn_decode.py`): pikt vijf PGN's uit de stroom:
+   - **127489** (*Engine Parameters, Dynamic*) → brandstofdebiet, draaiurenteller, en
+     gezondheidsindicatoren (olie-druk/-temperatuur, koelvloeistoftemperatuur, alternator-
+     spanning, motorbelasting) plus de twee "Discrete Status"-waarschuwingsvelden. Dit is
+     motordata, dus expliciet niet de tankinhoud-sensor.
    - **127497** (*Trip Parameters, Engine*) → optioneel: de triptmeter-brandstofstand die de
      motor/ECU zelf bijhoudt (in liter), als het apparaat deze PGN verstuurt.
+   - **128267** (*Water Depth*) → waterdiepte onder de transducer.
    - **129025** (*Position, Rapid Update*) → GPS-positie.
    - **129026** (*COG & SOG, Rapid Update*) → vaart over de grond.
 3. **Reizen herkennen** (`tripbuilder.py`): periodes waarin de boot lang genoeg stilligt
    (standaard ≥ 10 minuten, instelbaar) gelden als havenbezoek; de periodes daartussen zijn
-   de reizen. Brandstofverbruik per reis wordt op twee manieren getoond: **berekend** door het
-   brandstofdebiet (PGN 127489) te integreren over de tijd, en — als beschikbaar — het verschil
-   tussen begin- en eindstand van de **motor-eigen triptmeter** (PGN 127497). Let op: die
-   triptmeter is een teller die de motor zelf beheert en kan door de gebruiker op het display
-   gereset zijn, dus hij hoeft niet exact overeen te komen met onze eigen vertrek/aankomst-
-   indeling. Draaiuren per reis zijn het verschil tussen de motoruren-teller bij vertrek en
-   aankomst.
+   de reizen. Per reis wordt berekend:
+   - **Brandstofverbruik**, op twee manieren: **berekend** door het brandstofdebiet
+     (PGN 127489) te integreren over de tijd, en — als beschikbaar — het verschil tussen
+     begin- en eindstand van de **motor-eigen triptmeter** (PGN 127497). Let op: die
+     triptmeter is een teller die de motor zelf beheert en kan door de gebruiker op het
+     display gereset zijn, dus hij hoeft niet exact overeen te komen met onze eigen
+     vertrek/aankomst-indeling.
+   - **Draaiuren**: het verschil tussen de motoruren-teller bij vertrek en aankomst.
+   - **Motorgezondheid**: gemiddelde olie-druk/-temperatuur, koelvloeistoftemperatuur,
+     alternatorspanning en maximale motorbelasting tijdens de reis, plus een aparte
+     **waarschuwingen**-kolom met alle actieve statusvlaggen (bv. "Low Oil Pressure") die
+     ergens tijdens de reis voorkwamen.
+   - **Snelheid**: gemiddelde en maximale vaart over de grond.
+   - **Minimale waterdiepte**, inclusief de positie waar die werd gemeten.
 4. **Havennamen** (`geocode.py`): de GPS-positie van elk havenbezoek wordt via
    OpenStreetMap/Nominatim (reverse geocoding) omgezet naar een plaatsnaam, met lokale
    caching zodat je nooit twee keer dezelfde positie opvraagt.
@@ -127,6 +137,13 @@ pytest
 - **Datum**: het N2K ASCII-formaat bevat alleen een tijdstip, geen datum. Zorg dat elk
   logbestand een datum in de naam heeft (`YYYY-MM-DD...`), anders wordt de
   bestandswijzigingsdatum gebruikt.
+- **Waterdiepte**: de app gebruikt de rauwe "Depth"-waarde uit PGN 128267 (diepte onder de
+  transducer), zonder de transducer-offset erbij op te tellen — meestal is dat al de waarde
+  die instrumenten standaard tonen, maar controleer dit tegen je eigen dieptemeter-instelling.
+- **Motorwaarschuwingen**: de bitbetekenissen (bv. "Low Oil Pressure") komen uit de generieke
+  NMEA2000-standaardlijst (canboat's ENGINE_STATUS_1/2). Sommige fabrikanten gebruiken hiervan
+  afwijkende of extra proprietary statusbits — controleer dit tegen je eigen motor-documentatie
+  als een waarschuwing onverwacht verschijnt of ontbreekt.
 - **Live-modus (`--live`)** ondersteunt alleen **TCP** (de W2K-2-handleiding raadt dit ook aan
   vanwege ingebouwde foutcorrectie; UDP-only is niet geïmplementeerd). Bij een verbroken
   verbinding stopt de sessie en wordt het logboek geschreven met wat er tot dan toe is

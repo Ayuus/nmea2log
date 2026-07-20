@@ -8,12 +8,44 @@ zoals gebruikelijk in NMEA2000/J1939.
 
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import Dict, FrozenSet, Optional, Tuple
 
 PGN_POSITION_RAPID = 129025  # Position, Rapid Update
 PGN_COG_SOG_RAPID = 129026  # COG & SOG, Rapid Update
 PGN_ENGINE_DYNAMIC = 127489  # Engine Parameters, Dynamic
 PGN_TRIP_FUEL_ENGINE = 127497  # Trip Parameters, Engine
+PGN_WATER_DEPTH = 128267  # Water Depth
+
+# Bitbetekenis van de twee "Discrete Status"-velden in PGN 127489, overgenomen uit canboat's
+# ENGINE_STATUS_1 / ENGINE_STATUS_2 lookup-enumeraties.
+_ENGINE_STATUS_1_BITS = {
+    0: "Check Engine",
+    1: "Over Temperature",
+    2: "Low Oil Pressure",
+    3: "Low Oil Level",
+    4: "Low Fuel Pressure",
+    5: "Low System Voltage",
+    6: "Low Coolant Level",
+    7: "Water Flow",
+    8: "Water In Fuel",
+    9: "Charge Indicator",
+    10: "Preheat Indicator",
+    11: "High Boost Pressure",
+    12: "Rev Limit Exceeded",
+    13: "EGR System",
+    14: "Throttle Position Sensor",
+    15: "Emergency Stop",
+}
+_ENGINE_STATUS_2_BITS = {
+    0: "Warning Level 1",
+    1: "Warning Level 2",
+    2: "Power Reduction",
+    3: "Maintenance Needed",
+    4: "Engine Comm Error",
+    5: "Sub or Secondary Throttle",
+    6: "Neutral Start Protect",
+    7: "Engine Shutting Down",
+}
 
 
 def _extract(data: bytes, bit_offset: int, bit_length: int, *, signed: bool) -> Optional[int]:
@@ -59,15 +91,54 @@ def decode_sog(data: bytes) -> Optional[float]:
     return sog_raw * 0.01
 
 
-def decode_engine_dynamic(data: bytes) -> Optional[Tuple[int, Optional[float], Optional[int]]]:
-    """PGN 127489: motor-instance, brandstofverbruik (L/uur) en totale draaiuren (seconden)."""
+def _decode_bit_warnings(raw: Optional[int], bit_names: Dict[int, str]) -> FrozenSet[str]:
+    if raw is None:
+        return frozenset()
+    return frozenset(name for bit, name in bit_names.items() if raw & (1 << bit))
+
+
+def decode_engine_dynamic(data: bytes) -> Optional[dict]:
+    """PGN 127489: motor-instance, brandstofverbruik, draaiuren en gezondheidsindicatoren.
+
+    Geeft een dict terug met kwargs die direct in ``EngineSample(time=..., **result)`` passen.
+    """
     instance = _extract(data, 0, 8, signed=False)
     if instance is None:
         return None
+
+    oil_pressure_raw = _extract(data, 8, 16, signed=False)
+    oil_temperature_raw = _extract(data, 24, 16, signed=False)
+    coolant_temperature_raw = _extract(data, 40, 16, signed=False)
+    alternator_raw = _extract(data, 56, 16, signed=True)
     fuel_raw = _extract(data, 72, 16, signed=True)
     hours_raw = _extract(data, 88, 32, signed=False)
-    fuel_lph = fuel_raw * 0.1 if fuel_raw is not None else None
-    return instance, fuel_lph, hours_raw
+    status1_raw = _extract(data, 160, 16, signed=False)
+    status2_raw = _extract(data, 176, 16, signed=False)
+    engine_load_raw = _extract(data, 192, 8, signed=True)
+
+    warnings = _decode_bit_warnings(status1_raw, _ENGINE_STATUS_1_BITS) | _decode_bit_warnings(
+        status2_raw, _ENGINE_STATUS_2_BITS
+    )
+
+    return {
+        "instance": instance,
+        "fuel_rate_lph": fuel_raw * 0.1 if fuel_raw is not None else None,
+        "total_hours_s": hours_raw,
+        "oil_pressure_pa": oil_pressure_raw * 100.0 if oil_pressure_raw is not None else None,
+        "oil_temperature_k": oil_temperature_raw * 0.1 if oil_temperature_raw is not None else None,
+        "coolant_temperature_k": coolant_temperature_raw * 0.01 if coolant_temperature_raw is not None else None,
+        "alternator_voltage_v": alternator_raw * 0.01 if alternator_raw is not None else None,
+        "engine_load_pct": float(engine_load_raw) if engine_load_raw is not None else None,
+        "warnings": warnings,
+    }
+
+
+def decode_water_depth(data: bytes) -> Optional[float]:
+    """PGN 128267: waterdiepte onder de transducer, in meter."""
+    depth_raw = _extract(data, 8, 32, signed=False)
+    if depth_raw is None:
+        return None
+    return depth_raw * 0.01
 
 
 def decode_trip_fuel_engine(data: bytes) -> Optional[Tuple[int, Optional[float]]]:
