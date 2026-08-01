@@ -11,6 +11,7 @@ test = ["pytest"]
 
 [project.scripts]
 nmea2log = "nmea2000processor.cli:main"
+nmea2log-download = "nmea2000processor.w2k2_download:main"
 
 [build-system]
 requires = ["setuptools>=61"]

@@ -8,4 +8,12 @@ build/
 dist/
 .geocode_cache.json
 logboek.csv
+logboek.gpx
 .claude/
+
+# lokale W2K-2-downloadconfiguratie/data -- hoort hier sowieso niet (zie w2k2.example.ini),
+# maar voor de zekerheid ook genegeerd mocht iemand het toch in de projectmap zetten
+w2k2.ini
+ebl_logs/
+downloads/
+

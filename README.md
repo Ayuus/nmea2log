@@ -77,11 +77,27 @@ op twee manieren gebruiken:
 ### Optie A: opgeslagen logbestanden
 
 **Van de SD-kaart** (geen live verbinding nodig — aanbevolen als je niet afhankelijk wilt zijn
-van een verbinding tijdens het varen): download de `.ebl`-bestanden via de webinterface van de
-W2K-2 ("Download Logs") en geef ze direct mee:
+van een verbinding tijdens het varen): download de `.ebl`-bestanden, óf handmatig via de
+webinterface van de W2K-2 ("Download Logs"), óf automatisch met het meegeleverde
+`nmea2log-download`-commando:
 
 ```bash
-nmea2log logboek_20260715.ebl -o logboek.csv
+nmea2log-download
+```
+
+Dit leest instellingen (IP-adres/hostnaam, gebruikersnaam+wachtwoord óf een token, doelmap) uit
+een configbestand, standaard `~/.nmea2log/w2k2.ini` (in je gebruikersprofiel), zodat je die niet
+telkens opnieuw hoeft in te typen. Zie [`w2k2.example.ini`](w2k2.example.ini) voor het formaat
+en hoe je je eigen bestand aanmaakt. **Zet dat bestand niet in deze projectmap** — die staat in
+OneDrive én in git, dus een wachtwoord hier zou meesyncen naar de cloud/je andere pc en kan per
+ongeluk gecommit worden; `~/.nmea2log/w2k2.ini` valt daarbuiten. Het commando downloadt alleen
+wat nog ontbreekt of onvolledig is (op bestandsgrootte vergeleken), dus opnieuw draaien na een
+volgende vaart haalt alleen de nieuwe bestanden op.
+
+Verwerk de gedownloade bestanden vervolgens zoals gewoonlijk:
+
+```bash
+nmea2log ebl_logs/EBL000000/*.ebl ebl_logs/EBL000001/*.ebl -o logboek.csv
 ```
 
 Dit EBL-pad is reverse-engineered (zie "Aannames & beperkingen") en inmiddels gevalideerd tegen
@@ -148,6 +164,13 @@ pytest
 
 ## Aannames & beperkingen
 
+- **`nmea2log-download`-API**: net als het EBL-bestandsformaat zelf is de web-API van de W2K-2
+  (`/api/data_logs`, `/api/download`, login/token) nooit officieel door Actisense gepubliceerd —
+  geobserveerd via browser-DevTools op de firmware-webapp en kan wijzigen bij firmware-updates.
+  Met name de veldnaam waarin het login-token terugkomt is niet 100% bevestigd (`w2k2_download.py`
+  probeert een aantal gangbare namen, zie `_TOKEN_KEYS`); mocht inloggen lukken maar geen token
+  gevonden worden, dan toont het commando de ruwe response zodat de juiste naam toegevoegd kan
+  worden.
 - **Regelformaat (N2K ASCII)**: de parser is gebouwd op basis van de officiële Actisense-
   documentatie op de website — het kennisbank-artikel
   ["NMEA 2000 ASCII Output format"](https://actisense.com/knowledge-base/nmea-2000/w2k-1-nmea-2000-to-wifi-gateway/nmea-2000-ascii-output-format/)
