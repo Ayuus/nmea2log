@@ -50,6 +50,32 @@ def _merge_by_source(target: Dict[int, List[_T]], addition: Dict[int, List[_T]])
         target.setdefault(source, []).extend(items)
 
 
+def _select_primary_gps_source(
+    fixes_by_source: Dict[int, List[PositionFix]], sogs_by_source: Dict[int, List[SogSample]]
+) -> Tuple[List[PositionFix], List[SogSample], Optional[int]]:
+    """Kiest één samenhangende primaire GPS-bron voor positie én snelheid samen, in plaats van
+    onafhankelijk per PGN te kiezen (zoals ``_dominant_source_only`` op zichzelf zou doen).
+
+    Waarom: met echte data gemeten dat twee GPS-ontvangers op dezelfde boot een paar meter
+    positieverschil en een fractie knoop snelheidsverschil geven -- op zichzelf klein, maar als
+    de "winnende" positiebron en de "winnende" snelheidsbron toevallig twee verschillende
+    fysieke apparaten zijn, ontstaat een moeilijk te doorgronden inconsistentie tussen track en
+    snelheid-classificatie (stilliggend/varend). Door snelheid van dezelfde bron te pakken als
+    de gekozen positiebron, blijft dat samenhangend.
+
+    Aanpak: de bron met de meeste positieberichten (PGN 129025) is leidend. Snelheid van
+    diezelfde bron wordt gebruikt; alleen als die bron zelf geen snelheid stuurde, valt de code
+    terug op de snelheidsbron met de meeste berichten (dan dus wél een ander fysiek apparaat
+    dan de positiebron -- beter dan alle bronnen door elkaar mengen, maar niet ideaal)."""
+    if not fixes_by_source:
+        return [], _dominant_source_only(sogs_by_source), None
+
+    primary_source = max(fixes_by_source, key=lambda source: len(fixes_by_source[source]))
+    fixes = fixes_by_source[primary_source]
+    sogs = sogs_by_source.get(primary_source) or _dominant_source_only(sogs_by_source)
+    return fixes, sogs, primary_source
+
+
 def _collect_samples(
     frames: Iterable[Frame], *, deadline: Optional[float] = None
 ) -> Tuple[
@@ -227,9 +253,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             all_trip_fuel += trip_fuel
             _merge_by_source(depth_by_source, depth)
 
-    all_fixes = _dominant_source_only(fixes_by_source)
-    all_sogs = _dominant_source_only(sogs_by_source)
+    all_fixes, all_sogs, primary_gps_source = _select_primary_gps_source(fixes_by_source, sogs_by_source)
     all_depth = _dominant_source_only(depth_by_source)
+
+    if len(fixes_by_source) > 1:
+        print(
+            f"Meerdere positiebronnen gevonden ({sorted(fixes_by_source)}); "
+            f"bron {primary_gps_source} gebruikt als primaire GPS (meeste berichten).",
+            file=sys.stderr,
+        )
 
     if not all_fixes:
         print("Geen positiedata (PGN 129025) gevonden.", file=sys.stderr)

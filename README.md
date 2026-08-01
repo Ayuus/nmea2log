@@ -30,7 +30,10 @@ dev-dependency voor de tests.
      motor/ECU zelf bijhoudt (in liter), als het apparaat deze PGN verstuurt.
    - **128267** (*Water Depth*) → waterdiepte onder de transducer.
    - **129025** (*Position, Rapid Update*) → GPS-positie.
-   - **129026** (*COG & SOG, Rapid Update*) → vaart over de grond.
+   - **129026** (*COG & SOG, Rapid Update*) → vaart over de grond (SOG, GPS-afgeleid). Dit is
+     nadrukkelijk geen "speed through water" (dat zou PGN 128259 zijn, een paddlewheel-/
+     logsensor — niet gebruikt door deze app en op de tot nu toe geteste boot ook niet aanwezig
+     op de bus).
    - **126992** (*System Time*) → alleen gebruikt bij `.ebl`-bestanden, om frames van een
      absolute datum/tijd te voorzien (zie hieronder).
 3. **Reizen herkennen** (`tripbuilder.py`): periodes waarin de boot lang genoeg stilligt
@@ -184,12 +187,26 @@ pytest
 - **Meerdere motoren**: de code ondersteunt meerdere `instance`-nummers (brandstof wordt
   gesommeerd, draaiuren per motor apart getoond), maar is niet getest met een echte
   twin-engine-installatie.
-- **Meerdere bronnen voor dezelfde PGN**: sommige boten hebben meerdere apparaten die
-  positie/vaart-over-de-grond/diepte versturen (bv. twee GPS-antennes). De app kiest per PGN
-  automatisch de bron die de meeste berichten stuurde over de hele sessie, en negeert de rest —
-  anders ontstaan er valse "sprongen" doordat twee onafhankelijke, licht afwijkende metingen
-  door elkaar heen gesorteerd worden (dit is met echte data ontdekt en opgelost: de afstand van
-  een reis viel in eerste instantie 10x te hoog uit door precies dit effect).
+- **Meerdere bronnen voor dezelfde PGN**: sommige boten hebben meerdere apparaten die positie,
+  vaart-over-de-grond of diepte versturen (bv. twee GPS-antennes). Dit is met echte data
+  gemeten en bevestigd: op een boot met twee GPS-ontvangers gaven die op hetzelfde moment een
+  paar meter positieverschil (mediaan 3,2 m, max 7,0 m over ~6000 vergelijkingen) en een
+  fractie knoop snelheidsverschil (mediaan 0,2 kn, max 1,9 kn over drie bronnen). Op zichzelf
+  klein, maar zonder filtering worden die onafhankelijke metingen puur op tijd door elkaar
+  gesorteerd, wat voor duizenden valse kleine "sprongen" zorgt — in de praktijk viel de
+  afstand van een reis daardoor in eerste instantie 10x te hoog uit (153,7 i.p.v. 13,5 nm).
+
+  **Hoe de app dit oplost** (`_select_primary_gps_source` in `cli.py`): de bron met de meeste
+  positieberichten (PGN 129025) geldt als **primaire GPS**, en de snelheid (PGN 129026) van
+  **diezelfde fysieke bron** wordt gebruikt — bewust niet onafhankelijk de "beste" bron per PGN
+  gekozen, want dan zouden positie en snelheid uit twee verschillende apparaten kunnen komen en
+  een moeilijk te doorgronden inconsistentie tussen track en stilliggend/varend-classificatie
+  ontstaan. Alleen als de gekozen positiebron zelf geen snelheid stuurt, valt de code terug op
+  de snelheidsbron met de meeste berichten (dan dus wél een ander apparaat). Diepte wordt
+  onafhankelijk gekozen (geen GPS-gerelateerde PGN, dus geen reden om aan dezelfde bron te
+  koppelen). De CLI meldt op stderr welke bron als primair gekozen is zodra er meerdere zijn.
+  **Kanttekening**: "meeste berichten" is een proxy, geen kwaliteitsbeoordeling — er wordt niet
+  gekeken naar GPS-nauwkeurigheid (HDOP, aantal satellieten, fix-type).
 - **Datum**: het N2K ASCII-formaat bevat alleen een tijdstip, geen datum. Zorg dat elk
   logbestand een datum in de naam heeft (`YYYY-MM-DD...`), anders wordt de
   bestandswijzigingsdatum gebruikt.

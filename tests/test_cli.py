@@ -1,7 +1,7 @@
 from datetime import datetime
 
-from nmea2000processor.cli import _dominant_source_only, _merge_by_source
-from nmea2000processor.model import PositionFix
+from nmea2000processor.cli import _dominant_source_only, _merge_by_source, _select_primary_gps_source
+from nmea2000processor.model import PositionFix, SogSample
 
 
 def test_dominant_source_only_picks_largest_group():
@@ -40,3 +40,44 @@ def test_dominant_source_only_after_merge_reflects_full_session():
     result = _dominant_source_only(target)
 
     assert result == [1, 2, 3, 4, 5, 6, 7]
+
+
+def _fixes(n: int) -> list:
+    return [PositionFix(datetime(2026, 7, 15, 9, 0), 52.30, 4.90)] * n
+
+
+def _sogs(n: int) -> list:
+    return [SogSample(datetime(2026, 7, 15, 9, 0), 3.0)] * n
+
+
+def test_select_primary_gps_source_uses_sog_from_same_source():
+    """Positie en snelheid moeten van dezelfde fysieke bron komen als die bron ze allebei
+    stuurt -- ook als een andere bron toevallig meer snelheidsberichten stuurde."""
+    fixes_by_source = {10: _fixes(100), 11: _fixes(90)}
+    sogs_by_source = {10: _sogs(5), 11: _sogs(50)}  # bron 11 stuurt veruit de meeste SOG
+
+    fixes, sogs, primary = _select_primary_gps_source(fixes_by_source, sogs_by_source)
+
+    assert primary == 10  # bron 10 heeft de meeste positieberichten, dus is leidend
+    assert fixes == fixes_by_source[10]
+    assert sogs == sogs_by_source[10]  # niet bron 11, ook al stuurde die meer SOG
+
+
+def test_select_primary_gps_source_falls_back_when_primary_has_no_sog():
+    """Als de gekozen positiebron zelf geen snelheid stuurt, valt de code terug op de
+    snelheidsbron met de meeste berichten (een ander fysiek apparaat, maar beter dan niets)."""
+    fixes_by_source = {10: _fixes(100)}  # bron 10 stuurt geen SOG
+    sogs_by_source = {14: _sogs(20)}
+
+    fixes, sogs, primary = _select_primary_gps_source(fixes_by_source, sogs_by_source)
+
+    assert primary == 10
+    assert sogs == sogs_by_source[14]
+
+
+def test_select_primary_gps_source_no_fixes():
+    fixes, sogs, primary = _select_primary_gps_source({}, {10: _sogs(3)})
+
+    assert fixes == []
+    assert sogs == _sogs(3)
+    assert primary is None
