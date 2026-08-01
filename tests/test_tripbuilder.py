@@ -175,3 +175,59 @@ def test_short_stop_does_not_split_trip():
 
 def test_no_samples_returns_no_trips():
     assert build_trips([], [], []) == []
+
+
+def test_large_data_gap_after_short_stop_cuts_off_the_trip():
+    """Regressietest voor een echte bug, gevonden met echte data: een groot gat in de data
+    (bv. het apparaat/de log stond een tijd stil) mag een reis niet overbruggen, ook niet als
+    de stilligperiode vlak vóór het gat te kort was om als havenbezoek te tellen. Zonder fix
+    liep de gerapporteerde vaartijd door tot ver na het gat (in de praktijk: 3:21 i.p.v. de
+    echte ~0:45), terwijl de draaiurenteller (die niet van GPS-classificatie afhangt) het wel
+    bij het rechte eind had."""
+    fixes, sogs, engine_samples = _build_scenario()  # 12 min stil -> 30 min varen -> 12 min stil
+
+    # na de reis: een stilligperiode van maar 5 minuten (te kort voor min_stop_minutes=10)
+    short_stop_start = 54
+    for m in range(short_stop_start, short_stop_start + 5):
+        fixes.append(PositionFix(_dt(m), 52.40, 4.95))
+        sogs.append(SogSample(_dt(m), 0.0))
+        engine_samples.append(EngineSample(_dt(m), 0, 0.5, 3600 * 100 + m * 60))
+
+    # dan een gat van 3 uur zonder enige data (apparaat/log lag stil)
+    gap_end_minute = short_stop_start + 5 + 180
+
+    # na het gat: een korte "beweging" die zonder de fix de vorige reis zou verlengen
+    for m in range(gap_end_minute, gap_end_minute + 3):
+        fixes.append(PositionFix(_dt(m), 52.401, 4.951))
+        sogs.append(SogSample(_dt(m), 2.0))
+        engine_samples.append(EngineSample(_dt(m), 0, 0.0, 3600 * 100 + m * 60))  # motor uit
+
+    geocoder = _StubGeocoder()
+    trips = build_trips(
+        fixes, sogs, engine_samples, geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10
+    )
+
+    assert len(trips) == 2  # de reis vóór het gat, en het beetje beweging erna, apart
+    first_trip = trips[0]
+    # de eerste reis moet eindigen rond het begin van het gat, niet erna
+    assert first_trip.arrive_time <= _dt(short_stop_start + 5)
+    assert first_trip.arrive_place == "Haven@52.40,4.95"
+    # ...en dus geen 3+ uur durende reis meer bevatten
+    assert (first_trip.arrive_time - first_trip.depart_time) < timedelta(hours=1)
+
+
+def test_small_data_gap_does_not_split_trip():
+    """Een klein gat (bv. een paar seconden tussen twee logbestanden) mag een reis niet
+    onnodig opknippen -- alleen gaten van minstens max_gap_minutes doen dat."""
+    fixes, sogs, engine_samples = _build_scenario()
+
+    # gat van 2 minuten (43 -> 45) middenin de vaarperiode, ruim onder max_gap_minutes (10)
+    fixes = [f for f in fixes if not (43 <= (f.time - _dt(0)).total_seconds() / 60 < 45)]
+    sogs = [s for s in sogs if not (43 <= (s.time - _dt(0)).total_seconds() / 60 < 45)]
+
+    geocoder = _StubGeocoder()
+    trips = build_trips(
+        fixes, sogs, engine_samples, geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10
+    )
+
+    assert len(trips) == 1  # ongewijzigd gedrag: het kleine gat wordt genegeerd

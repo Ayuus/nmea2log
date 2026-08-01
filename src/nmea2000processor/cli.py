@@ -196,6 +196,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Minimale duur (minuten) van stilliggen om als haventoegang te tellen (standaard 10)",
     )
     parser.add_argument(
+        "--max-gap-minutes",
+        type=float,
+        default=None,
+        help="Vanaf hoeveel minuten zonder enige data een reis wordt afgekapt (standaard: "
+        "zelfde als --min-stop-minutes). Voorkomt dat een reis een groot gat in de data "
+        "(apparaat/log lag stil) overbrugt met een veel te lange gerapporteerde vaartijd.",
+    )
+    parser.add_argument(
         "--no-geocode",
         action="store_true",
         help="Sla online havennaam-opzoeking over; toont coördinaten in plaats van namen",
@@ -278,6 +286,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         geocoder=geocoder,
         speed_threshold_kn=args.speed_threshold_kn,
         min_stop_minutes=args.min_stop_minutes,
+        max_gap_minutes=args.max_gap_minutes,
     )
 
     if not trips:

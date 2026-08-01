@@ -37,8 +37,13 @@ dev-dependency voor de tests.
    - **126992** (*System Time*) → alleen gebruikt bij `.ebl`-bestanden, om frames van een
      absolute datum/tijd te voorzien (zie hieronder).
 3. **Reizen herkennen** (`tripbuilder.py`): periodes waarin de boot lang genoeg stilligt
-   (standaard ≥ 10 minuten, instelbaar) gelden als havenbezoek; de periodes daartussen zijn
-   de reizen. Per reis wordt berekend:
+   (standaard ≥ 10 minuten, instelbaar via `--min-stop-minutes`) gelden als havenbezoek; de
+   periodes daartussen zijn de reizen. Een groot gat in de data zelf (standaard ook 10 minuten,
+   apart instelbaar via `--max-gap-minutes`) kapt een reis altijd af, ook als de stilligperiode
+   vlak vóór het gat te kort was om als havenbezoek te tellen — anders zou een reis een gat
+   overbruggen met een veel te lange gerapporteerde vaartijd (in de praktijk gevonden: 3:21
+   i.p.v. de echte ~0:45, terwijl de draaiurenteller — die niet van GPS-classificatie afhangt —
+   het wél bij het rechte eind had). Per reis wordt berekend:
    - **Brandstofverbruik**, op twee manieren: **berekend** door het brandstofdebiet
      (PGN 127489) te integreren over de tijd, en — als beschikbaar — het verschil tussen
      begin- en eindstand van de **motor-eigen triptmeter** (PGN 127497). Let op: die
@@ -152,6 +157,7 @@ nmea2log --live 192.168.4.1:60001 --tee 2026-07-16.raw -o logboek.csv
 | `--duration SECONDEN` | Alleen bij `--live`: stop automatisch na dit aantal seconden |
 | `--speed-threshold-kn` | Vaart (kn) waaronder de boot als 'stilliggend' geldt (standaard 0.5) |
 | `--min-stop-minutes` | Minimale stilligduur om als havenbezoek te tellen (standaard 10) |
+| `--max-gap-minutes` | Vanaf hoeveel minuten zonder data een reis wordt afgekapt (standaard: zelfde als `--min-stop-minutes`) |
 | `--no-geocode` | Geen internet nodig; toont coördinaten in plaats van havennamen |
 | `--cache-file` | Pad naar het cachebestand voor havennamen (standaard `.geocode_cache.json`) |
 | `--start-date` | Forceer de startdatum van het eerste logbestand (`YYYY-MM-DD`); niet van toepassing bij `--live` |
