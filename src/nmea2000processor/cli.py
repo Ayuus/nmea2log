@@ -204,6 +204,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "(apparaat/log lag stil) overbrugt met een veel te lange gerapporteerde vaartijd.",
     )
     parser.add_argument(
+        "--min-trip-distance-nm",
+        type=float,
+        default=0.1,
+        help="Reizen die minder dan dit afleggen worden weggefilterd als GPS-/snelheidsruis "
+        "i.p.v. als (nietszeggend) logboekregel getoond (standaard 0.1 nm)",
+    )
+    parser.add_argument(
         "--no-geocode",
         action="store_true",
         help="Sla online havennaam-opzoeking over; toont coördinaten in plaats van namen",
@@ -287,6 +294,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         speed_threshold_kn=args.speed_threshold_kn,
         min_stop_minutes=args.min_stop_minutes,
         max_gap_minutes=args.max_gap_minutes,
+        min_trip_distance_nm=args.min_trip_distance_nm,
     )
 
     if not trips:

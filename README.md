@@ -43,7 +43,9 @@ dev-dependency voor de tests.
    vlak vóór het gat te kort was om als havenbezoek te tellen — anders zou een reis een gat
    overbruggen met een veel te lange gerapporteerde vaartijd (in de praktijk gevonden: 3:21
    i.p.v. de echte ~0:45, terwijl de draaiurenteller — die niet van GPS-classificatie afhangt —
-   het wél bij het rechte eind had). Per reis wordt berekend:
+   het wél bij het rechte eind had). Reizen korter dan 0.1 nm (instelbaar via
+   `--min-trip-distance-nm`) worden weggefilterd: dat is vrijwel altijd GPS-/snelheidsruis
+   vlak bij zo'n segmentgrens, geen echte reis. Per reis wordt berekend:
    - **Brandstofverbruik**, op twee manieren: **berekend** door het brandstofdebiet
      (PGN 127489) te integreren over de tijd, en — als beschikbaar — het verschil tussen
      begin- en eindstand van de **motor-eigen triptmeter** (PGN 127497). Let op: die
@@ -158,6 +160,7 @@ nmea2log --live 192.168.4.1:60001 --tee 2026-07-16.raw -o logboek.csv
 | `--speed-threshold-kn` | Vaart (kn) waaronder de boot als 'stilliggend' geldt (standaard 0.5) |
 | `--min-stop-minutes` | Minimale stilligduur om als havenbezoek te tellen (standaard 10) |
 | `--max-gap-minutes` | Vanaf hoeveel minuten zonder data een reis wordt afgekapt (standaard: zelfde als `--min-stop-minutes`) |
+| `--min-trip-distance-nm` | Reizen korter dan dit worden weggefilterd als ruis i.p.v. getoond (standaard 0.1 nm) |
 | `--no-geocode` | Geen internet nodig; toont coördinaten in plaats van havennamen |
 | `--cache-file` | Pad naar het cachebestand voor havennamen (standaard `.geocode_cache.json`) |
 | `--start-date` | Forceer de startdatum van het eerste logbestand (`YYYY-MM-DD`); niet van toepassing bij `--live` |

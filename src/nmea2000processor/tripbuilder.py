@@ -277,11 +277,18 @@ def build_trips(
     speed_threshold_kn: float = 0.5,
     min_stop_minutes: float = 10.0,
     max_gap_minutes: Optional[float] = None,
+    min_trip_distance_nm: float = 0.1,
 ) -> List[TripLeg]:
     """``max_gap_minutes``: hoelang er hooguit geen data mag zijn voordat een reis wordt
     afgekapt (zie ``_split_on_gaps``). Standaard gelijk aan ``min_stop_minutes`` -- eenzelfde
     getal, maar twee verschillende betekenissen: de één is "hoelang moet je stilliggen",
-    de ander "hoelang mag er geen data zijn"."""
+    de ander "hoelang mag er geen data zijn".
+
+    ``min_trip_distance_nm``: reizen die minder dan dit afleggen worden weggefilterd. Vooral
+    nodig sinds ``_split_on_gaps``: elke segmentgrens (bestandsgrens of groot gat) kan een paar
+    seconden GPS-/snelheidsruis aan de rand bevatten die net boven ``speed_threshold_kn`` komt
+    en zo als een nietszeggend "reisje" van een paar meter wordt gezien. Dat is geen echte reis
+    (in de praktijk gevonden: 0,0 nm, een paar seconden tot minuten durend, motor uit)."""
     if geocoder is None:
         geocoder = NoGeocoder()
     if trip_fuel_samples is None:
@@ -309,7 +316,7 @@ def build_trips(
             speed_threshold_ms=speed_threshold_ms,
             min_stop=min_stop,
         )
-    return trips
+    return [trip for trip in trips if trip.distance_nm >= min_trip_distance_nm]
 
 
 def _build_trips_for_segment(

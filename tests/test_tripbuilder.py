@@ -196,9 +196,11 @@ def test_large_data_gap_after_short_stop_cuts_off_the_trip():
     # dan een gat van 3 uur zonder enige data (apparaat/log lag stil)
     gap_end_minute = short_stop_start + 5 + 180
 
-    # na het gat: een korte "beweging" die zonder de fix de vorige reis zou verlengen
-    for m in range(gap_end_minute, gap_end_minute + 3):
-        fixes.append(PositionFix(_dt(m), 52.401, 4.951))
+    # na het gat: een korte reis (ruim boven min_trip_distance_nm) die zonder de fix de vorige
+    # reis zou verlengen i.p.v. als eigen reis te tellen
+    for i, m in enumerate(range(gap_end_minute, gap_end_minute + 3)):
+        frac = i / 2
+        fixes.append(PositionFix(_dt(m), 52.40 + 0.01 * frac, 4.95 + 0.01 * frac))
         sogs.append(SogSample(_dt(m), 2.0))
         engine_samples.append(EngineSample(_dt(m), 0, 0.0, 3600 * 100 + m * 60))  # motor uit
 
@@ -214,6 +216,51 @@ def test_large_data_gap_after_short_stop_cuts_off_the_trip():
     assert first_trip.arrive_place == "Haven@52.40,4.95"
     # ...en dus geen 3+ uur durende reis meer bevatten
     assert (first_trip.arrive_time - first_trip.depart_time) < timedelta(hours=1)
+
+
+def test_negligible_distance_trip_is_filtered_out():
+    """Reizen met verwaarloosbare afstand (GPS-/snelheidsruis, vaak vlak bij een segmentgrens)
+    horen niet als logboekregel te verschijnen."""
+    fixes, sogs, engine_samples = _build_scenario()
+
+    # havenbezoek (>= min_stop_minutes), gevolgd door een piepklein "reisje" van een paar meter
+    for m in range(54, 54 + 12):
+        fixes.append(PositionFix(_dt(m), 52.40, 4.95))
+        sogs.append(SogSample(_dt(m), 0.0))
+        engine_samples.append(EngineSample(_dt(m), 0, 0.0, 3600 * 100 + m * 60))
+    for m in range(66, 66 + 2):
+        fixes.append(PositionFix(_dt(m), 52.4001, 4.9501))  # een paar meter verderop
+        sogs.append(SogSample(_dt(m), 2.0))
+        engine_samples.append(EngineSample(_dt(m), 0, 0.0, 3600 * 100 + m * 60))
+
+    geocoder = _StubGeocoder()
+    trips = build_trips(
+        fixes, sogs, engine_samples, geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10
+    )
+
+    # alleen de oorspronkelijke reis (52.30 -> 52.40) hoort over te blijven
+    assert len(trips) == 1
+    assert trips[0].arrive_place == "Haven@52.40,4.95"
+
+
+def test_min_trip_distance_nm_can_be_disabled():
+    fixes, sogs, engine_samples = _build_scenario()
+    for m in range(54, 54 + 12):
+        fixes.append(PositionFix(_dt(m), 52.40, 4.95))
+        sogs.append(SogSample(_dt(m), 0.0))
+        engine_samples.append(EngineSample(_dt(m), 0, 0.0, 3600 * 100 + m * 60))
+    for m in range(66, 66 + 2):
+        fixes.append(PositionFix(_dt(m), 52.4001, 4.9501))
+        sogs.append(SogSample(_dt(m), 2.0))
+        engine_samples.append(EngineSample(_dt(m), 0, 0.0, 3600 * 100 + m * 60))
+
+    geocoder = _StubGeocoder()
+    trips = build_trips(
+        fixes, sogs, engine_samples,
+        geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10, min_trip_distance_nm=0.0,
+    )
+
+    assert len(trips) == 2  # met de filter uitgeschakeld telt ook het piepkleine reisje mee
 
 
 def test_small_data_gap_does_not_split_trip():
