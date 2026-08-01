@@ -5,7 +5,7 @@ import sys
 import time
 from datetime import date
 from pathlib import Path
-from typing import Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple, TypeVar
 
 from .ascii_reader import iter_frames
 from .ebl_reader import iter_frames as iter_frames_ebl
@@ -28,17 +28,45 @@ from .pgn_decode import (
 )
 from .tripbuilder import build_trips
 
+_T = TypeVar("_T")
+
+
+def _dominant_source_only(by_source: Dict[int, List[_T]]) -> List[_T]:
+    """Sommige boten hebben meerdere apparaten die dezelfde PGN sturen (bv. twee GPS-
+    antennes die allebei positie of vaart over de grond versturen). Zonder filtering worden
+    hun onafhankelijke, licht afwijkende metingen puur op tijd door elkaar gesorteerd, wat
+    voor honderden valse kleine "sprongen" zorgt die samen de afstand flink kunnen opblazen.
+    We houden daarom alleen de bron aan die de meeste berichten stuurde -- over de hele sessie
+    (alle bestanden/de hele live-verbinding) samen, niet per bestand, anders kan een andere
+    bron "winnen" in elk bestand en het probleem juist terugkomen op de naad tussen bestanden."""
+    if not by_source:
+        return []
+    dominant_source = max(by_source, key=lambda source: len(by_source[source]))
+    return by_source[dominant_source]
+
+
+def _merge_by_source(target: Dict[int, List[_T]], addition: Dict[int, List[_T]]) -> None:
+    for source, items in addition.items():
+        target.setdefault(source, []).extend(items)
+
 
 def _collect_samples(
     frames: Iterable[Frame], *, deadline: Optional[float] = None
-) -> Tuple[List[PositionFix], List[SogSample], List[EngineSample], List[TripFuelSample], List[DepthSample]]:
-    """Verwerkt frames tot samples. Stopt netjes op Ctrl+C of als de deadline verstrijkt,
+) -> Tuple[
+    Dict[int, List[PositionFix]],
+    Dict[int, List[SogSample]],
+    List[EngineSample],
+    List[TripFuelSample],
+    Dict[int, List[DepthSample]],
+]:
+    """Verwerkt frames tot samples, gegroepeerd per bronadres voor PGN's die van meerdere
+    apparaten tegelijk kunnen komen. Stopt netjes op Ctrl+C of als de deadline verstrijkt,
     zodat een live-sessie altijd een logboek oplevert van wat er tot dan toe binnen is."""
-    fixes: List[PositionFix] = []
-    sogs: List[SogSample] = []
+    fixes_by_source: Dict[int, List[PositionFix]] = {}
+    sogs_by_source: Dict[int, List[SogSample]] = {}
+    depth_by_source: Dict[int, List[DepthSample]] = {}
     engine_samples: List[EngineSample] = []
     trip_fuel_samples: List[TripFuelSample] = []
-    depth_samples: List[DepthSample] = []
     try:
         for frame in frames:
             if deadline is not None and time.monotonic() >= deadline:
@@ -48,11 +76,11 @@ def _collect_samples(
                 decoded = decode_position_rapid(frame.data)
                 if decoded is not None:
                     lat, lon = decoded
-                    fixes.append(PositionFix(frame.time, lat, lon))
+                    fixes_by_source.setdefault(frame.source, []).append(PositionFix(frame.time, lat, lon))
             elif frame.pgn == PGN_COG_SOG_RAPID:
                 sog = decode_sog(frame.data)
                 if sog is not None:
-                    sogs.append(SogSample(frame.time, sog))
+                    sogs_by_source.setdefault(frame.source, []).append(SogSample(frame.time, sog))
             elif frame.pgn == PGN_ENGINE_DYNAMIC:
                 decoded = decode_engine_dynamic(frame.data)
                 if decoded is not None:
@@ -65,10 +93,10 @@ def _collect_samples(
             elif frame.pgn == PGN_WATER_DEPTH:
                 depth_m = decode_water_depth(frame.data)
                 if depth_m is not None:
-                    depth_samples.append(DepthSample(frame.time, depth_m))
+                    depth_by_source.setdefault(frame.source, []).append(DepthSample(frame.time, depth_m))
     except KeyboardInterrupt:
         print("\nOnderbroken door gebruiker; logboek wordt geschreven met de tot nu toe verzamelde data...", file=sys.stderr)
-    return fixes, sogs, engine_samples, trip_fuel_samples, depth_samples
+    return fixes_by_source, sogs_by_source, engine_samples, trip_fuel_samples, depth_by_source
 
 
 def _iter_frames_for_path(path: Path, start_date: Optional[date]) -> Iterable[Frame]:
@@ -167,11 +195,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.tee is not None and not args.live:
         parser.error("--tee is alleen van toepassing samen met --live")
 
-    all_fixes: List[PositionFix] = []
-    all_sogs: List[SogSample] = []
+    fixes_by_source: Dict[int, List[PositionFix]] = {}
+    sogs_by_source: Dict[int, List[SogSample]] = {}
+    depth_by_source: Dict[int, List[DepthSample]] = {}
     all_engine: List[EngineSample] = []
     all_trip_fuel: List[TripFuelSample] = []
-    all_depth: List[DepthSample] = []
 
     if args.live:
         host, port = _parse_host_port(args.live, DEFAULT_PORT)
@@ -182,7 +210,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"Kon niet verbinden met {host}:{port}: {exc}", file=sys.stderr)
             return 1
         deadline = time.monotonic() + args.duration if args.duration else None
-        all_fixes, all_sogs, all_engine, all_trip_fuel, all_depth = _collect_samples(frames, deadline=deadline)
+        fixes_by_source, sogs_by_source, all_engine, all_trip_fuel, depth_by_source = _collect_samples(
+            frames, deadline=deadline
+        )
     else:
         start_date = date.fromisoformat(args.start_date) if args.start_date else None
         for index, path in enumerate(args.logfiles):
@@ -191,11 +221,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                 return 1
             frames = _iter_frames_for_path(path, start_date if index == 0 else None)
             fixes, sogs, engine, trip_fuel, depth = _collect_samples(frames)
-            all_fixes += fixes
-            all_sogs += sogs
+            _merge_by_source(fixes_by_source, fixes)
+            _merge_by_source(sogs_by_source, sogs)
             all_engine += engine
             all_trip_fuel += trip_fuel
-            all_depth += depth
+            _merge_by_source(depth_by_source, depth)
+
+    all_fixes = _dominant_source_only(fixes_by_source)
+    all_sogs = _dominant_source_only(sogs_by_source)
+    all_depth = _dominant_source_only(depth_by_source)
 
     if not all_fixes:
         print("Geen positiedata (PGN 129025) gevonden.", file=sys.stderr)

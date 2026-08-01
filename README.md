@@ -12,9 +12,12 @@ dev-dependency voor de tests.
 
 1. **Inlezen** — twee bestandsformaten, automatisch gekozen op basis van de extensie:
    - `.ebl` (`ebl_reader.py`): het binaire formaat van de **SD-kaart-logfunctie** van de W2K-2
-     (BST-95 CAN-raw). Hier moet de app zelf NMEA2000 Fast-Packet-frames herassembleren (zie
-     "Aannames & beperkingen" hieronder — dit is reverse-engineered en nog niet tegen een echt
-     bestand geverifieerd).
+     (BST-95 CAN-raw). Hier moet de app zelf NMEA2000 Fast-Packet-frames herassembleren. Dit
+     formaat is reverse-engineered (zie "Aannames & beperkingen"), maar inmiddels wél
+     gevalideerd tegen echte SD-kaartlogs van een W2K-2 met een Yanmar 4LV195Z-motor: een
+     complete koude motorstart (brandstofdebiet, oliedruk-opbouw, opwarming, draaiurenteller,
+     zelfs de "Preheat Indicator"-waarschuwing tijdens het voorgloeien) kwam er fysiek
+     plausibel en intern consistent uit.
    - overig, bv. `.raw`/`.n2k` (`ascii_reader.py`): een *N2K ASCII*-logbestand, zoals je dat met
      `--live --tee` kunt vastleggen. Elke regel is al door de Actisense-hardware herassembleerd
      (fast-packet/multi-packet), dus daar is geen reassemblage nodig.
@@ -78,9 +81,9 @@ W2K-2 ("Download Logs") en geef ze direct mee:
 nmea2log logboek_20260715.ebl -o logboek.csv
 ```
 
-⚠️ Dit EBL-pad is **reverse-engineered en nog niet tegen een echt bestand van een W2K-2
-geverifieerd** (zie "Aannames & beperkingen"). Test dit met een klein bestand voordat je erop
-vertrouwt, en deel een fragment zodat het samen gecontroleerd kan worden.
+Dit EBL-pad is reverse-engineered (zie "Aannames & beperkingen") en inmiddels gevalideerd tegen
+echte SD-kaartlogs — controleer bij twijfel altijd of de uitkomst logisch aanvoelt voor jouw
+eigen vaart/motor.
 
 **Alternatief**: leg de N2K ASCII-stream van een Data Server vast naar een bestand, bijvoorbeeld
 door `nmea2log --live ... --tee 2026-07-15.raw` te draaien (zie Optie B), of met een ander
@@ -155,8 +158,11 @@ pytest
   [aldas/go-nmea-client](https://github.com/aldas/go-nmea-client) (specifiek
   [`actisense/eblreader.go`](https://github.com/aldas/go-nmea-client/blob/main/actisense/eblreader.go) —
   framing, byte-stuffing, CAN-ID-decodering) — met de hand geverifieerd tegen de testvectoren
-  daarin, maar **nog niet tegen een echt EBL-bestand van een W2K-2**. Bekende
-  beperkingen/aannames:
+  daarin, én inmiddels gevalideerd tegen ~800 MB echte SD-kaartlogs van een W2K-2 (Yanmar
+  4LV195Z-sterndrive): een complete koude motorstart kwam er fysiek plausibel en intern
+  consistent uit (brandstofdebiet, oliedruk-opbouw, spanningsverval tijdens het starten,
+  opwarming, draaiurenteller die precies bijhield, en zelfs een "Preheat Indicator"-waarschuwing
+  exact tijdens het voorgloeien). Bekende beperkingen/aannames:
   - De eigen 2-byte tijdteller per record wordt genegeerd (de betekenis ervan is nergens
     betrouwbaar gedocumenteerd — zelfs de referentie-implementatie gokt ernaar). In plaats
     daarvan wordt de absolute tijd afgeleid uit PGN 126992 (System Time) elders in de stream.
@@ -164,10 +170,10 @@ pytest
     GPS/kaartplotter), levert een `.ebl`-bestand niets op — frames vóór de eerste 126992-
     boodschap worden overgeslagen, en zonder 126992 helemaal geen frames.
   - Fast-Packet-reassemblage (nodig voor PGN 127489 en 127497, die beide >8 bytes zijn) is
-    geïmplementeerd volgens de standaard NMEA2000-conventie, maar niet tegen echte fast-packet-
-    data van een W2K-2 getest.
-  - Geef bij problemen een klein (paar honderd frames) `.ebl`-fragment door, dan wordt dit
-    samen tegen echte data gecontroleerd en zo nodig aangepast.
+    geïmplementeerd volgens de standaard NMEA2000-conventie en inmiddels ook tegen echte
+    fast-packet-data gevalideerd (zie hierboven).
+  - Geef bij onverwachte uitkomsten een klein `.ebl`-fragment door, dan wordt dit samen tegen
+    echte data gecontroleerd.
 - **Havenherkenning** is gebaseerd op stilligtijd + reverse geocoding, niet op een lijst van
   bekende marina's. Nominatim geeft niet altijd de exacte marinanaam terug (soms de plaatsnaam
   van de dichtstbijzijnde bebouwing). Wil je preciezere namen, dan is de volgende stap een
@@ -178,6 +184,12 @@ pytest
 - **Meerdere motoren**: de code ondersteunt meerdere `instance`-nummers (brandstof wordt
   gesommeerd, draaiuren per motor apart getoond), maar is niet getest met een echte
   twin-engine-installatie.
+- **Meerdere bronnen voor dezelfde PGN**: sommige boten hebben meerdere apparaten die
+  positie/vaart-over-de-grond/diepte versturen (bv. twee GPS-antennes). De app kiest per PGN
+  automatisch de bron die de meeste berichten stuurde over de hele sessie, en negeert de rest —
+  anders ontstaan er valse "sprongen" doordat twee onafhankelijke, licht afwijkende metingen
+  door elkaar heen gesorteerd worden (dit is met echte data ontdekt en opgelost: de afstand van
+  een reis viel in eerste instantie 10x te hoog uit door precies dit effect).
 - **Datum**: het N2K ASCII-formaat bevat alleen een tijdstip, geen datum. Zorg dat elk
   logbestand een datum in de naam heeft (`YYYY-MM-DD...`), anders wordt de
   bestandswijzigingsdatum gebruikt.
