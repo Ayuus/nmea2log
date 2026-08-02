@@ -59,6 +59,7 @@ class TripLeg:
     arrive_time: datetime
     depart_place: str
     arrive_place: str
+    duration: timedelta  # gevaren tijd, exclusief eventuele gaten in de data (zie _moving_duration)
     distance_nm: float
     avg_speed_kn: Optional[float]
     max_speed_kn: Optional[float]
@@ -102,26 +103,6 @@ def _merge_nav_samples(
     return samples
 
 
-def _split_on_gaps(samples: List[NavSample], max_gap: timedelta) -> List[List[NavSample]]:
-    """Splitst de samples op elke plek waar er te lang geen data was.
-
-    Zonder dit zou een reis een groot gat in de data (bv. het apparaat stond een tijd uit, of
-    er ontbreken logbestanden) overbruggen als "varend" tot aan het eerstvolgende punt --
-    ook al is er in werkelijkheid niets bekend over wat er in dat gat gebeurde. Vooral
-    riskant in combinatie met ``_merge_short_stops``: een echt havenbezoek waarvan door het
-    gat maar een paar minuten data over is, telt dan niet als stop en de reis "loopt door"
-    tot ver na het gat, met een veel te lange gerapporteerde vaartijd tot gevolg (in de
-    praktijk gezien: 3:21 vaartijd terwijl de motor maar 0:48 heeft gedraaid)."""
-    if not samples:
-        return []
-    segments: List[List[NavSample]] = [[samples[0]]]
-    for previous, current in zip(samples, samples[1:]):
-        if current.time - previous.time > max_gap:
-            segments.append([])
-        segments[-1].append(current)
-    return segments
-
-
 def _classify_runs(
     samples: List[NavSample], speed_threshold_ms: float
 ) -> List[Tuple[str, List[NavSample]]]:
@@ -130,13 +111,23 @@ def _classify_runs(
 
 
 def _merge_short_stops(
-    runs: List[Tuple[str, List[NavSample]]], min_stop: timedelta
+    runs: List[Tuple[str, List[NavSample]]], min_stop: timedelta, max_gap: timedelta
 ) -> List[Tuple[str, List[NavSample]]]:
-    """Stilligperiodes korter dan de drempel tellen niet als havenbezoek en worden bij de reis getrokken."""
+    """Stilligperiodes korter dan de drempel tellen normaliter niet als havenbezoek en worden
+    bij de reis getrokken -- BEHALVE als de periode grenst aan een gat in de data van minstens
+    ``max_gap``: de gemeten duur is dan artificieel kort (afgekapt door het gat, niet doordat de
+    boot écht maar heel even stillag), dus die telt wél mee als havenbezoek. Zonder deze
+    uitzondering zou een reis vlak vóór zo'n gat zijn "aankomsthaven" kwijtraken (in de praktijk
+    gevonden: een reis die eindigde bij een echte, bevestigde ligplaats kreeg toch "Onbekend"
+    als aankomsthaven, puur omdat er na aankomst maar een paar minuten data was voordat het gat
+    begon)."""
     relabelled = []
-    for label, group in runs:
+    for idx, (label, group) in enumerate(runs):
         if label == "stationary" and (group[-1].time - group[0].time) < min_stop:
-            label = "moving"
+            gap_before = idx > 0 and (group[0].time - runs[idx - 1][1][-1].time) >= max_gap
+            gap_after = idx + 1 < len(runs) and (runs[idx + 1][1][0].time - group[-1].time) >= max_gap
+            if not (gap_before or gap_after):
+                label = "moving"
         relabelled.append((label, group))
 
     merged: List[Tuple[str, List[NavSample]]] = []
@@ -146,6 +137,19 @@ def _merge_short_stops(
         else:
             merged.append((label, group))
     return merged
+
+
+def _moving_duration(group: List[NavSample], max_gap: timedelta) -> timedelta:
+    """Som van de tijd tussen opeenvolgende punten in een reis, met uitzondering van gaten
+    >= ``max_gap`` daarbinnen -- die tellen niet mee als "gevaren tijd", want we weten niet wat
+    er in zo'n gat gebeurde. Zonder dit zou de gerapporteerde vaartijd een intern gat in de data
+    overbruggen (in de praktijk gevonden: 3:21 vaartijd terwijl de motor maar 0:48 draaide)."""
+    total = timedelta()
+    for a, b in zip(group, group[1:]):
+        delta = b.time - a.time
+        if delta < max_gap:
+            total += delta
+    return total
 
 
 def _engine_hours_delta(
@@ -279,15 +283,15 @@ def build_trips(
     max_gap_minutes: Optional[float] = None,
     min_trip_distance_nm: float = 0.1,
 ) -> List[TripLeg]:
-    """``max_gap_minutes``: hoelang er hooguit geen data mag zijn voordat een reis wordt
-    afgekapt (zie ``_split_on_gaps``). Standaard gelijk aan ``min_stop_minutes`` -- eenzelfde
-    getal, maar twee verschillende betekenissen: de één is "hoelang moet je stilliggen",
-    de ander "hoelang mag er geen data zijn".
+    """``max_gap_minutes``: hoelang er hooguit geen data mag zijn voordat de gerapporteerde
+    vaartijd van een reis wordt afgekapt (zie ``_moving_duration``). Standaard gelijk aan
+    ``min_stop_minutes`` -- eenzelfde getal, maar twee verschillende betekenissen: de één is
+    "hoelang moet je stilliggen", de ander "hoelang mag er geen data zijn". Havens worden nog
+    wel over zo'n gat heen gekoppeld (zie ``_merge_short_stops``) -- alleen de *duur* van de
+    reis negeert het gat, niet de vertrek-/aankomsthaven zelf.
 
-    ``min_trip_distance_nm``: reizen die minder dan dit afleggen worden weggefilterd. Vooral
-    nodig sinds ``_split_on_gaps``: elke segmentgrens (bestandsgrens of groot gat) kan een paar
-    seconden GPS-/snelheidsruis aan de rand bevatten die net boven ``speed_threshold_kn`` komt
-    en zo als een nietszeggend "reisje" van een paar meter wordt gezien. Dat is geen echte reis
+    ``min_trip_distance_nm``: reizen die minder dan dit afleggen worden weggefilterd. Dit is
+    GPS-/snelheidsruis (een paar seconden net boven ``speed_threshold_kn``), geen echte reis
     (in de praktijk gevonden: 0,0 nm, een paar seconden tot minuten durend, motor uit)."""
     if geocoder is None:
         geocoder = NoGeocoder()
@@ -304,35 +308,8 @@ def build_trips(
     min_stop = timedelta(minutes=min_stop_minutes)
     max_gap = timedelta(minutes=max_gap_minutes)
 
-    trips: List[TripLeg] = []
-    for segment in _split_on_gaps(samples, max_gap):
-        if len(segment) < 2:
-            continue
-        trips += _build_trips_for_segment(
-            segment,
-            engine_samples,
-            trip_fuel_samples,
-            geocoder=geocoder,
-            speed_threshold_ms=speed_threshold_ms,
-            min_stop=min_stop,
-        )
-    return [trip for trip in trips if trip.distance_nm >= min_trip_distance_nm]
-
-
-def _build_trips_for_segment(
-    samples: List[NavSample],
-    engine_samples: List[EngineSample],
-    trip_fuel_samples: List[TripFuelSample],
-    *,
-    geocoder: object,
-    speed_threshold_ms: float,
-    min_stop: timedelta,
-) -> List[TripLeg]:
-    """Bouwt reizen voor één aaneengesloten stuk data (dus zonder grote gaten erin -- zie
-    ``_split_on_gaps``). Een segmentgrens gedraagt zich verder net als een bestandsgrens: een
-    reis die tegen zo'n grens aanloopt krijgt "Onbekend (start/einde buiten logbestand)"."""
     runs = _classify_runs(samples, speed_threshold_ms)
-    runs = _merge_short_stops(runs, min_stop)
+    runs = _merge_short_stops(runs, min_stop, max_gap)
 
     stays: List[Optional[Stay]] = []
     for label, group in runs:
@@ -368,6 +345,7 @@ def _build_trips_for_segment(
                 arrive_time=arrive_time,
                 depart_place=depart_place,
                 arrive_place=arrive_place,
+                duration=_moving_duration(group, max_gap),
                 distance_nm=distance_nm,
                 avg_speed_kn=avg_speed_kn,
                 max_speed_kn=max_speed_kn,
@@ -381,4 +359,4 @@ def _build_trips_for_segment(
                 track=group,
             )
         )
-    return trips
+    return [trip for trip in trips if trip.distance_nm >= min_trip_distance_nm]

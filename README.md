@@ -93,13 +93,13 @@ nmea2log-download
 ```
 
 Dit leest instellingen (IP-adres/hostnaam, gebruikersnaam+wachtwoord óf een token, doelmap) uit
-een configbestand, standaard `~/.nmea2log/w2k2.ini` (in je gebruikersprofiel), zodat je die niet
-telkens opnieuw hoeft in te typen. Zie [`w2k2.example.ini`](w2k2.example.ini) voor het formaat
-en hoe je je eigen bestand aanmaakt. **Zet dat bestand niet in deze projectmap** — die staat in
-OneDrive én in git, dus een wachtwoord hier zou meesyncen naar de cloud/je andere pc en kan per
-ongeluk gecommit worden; `~/.nmea2log/w2k2.ini` valt daarbuiten. Het commando downloadt alleen
-wat nog ontbreekt of onvolledig is (op bestandsgrootte vergeleken), dus opnieuw draaien na een
-volgende vaart haalt alleen de nieuwe bestanden op.
+een configbestand, standaard `w2k2.ini` **in de huidige map** (dus meestal de projectmap, naast
+[`w2k2.example.ini`](w2k2.example.ini)), zodat je die niet telkens opnieuw hoeft in te typen.
+`w2k2.ini` staat in `.gitignore` en wordt dus nooit gecommit. Let op: deze projectmap staat wel
+in OneDrive, dus een wachtwoord hier synct mee naar de cloud/je andere pc — een bewuste keuze;
+wil je dat niet, geef dan `--config pad/buiten/onedrive/w2k2.ini` mee. Het commando downloadt
+alleen wat nog ontbreekt of onvolledig is (op bestandsgrootte vergeleken), dus opnieuw draaien
+na een volgende vaart haalt alleen de nieuwe bestanden op.
 
 Verwerk de gedownloade bestanden vervolgens zoals gewoonlijk:
 

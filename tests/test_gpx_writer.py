@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
@@ -18,6 +18,7 @@ def _trip(**overrides) -> TripLeg:
         arrive_time=datetime(2026, 7, 15, 9, 30),
         depart_place="Marina A",
         arrive_place="Marina B",
+        duration=timedelta(minutes=30),
         distance_nm=6.3,
         avg_speed_kn=None,
         max_speed_kn=None,

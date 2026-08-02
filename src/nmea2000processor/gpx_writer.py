@@ -22,7 +22,7 @@ def _trip_name(trip: TripLeg) -> str:
 
 
 def _trip_description(trip: TripLeg) -> str:
-    duration = trip.arrive_time - trip.depart_time
+    duration = trip.duration
     parts = [
         f"Vaartijd: {_format_duration(duration)}",
         f"Afstand: {_nl_num(trip.distance_nm)} nm",

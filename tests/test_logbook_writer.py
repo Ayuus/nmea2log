@@ -1,5 +1,5 @@
 import csv
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from nmea2000processor.logbook_writer import write_csv
@@ -12,6 +12,7 @@ def _trip(**overrides) -> TripLeg:
         arrive_time=datetime(2026, 7, 15, 10, 30),
         depart_place="Marina A",
         arrive_place="Marina B",
+        duration=timedelta(hours=1, minutes=30),
         distance_nm=12.3,
         avg_speed_kn=None,
         max_speed_kn=None,

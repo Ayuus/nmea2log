@@ -72,7 +72,7 @@ def write_csv(trips: Iterable[TripLeg], path: Path) -> None:
         writer = csv.DictWriter(handle, fieldnames=_FIELDNAMES, delimiter=";")
         writer.writeheader()
         for trip in trips:
-            duration = trip.arrive_time - trip.depart_time
+            duration = trip.duration
             duration_h = duration.total_seconds() / 3600.0
             avg_consumption = trip.fuel_liters / duration_h if duration_h > 0 else None
             draaiuren = ", ".join(

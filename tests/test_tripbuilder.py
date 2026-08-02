@@ -177,13 +177,21 @@ def test_no_samples_returns_no_trips():
     assert build_trips([], [], []) == []
 
 
-def test_large_data_gap_after_short_stop_cuts_off_the_trip():
+def test_large_data_gap_keeps_harbor_but_excludes_gap_from_duration():
     """Regressietest voor een echte bug, gevonden met echte data: een groot gat in de data
-    (bv. het apparaat/de log stond een tijd stil) mag een reis niet overbruggen, ook niet als
-    de stilligperiode vlak vóór het gat te kort was om als havenbezoek te tellen. Zonder fix
-    liep de gerapporteerde vaartijd door tot ver na het gat (in de praktijk: 3:21 i.p.v. de
-    echte ~0:45), terwijl de draaiurenteller (die niet van GPS-classificatie afhangt) het wel
-    bij het rechte eind had."""
+    (bv. het apparaat/de log stond een tijd stil) liet de gerapporteerde vaartijd doorlopen tot
+    ver na het gat (in de praktijk: 3:21 i.p.v. de echte ~0:45, terwijl de draaiurenteller --
+    die niet van GPS-classificatie afhangt -- het wel bij het rechte eind had).
+
+    Een eerdere fix loste dat op door reizen bij elk gat in aparte stukken te knippen, maar dat
+    brak op zijn beurt de havenkoppeling: een stilligperiode van maar een paar minuten vlak
+    vóór het gat (te kort voor min_stop_minutes) telde niet als havenbezoek, dus de aankomst-
+    haven van de reis ervoor werd "Onbekend" in plaats van de echte (bevestigde) ligplaats.
+
+    De juiste aanpak: zo'n korte stilligperiode blijft wél een havenbezoek als hij aan het gat
+    grenst (_merge_short_stops), maar de *gerapporteerde duur* van de reis (``trip.duration``)
+    negeert het gat (_moving_duration) -- de haven blijft dus gekoppeld, de vaartijd niet
+    kunstmatig opgerekt."""
     fixes, sogs, engine_samples = _build_scenario()  # 12 min stil -> 30 min varen -> 12 min stil
 
     # na de reis: een stilligperiode van maar 5 minuten (te kort voor min_stop_minutes=10)
@@ -196,8 +204,7 @@ def test_large_data_gap_after_short_stop_cuts_off_the_trip():
     # dan een gat van 3 uur zonder enige data (apparaat/log lag stil)
     gap_end_minute = short_stop_start + 5 + 180
 
-    # na het gat: een korte reis (ruim boven min_trip_distance_nm) die zonder de fix de vorige
-    # reis zou verlengen i.p.v. als eigen reis te tellen
+    # na het gat: een aparte, korte reis (ruim boven min_trip_distance_nm)
     for i, m in enumerate(range(gap_end_minute, gap_end_minute + 3)):
         frac = i / 2
         fixes.append(PositionFix(_dt(m), 52.40 + 0.01 * frac, 4.95 + 0.01 * frac))
@@ -209,13 +216,17 @@ def test_large_data_gap_after_short_stop_cuts_off_the_trip():
         fixes, sogs, engine_samples, geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10
     )
 
-    assert len(trips) == 2  # de reis vóór het gat, en het beetje beweging erna, apart
-    first_trip = trips[0]
-    # de eerste reis moet eindigen rond het begin van het gat, niet erna
-    assert first_trip.arrive_time <= _dt(short_stop_start + 5)
+    assert len(trips) == 2  # de hoofdreis, en de korte reis na het gat, apart
+    first_trip, second_trip = trips
+
+    # de hoofdreis behoudt zijn echte aankomsthaven (niet "Onbekend"!)...
     assert first_trip.arrive_place == "Haven@52.40,4.95"
-    # ...en dus geen 3+ uur durende reis meer bevatten
-    assert (first_trip.arrive_time - first_trip.depart_time) < timedelta(hours=1)
+    # ...met een vaartijd die niet het gat overbrugt
+    assert first_trip.duration < timedelta(hours=1)
+
+    # de reis na het gat vertrekt logischerwijs vanaf diezelfde haven
+    assert second_trip.depart_place == "Haven@52.40,4.95"
+    assert second_trip.arrive_place == "Onbekend (einde buiten logbestand)"
 
 
 def test_negligible_distance_trip_is_filtered_out():

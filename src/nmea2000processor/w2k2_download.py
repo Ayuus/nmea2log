@@ -20,13 +20,14 @@ Gebruikt alleen de standaardbibliotheek (``urllib``), geen ``requests``, zodat d
 dependency-vrij blijft.
 
 Configuratie via een INI-bestand in plaats van steeds opnieuw inloggegevens intypen (zie
-``w2k2.example.ini`` in deze repo voor het formaat). Bewaar je eigen ingevulde bestand
-**buiten** deze projectmap (het standaardpad is ``~/.nmea2log/w2k2.ini``, in je
-gebruikersprofiel) — deze map staat in OneDrive én in git, dus een wachtwoord hier zou meesyncen
-naar de cloud en je andere pc, en kan per ongeluk gecommit worden.
+``w2k2.example.ini`` in deze repo voor het formaat). Standaard wordt ``w2k2.ini`` gezocht in de
+huidige map (dus meestal de projectmap, naast ``w2k2.example.ini``) — dat bestand staat in
+``.gitignore`` en wordt dus nooit gecommit. Let op: deze projectmap staat wel in OneDrive, dus
+een wachtwoord hier synct mee naar de cloud/je andere pc. Wil je dat niet, geef dan een pad
+buiten OneDrive op via ``--config``.
 
 Gebruik:
-    nmea2log-download                       # leest ~/.nmea2log/w2k2.ini
+    nmea2log-download                       # leest ./w2k2.ini
     nmea2log-download --config pad/naar.ini
 """
 
@@ -46,7 +47,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-DEFAULT_CONFIG_PATH = Path.home() / ".nmea2log" / "w2k2.ini"
+DEFAULT_CONFIG_PATH = Path("w2k2.ini")
 SD_LOG_ROOT = "/sdcard/logs/ebl_data_logs"
 
 TIMEOUT = 30  # seconden per API-verzoek
