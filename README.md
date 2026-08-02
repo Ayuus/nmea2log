@@ -93,18 +93,19 @@ nmea2log-download
 ```
 
 Dit leest instellingen (IP-adres/hostnaam, gebruikersnaam+wachtwoord óf een token, doelmap) uit
-een configbestand, standaard `w2k2.ini` **in de huidige map** (dus meestal de projectmap, naast
-[`w2k2.example.ini`](w2k2.example.ini)), zodat je die niet telkens opnieuw hoeft in te typen.
-`w2k2.ini` staat in `.gitignore` en wordt dus nooit gecommit. Let op: deze projectmap staat wel
-in OneDrive, dus een wachtwoord hier synct mee naar de cloud/je andere pc — een bewuste keuze;
-wil je dat niet, geef dan `--config pad/buiten/onedrive/w2k2.ini` mee. Het commando downloadt
-alleen wat nog ontbreekt of onvolledig is (op bestandsgrootte vergeleken), dus opnieuw draaien
-na een volgende vaart haalt alleen de nieuwe bestanden op.
+een configbestand, standaard `nmea2log.ini` **in de huidige map** (dus meestal de projectmap),
+zodat je die niet telkens opnieuw hoeft in te typen. `nmea2log.ini` staat in `.gitignore` en
+wordt dus nooit gecommit. Let op: deze projectmap staat wel in OneDrive, dus een wachtwoord hier
+synct mee naar de cloud/je andere pc — een bewuste keuze; wil je dat niet, geef dan
+`--config pad/buiten/onedrive/nmea2log.ini` mee. Het commando downloadt alleen wat nog ontbreekt
+of onvolledig is (op bestandsgrootte vergeleken), dus opnieuw draaien na een volgende vaart haalt
+alleen de nieuwe bestanden op. Standaard komen de bestanden in `Actisense/` (mapstructuur
+`EBL000000/`, `EBL000001/`, ... eronder), ook in `.gitignore`.
 
 Verwerk de gedownloade bestanden vervolgens zoals gewoonlijk:
 
 ```bash
-nmea2log ebl_logs/EBL000000/*.ebl ebl_logs/EBL000001/*.ebl -o logboek.csv
+nmea2log Actisense/EBL000000/*.ebl Actisense/EBL000001/*.ebl -o logboek.csv
 ```
 
 Dit EBL-pad is reverse-engineered (zie "Aannames & beperkingen") en inmiddels gevalideerd tegen
@@ -164,6 +165,28 @@ nmea2log --live 192.168.4.1:60001 --tee 2026-07-16.raw -o logboek.csv
 | `--no-geocode` | Geen internet nodig; toont coördinaten in plaats van havennamen |
 | `--cache-file` | Pad naar het cachebestand voor havennamen (standaard `.geocode_cache.json`) |
 | `--start-date` | Forceer de startdatum van het eerste logbestand (`YYYY-MM-DD`); niet van toepassing bij `--live` |
+| `--utc-offset UREN` | Vaste tijdzone-offset (bv. `2` voor CEST) voor de weergegeven tijden. Standaard: automatisch geschat per reis uit de vertreklengtegraad |
+
+Alle NMEA2000-tijden zijn UTC; in de CSV en de GPX-tracknamen wordt dit omgerekend naar lokale
+tijd. Zonder `--utc-offset` wordt de offset per reis geschat uit de lengtegraad van het
+vertrekpunt (15° per uur) — een grove schatting zonder tijdzone-database (dus geen
+zomer-/wintertijd-besef, en kan vlak bij een tijdzone-grens tot ~1 uur afwijken), maar wel zonder
+extra dependency. `<trkpt><time>` in de GPX blijft altijd strikt UTC, conform de GPX-conventie.
+De "vaartijd"-kolom is offset-onafhankelijk (het is een duur, geen tijdstip).
+
+### Configbestand voor standaardwaarden
+
+In plaats van bovenstaande opties elke keer op de command line mee te geven, kun je ze in de
+`[nmea2log]`-sectie van `nmea2log.ini` zetten (zie ook "Downloaden via de W2K-2 web-API" hierboven
+voor de `[w2k2]`-sectie in hetzelfde bestand). Command-line-argumenten overschrijven altijd wat in
+het configbestand staat. Voorbeeld:
+
+```ini
+[nmea2log]
+min_trip_distance_nm = 0.3
+utc_offset = 2
+no_geocode = false
+```
 
 ## Tests
 

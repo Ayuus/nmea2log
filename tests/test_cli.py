@@ -1,6 +1,11 @@
 from datetime import datetime
 
-from nmea2000processor.cli import _dominant_source_only, _merge_by_source, _select_primary_gps_source
+from nmea2000processor.cli import (
+    _dominant_source_only,
+    _merge_by_source,
+    _select_primary_gps_source,
+    build_arg_parser,
+)
 from nmea2000processor.model import PositionFix, SogSample
 
 
@@ -81,3 +86,28 @@ def test_select_primary_gps_source_no_fixes():
     assert fixes == []
     assert sogs == _sogs(3)
     assert primary is None
+
+
+def test_config_file_sets_argparse_defaults(tmp_path, monkeypatch):
+    config_path = tmp_path / "nmea2log.ini"
+    config_path.write_text(
+        "[nmea2log]\nmin_trip_distance_nm = 0.3\nutc_offset = 2\nno_geocode = true\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    args = build_arg_parser().parse_args([])
+
+    assert args.min_trip_distance_nm == 0.3
+    assert args.utc_offset == 2.0
+    assert args.no_geocode is True
+
+
+def test_config_file_default_is_overridden_by_explicit_cli_arg(tmp_path, monkeypatch):
+    config_path = tmp_path / "nmea2log.ini"
+    config_path.write_text("[nmea2log]\nmin_trip_distance_nm = 0.3\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    args = build_arg_parser().parse_args(["--min-trip-distance-nm", "0.9"])
+
+    assert args.min_trip_distance_nm == 0.9

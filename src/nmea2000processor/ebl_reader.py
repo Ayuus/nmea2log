@@ -16,9 +16,16 @@ Belangrijk verschil met het N2K ASCII-pad (``ascii_reader.py``):
    en gebruikt in de praktijk gewoon de leestijd). Die teller wordt daarom hier genegeerd.
    In plaats daarvan wordt de absolute datum/tijd afgeleid uit **PGN 126992 (System Time)**,
    die zelf al in de N2K-stream zit en een volledig gedocumenteerde, ondubbelzinnige codering
-   heeft. Gevolg: frames vóór de eerste 126992-boodschap in het bestand worden overgeslagen
-   (er is dan nog geen tijdreferentie), en de tijdsresolutie is gelijk aan de zendfrequentie
-   van PGN 126992 op jouw NMEA2000-netwerk (meestal rond de 1x/seconde).
+   heeft. Gevolg: frames vóór de eerste 126992-boodschap worden overgeslagen (er is dan nog
+   geen tijdreferentie), en de tijdsresolutie is gelijk aan de zendfrequentie van PGN 126992 op
+   jouw NMEA2000-netwerk (meestal rond de 1x/seconde).
+
+   Bij lange periodes zonder GPS/instrumentactiviteit (bv. voor anker, plotter uit) kan een heel
+   bestand geen enkele 126992-boodschap bevatten, terwijl andere PGN's (autopiloot, gyro) wel
+   gewoon doorlopen. Geef daarom bij het verwerken van meerdere opeenvolgende bestanden dezelfde
+   ``time_state``-dict door aan elke ``iter_frames``-aanroep (zie ``cli.py``): de laatst bekende
+   tijd blijft dan geldig over bestandsgrenzen heen, in plaats van dat zo'n heel bestand stil
+   wordt weggegooid omdat het toevallig zelf geen 126992-boodschap bevat.
 
 Dit is nog niet tegen een echt EBL-bestand van een W2K-2 geverifieerd — controleer dit zodra
 je een echt bestand hebt (zie README).
@@ -27,6 +34,7 @@ je een echt bestand hebt (zie README).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterator, Optional, Tuple, Union
 
@@ -140,15 +148,22 @@ def _reassemble_fast_packet(
     return None
 
 
-def iter_frames(path: Union[str, Path]) -> Iterator[Frame]:
+def iter_frames(
+    path: Union[str, Path], time_state: Optional[Dict[str, Optional[datetime]]] = None
+) -> Iterator[Frame]:
     """Leest een EBL-logbestand en geeft er gedecodeerde Frame's van terug, in bestandsvolgorde.
 
-    Vereist dat het bestand ergens een PGN 126992 (System Time)-boodschap bevat om een
-    absolute tijdreferentie te krijgen; frames daarvóór worden overgeslagen.
+    Vereist een PGN 126992 (System Time)-boodschap om een absolute tijdreferentie te krijgen;
+    frames daarvóór worden overgeslagen. ``time_state`` is een muteerbare dict (sleutel
+    ``"current"``) die de laatst bekende tijd bijhoudt; geef dezelfde dict door aan opeenvolgende
+    bestanden uit dezelfde sessie zodat de tijdreferentie behouden blijft over bestandsgrenzen
+    heen (zie de moduledocstring hierboven). Standaard (``None``) begint elk bestand met een
+    schone lei, zoals voorheen.
     """
+    if time_state is None:
+        time_state = {}
     data = Path(path).read_bytes()
     fast_packet_state: Dict[Tuple[int, int], _FastPacketAssembly] = {}
-    current_time = None
 
     for record in _iter_raw_records(data):
         if len(record) < 2 or record[0] != 0x07 or record[1] != _CMD_RAW_ACTISENSE_MESSAGE_RECEIVED:
@@ -166,11 +181,12 @@ def iter_frames(path: Union[str, Path]) -> Iterator[Frame]:
         if pgn == PGN_SYSTEM_TIME:
             decoded_time = decode_system_time(payload)
             if decoded_time is not None:
-                current_time = decoded_time
+                time_state["current"] = decoded_time
             continue
 
+        current_time = time_state.get("current")
         if current_time is None:
-            continue  # nog geen tijdreferentie gezien in dit bestand
+            continue  # nog geen tijdreferentie gezien (in dit bestand of een eerdere in de sessie)
 
         yield Frame(
             time=current_time, source=source, destination=destination, priority=priority, pgn=pgn, data=payload

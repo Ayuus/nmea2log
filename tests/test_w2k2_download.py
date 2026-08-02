@@ -33,7 +33,7 @@ def test_load_config_missing_file_uses_defaults(tmp_path: Path, monkeypatch):
     config = load_config(tmp_path / "does_not_exist.ini")
 
     assert config.url == "http://10.164.231.101"
-    assert config.download_dir == Path("ebl_logs")
+    assert config.download_dir == Path("Actisense")
     assert config.token is None
     assert config.user is None
     assert config.password is None

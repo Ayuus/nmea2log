@@ -19,22 +19,20 @@ API, kan wijzigen bij firmware-updates):
 Gebruikt alleen de standaardbibliotheek (``urllib``), geen ``requests``, zodat de app
 dependency-vrij blijft.
 
-Configuratie via een INI-bestand in plaats van steeds opnieuw inloggegevens intypen (zie
-``w2k2.example.ini`` in deze repo voor het formaat). Standaard wordt ``w2k2.ini`` gezocht in de
-huidige map (dus meestal de projectmap, naast ``w2k2.example.ini``) — dat bestand staat in
-``.gitignore`` en wordt dus nooit gecommit. Let op: deze projectmap staat wel in OneDrive, dus
+Configuratie via een INI-bestand in plaats van steeds opnieuw inloggegevens intypen. Standaard
+wordt ``nmea2log.ini`` gezocht in de huidige map (dus meestal de projectmap) — dat bestand staat
+in ``.gitignore`` en wordt dus nooit gecommit. Let op: deze projectmap staat wel in OneDrive, dus
 een wachtwoord hier synct mee naar de cloud/je andere pc. Wil je dat niet, geef dan een pad
 buiten OneDrive op via ``--config``.
 
 Gebruik:
-    nmea2log-download                       # leest ./w2k2.ini
+    nmea2log-download                       # leest ./nmea2log.ini
     nmea2log-download --config pad/naar.ini
 """
 
 from __future__ import annotations
 
 import argparse
-import configparser
 import getpass
 import json
 import os
@@ -47,7 +45,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-DEFAULT_CONFIG_PATH = Path("w2k2.ini")
+from .config import DEFAULT_CONFIG_PATH, load_section
+
 SD_LOG_ROOT = "/sdcard/logs/ebl_data_logs"
 
 TIMEOUT = 30  # seconden per API-verzoek
@@ -75,17 +74,11 @@ def load_config(path: Optional[Path] = None) -> W2K2Config:
     """Leest het configbestand. Vult ontbrekende inloggegevens aan uit omgevingsvariabelen
     (W2K2_URL/W2K2_TOKEN/W2K2_USER/W2K2_PASS/W2K2_DOWNLOAD_DIR), zodat de oude manier van
     werken (env vars, of interactief inloggen) ook nog gewoon werkt."""
-    config_path = path or DEFAULT_CONFIG_PATH
-    parser = configparser.ConfigParser()
-    section: Dict[str, str] = {}
-    if config_path.exists():
-        parser.read(config_path, encoding="utf-8")
-        if parser.has_section("w2k2"):
-            section = dict(parser["w2k2"])
+    section: Dict[str, str] = load_section("w2k2", path or DEFAULT_CONFIG_PATH)
 
     url = os.environ.get("W2K2_URL") or section.get("url") or "http://10.164.231.101"
     download_dir = Path(
-        os.environ.get("W2K2_DOWNLOAD_DIR") or section.get("download_dir") or "ebl_logs"
+        os.environ.get("W2K2_DOWNLOAD_DIR") or section.get("download_dir") or "Actisense"
     )
     token = os.environ.get("W2K2_TOKEN") or section.get("token") or None
     user = os.environ.get("W2K2_USER") or section.get("user") or None

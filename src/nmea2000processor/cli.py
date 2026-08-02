@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple, TypeVar
 
 from .ascii_reader import iter_frames
+from .config import load_section
 from .ebl_reader import iter_frames as iter_frames_ebl
 from .geocode import Geocoder, NoGeocoder
 from .gpx_writer import write_gpx
@@ -125,11 +126,18 @@ def _collect_samples(
     return fixes_by_source, sogs_by_source, engine_samples, trip_fuel_samples, depth_by_source
 
 
-def _iter_frames_for_path(path: Path, start_date: Optional[date]) -> Iterable[Frame]:
+def _iter_frames_for_path(
+    path: Path, start_date: Optional[date], ebl_time_state: Optional[Dict[str, object]] = None
+) -> Iterable[Frame]:
     """Kiest de juiste parser op basis van de bestandsextensie: .ebl -> binaire SD-kaartlog,
-    al het overige -> N2K ASCII (live-TCP-stream vastgelegd naar bestand, zie --tee)."""
+    al het overige -> N2K ASCII (live-TCP-stream vastgelegd naar bestand, zie --tee).
+
+    ``ebl_time_state`` wordt doorgegeven aan opeenvolgende .ebl-bestanden zodat de laatst bekende
+    tijd (PGN 126992) behouden blijft over bestandsgrenzen heen -- anders wordt een bestand
+    zonder eigen System Time-boodschap (bv. lang voor anker, GPS/plotter stil) volledig
+    weggegooid, ook al is de tijd al bekend uit het vorige bestand (zie ebl_reader.py)."""
     if path.suffix.lower() == ".ebl":
-        return iter_frames_ebl(path)
+        return iter_frames_ebl(path, time_state=ebl_time_state)
     return iter_frames(path, start_date=start_date)
 
 
@@ -222,7 +230,46 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Cachebestand voor havennamen (standaard .geocode_cache.json)",
     )
     parser.add_argument("--language", type=str, default="nl", help="Taal voor havennamen (standaard nl)")
+    parser.add_argument(
+        "--utc-offset",
+        type=float,
+        default=None,
+        help="Vaste tijdzone-offset in uren t.o.v. UTC (bv. 2 voor CEST) voor de weergegeven "
+        "tijden. Standaard: automatisch geschat per reis uit de vertreklengtegraad (zie README).",
+    )
+    _apply_config_defaults(parser)
     return parser
+
+
+def _apply_config_defaults(parser: argparse.ArgumentParser) -> None:
+    """Vult argparse-standaardwaarden aan vanuit de ``[nmea2log]``-sectie van het configbestand
+    (zie ``config.py``; standaard ``nmea2log.ini`` in de huidige map), zodat je niet elke keer
+    dezelfde opties hoeft mee te geven. Expliciete command-line-argumenten overschrijven dit
+    altijd -- argparse past een ``set_defaults``-waarde alleen toe als de gebruiker de optie zelf
+    niet meegaf."""
+    section = load_section("nmea2log")
+    if not section:
+        return
+
+    def _bool(value: str) -> bool:
+        return value.strip().lower() in ("1", "true", "yes", "on", "ja")
+
+    defaults: Dict[str, object] = {}
+    for key, caster in (
+        ("speed_threshold_kn", float),
+        ("min_stop_minutes", float),
+        ("max_gap_minutes", float),
+        ("min_trip_distance_nm", float),
+        ("cache_file", Path),
+        ("language", str),
+        ("utc_offset", float),
+    ):
+        if key in section:
+            defaults[key] = caster(section[key])
+    if "no_geocode" in section:
+        defaults["no_geocode"] = _bool(section["no_geocode"])
+
+    parser.set_defaults(**defaults)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -256,11 +303,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
     else:
         start_date = date.fromisoformat(args.start_date) if args.start_date else None
+        ebl_time_state: Dict[str, object] = {}
         for index, path in enumerate(args.logfiles):
             if not path.exists():
                 print(f"Logbestand niet gevonden: {path}", file=sys.stderr)
                 return 1
-            frames = _iter_frames_for_path(path, start_date if index == 0 else None)
+            frames = _iter_frames_for_path(path, start_date if index == 0 else None, ebl_time_state)
             fixes, sogs, engine, trip_fuel, depth = _collect_samples(frames)
             _merge_by_source(fixes_by_source, fixes)
             _merge_by_source(sogs_by_source, sogs)
@@ -304,9 +352,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         return 1
 
-    write_csv(trips, args.output)
+    write_csv(trips, args.output, utc_offset_hours=args.utc_offset)
     gpx_path = args.output.with_suffix(".gpx")
-    write_gpx(trips, gpx_path)
+    write_gpx(trips, gpx_path, utc_offset_hours=args.utc_offset)
     print(f"Logboek geschreven: {args.output} ({len(trips)} reis/reizen)")
     print(f"Route geschreven: {gpx_path}")
     return 0

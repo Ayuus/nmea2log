@@ -8,17 +8,19 @@ wat een reis kostte als je erop klikt.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional
 from xml.etree.ElementTree import Element, ElementTree, SubElement, indent
 
-from .logbook_writer import _format_duration, _format_warnings, _nl_num
+from .logbook_writer import _format_duration, _format_warnings, _nl_num, _to_local, _trip_utc_offset_hours
 from .tripbuilder import TripLeg
 
 _GPX_NAMESPACE = "http://www.topografix.com/GPX/1/1"
 
 
-def _trip_name(trip: TripLeg) -> str:
-    return f"{trip.depart_time:%Y-%m-%d %H:%M} {trip.depart_place} -> {trip.arrive_place}"
+def _trip_name(trip: TripLeg, utc_offset_hours: Optional[float] = None) -> str:
+    # Naam toont lokale tijd (zoals de CSV); <trkpt><time> blijft strikt UTC, zie write_gpx.
+    depart_local = _to_local(trip.depart_time, _trip_utc_offset_hours(trip, utc_offset_hours))
+    return f"{depart_local:%Y-%m-%d %H:%M} {trip.depart_place} -> {trip.arrive_place}"
 
 
 def _trip_description(trip: TripLeg) -> str:
@@ -45,13 +47,13 @@ def _trip_description(trip: TripLeg) -> str:
     return ", ".join(parts)
 
 
-def write_gpx(trips: Iterable[TripLeg], path: Path) -> None:
+def write_gpx(trips: Iterable[TripLeg], path: Path, utc_offset_hours: Optional[float] = None) -> None:
     gpx = Element("gpx", version="1.1", creator="nmea2000processor", xmlns=_GPX_NAMESPACE)
     for trip in trips:
         if not trip.track:
             continue
         trk = SubElement(gpx, "trk")
-        SubElement(trk, "name").text = _trip_name(trip)
+        SubElement(trk, "name").text = _trip_name(trip, utc_offset_hours)
         SubElement(trk, "desc").text = _trip_description(trip)
         trkseg = SubElement(trk, "trkseg")
         for point in trip.track:

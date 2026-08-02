@@ -77,6 +77,33 @@ def test_write_gpx_basic(tmp_path: Path):
     assert points[0].find("gpx:time", _NS).text == "2026-07-15T09:11:00Z"
 
 
+def test_write_gpx_name_uses_local_time(tmp_path: Path):
+    track = [_sample(11, 45.0, 26.0), _sample(31, 45.0, 26.0)]  # ~Roemenië, UTC+2
+    trip = _trip(depart_time=track[0].time, arrive_time=track[-1].time, track=track)
+    out_path = tmp_path / "logboek.gpx"
+
+    write_gpx([trip], out_path)
+
+    tree = ET.parse(out_path)
+    name = tree.getroot().find("gpx:trk/gpx:name", _NS).text
+    assert name.startswith("2026-07-15 11:11")  # 09:11 UTC + 2u geschat
+    # <trkpt><time> blijft strikt UTC, ongeacht de geschatte offset voor de naam.
+    point_time = tree.getroot().find("gpx:trk/gpx:trkseg/gpx:trkpt/gpx:time", _NS).text
+    assert point_time == "2026-07-15T09:11:00Z"
+
+
+def test_write_gpx_name_uses_fixed_utc_offset(tmp_path: Path):
+    track = [_sample(11, 45.0, 26.0), _sample(31, 45.0, 26.0)]
+    trip = _trip(depart_time=track[0].time, arrive_time=track[-1].time, track=track)
+    out_path = tmp_path / "logboek.gpx"
+
+    write_gpx([trip], out_path, utc_offset_hours=-1.0)
+
+    tree = ET.parse(out_path)
+    name = tree.getroot().find("gpx:trk/gpx:name", _NS).text
+    assert name.startswith("2026-07-15 08:11")
+
+
 def test_write_gpx_skips_trips_without_track(tmp_path: Path):
     trip = _trip(distance_nm=1.0, fuel_liters=1.0)
     out_path = tmp_path / "logboek.gpx"

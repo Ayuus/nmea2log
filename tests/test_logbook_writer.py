@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from nmea2000processor.logbook_writer import write_csv
-from nmea2000processor.tripbuilder import EngineHealth, TripLeg
+from nmea2000processor.tripbuilder import EngineHealth, NavSample, TripLeg
 
 
 def _trip(**overrides) -> TripLeg:
@@ -103,3 +103,33 @@ def test_write_csv_engine_health_warnings_and_depth(tmp_path: Path):
     assert row["waarschuwingen"] == "motor 0: Low Oil Pressure"
     assert row["min_diepte_m"] == "2,4"
     assert row["min_diepte_positie"] == "52.3235, 4.9422"
+
+
+def test_write_csv_estimates_local_time_from_departure_longitude(tmp_path: Path):
+    # Lengtegraad 4.9 (Nederland) -> geschatte offset UTC+0 (rond(4.9/15) == 0), dus geen
+    # verschil hier; gebruik in plaats daarvan een lengtegraad die duidelijk een ander uur geeft.
+    track = [NavSample(datetime(2026, 7, 15, 9, 0), 45.0, 26.0, 3.0, None)]  # ~Roemenië, UTC+2
+    trip = _trip(track=track)
+    out_path = tmp_path / "logboek.csv"
+
+    write_csv([trip], out_path)
+
+    with out_path.open(encoding="utf-8-sig") as handle:
+        rows = list(csv.DictReader(handle, delimiter=";"))
+
+    assert rows[0]["vertrektijd"] == "11:00"
+    assert rows[0]["aankomsttijd"] == "12:30"
+    assert rows[0]["vaartijd"] == "1:30"  # vaartijd blijft offset-onafhankelijk
+
+
+def test_write_csv_fixed_utc_offset_overrides_estimate(tmp_path: Path):
+    track = [NavSample(datetime(2026, 7, 15, 9, 0), 45.0, 26.0, 3.0, None)]
+    trip = _trip(track=track)
+    out_path = tmp_path / "logboek.csv"
+
+    write_csv([trip], out_path, utc_offset_hours=-1.0)
+
+    with out_path.open(encoding="utf-8-sig") as handle:
+        rows = list(csv.DictReader(handle, delimiter=";"))
+
+    assert rows[0]["vertrektijd"] == "08:00"

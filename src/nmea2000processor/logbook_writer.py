@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import csv
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, Iterable
+from typing import Dict, Iterable, Optional
 
 from .tripbuilder import EngineHealth, TripLeg
 
@@ -67,11 +67,36 @@ def _format_warnings(engine_health: Dict[int, EngineHealth]) -> str:
     return "; ".join(parts)
 
 
-def write_csv(trips: Iterable[TripLeg], path: Path) -> None:
+def _estimate_utc_offset_hours(longitude: float) -> int:
+    """Ruwe schatting van de tijdzone-offset uit de lengtegraad (15 graden per uur), zonder
+    tijdzone-database. Geen zomer-/wintertijd-besef en kan vlak bij een tijdzone-grens tot
+    ~1 uur afwijken -- voor een exacte offset kan je die met --utc-offset zelf opleggen."""
+    return max(-12, min(14, round(longitude / 15)))
+
+
+def _trip_utc_offset_hours(trip: TripLeg, fixed_offset: Optional[float]) -> float:
+    if fixed_offset is not None:
+        return fixed_offset
+    if trip.track:
+        return _estimate_utc_offset_hours(trip.track[0].lon)
+    return 0.0
+
+
+def _to_local(dt: datetime, offset_hours: float) -> datetime:
+    return dt + timedelta(hours=offset_hours)
+
+
+def write_csv(trips: Iterable[TripLeg], path: Path, utc_offset_hours: Optional[float] = None) -> None:
+    """``utc_offset_hours``: vaste tijdzone-offset (bv. 2 voor CEST) om op alle reizen toe te
+    passen. Standaard (None) wordt de offset per reis geschat uit de vertreklengtegraad."""
     with path.open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.DictWriter(handle, fieldnames=_FIELDNAMES, delimiter=";")
         writer.writeheader()
         for trip in trips:
+            offset = _trip_utc_offset_hours(trip, utc_offset_hours)
+            depart_local = _to_local(trip.depart_time, offset)
+            arrive_local = _to_local(trip.arrive_time, offset)
+
             duration = trip.duration
             duration_h = duration.total_seconds() / 3600.0
             avg_consumption = trip.fuel_liters / duration_h if duration_h > 0 else None
@@ -85,10 +110,10 @@ def write_csv(trips: Iterable[TripLeg], path: Path) -> None:
             )
             writer.writerow(
                 {
-                    "datum": trip.depart_time.date().isoformat(),
-                    "vertrektijd": trip.depart_time.strftime("%H:%M"),
+                    "datum": depart_local.date().isoformat(),
+                    "vertrektijd": depart_local.strftime("%H:%M"),
                     "vertrekhaven": trip.depart_place,
-                    "aankomsttijd": trip.arrive_time.strftime("%H:%M"),
+                    "aankomsttijd": arrive_local.strftime("%H:%M"),
                     "aankomsthaven": trip.arrive_place,
                     "vaartijd": _format_duration(duration),
                     "afstand_nm": _nl_num(trip.distance_nm),

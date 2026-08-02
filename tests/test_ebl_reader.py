@@ -153,3 +153,44 @@ def test_iter_frames_time_updates_between_system_time_messages(tmp_path: Path):
     assert len(frames) == 2
     assert frames[0].time == t1
     assert frames[1].time == t2
+
+
+def test_iter_frames_carries_time_across_files_via_time_state(tmp_path: Path):
+    """Regressietest: een bestand zonder eigen System Time-boodschap (bv. lang voor anker met
+    GPS/plotter stil, maar autopiloot/gyro die wel doorloopt) mag niet stilzwijgend volledig
+    worden weggegooid als de tijd al bekend is uit een eerder bestand in dezelfde sessie."""
+    when = datetime(2026, 7, 29, 12, 0, 0)
+    position_payload = struct.pack("<ii", 1000000, 2000000)
+    position_record = _bst95_record(_encode_can_id(priority=2, pgn=129025, source=0), position_payload)
+
+    file1 = tmp_path / "file1.ebl"
+    file1.write_bytes(bytes(_frame_bytes(_system_time_record(when)) + _frame_bytes(position_record)))
+
+    # file2 bevat GEEN System Time-boodschap, alleen nog een positiebericht (zoals tijdens een
+    # ankerperiode met stille GPS maar actieve autopiloot/gyro).
+    file2 = tmp_path / "file2.ebl"
+    file2.write_bytes(bytes(_frame_bytes(position_record)))
+
+    time_state: dict = {}
+    frames_file1 = list(iter_frames(file1, time_state=time_state))
+    frames_file2 = list(iter_frames(file2, time_state=time_state))
+
+    assert len(frames_file1) == 1
+    assert len(frames_file2) == 1  # zonder de fix: 0, want file2 heeft geen eigen tijdreferentie
+    assert frames_file2[0].time == when
+
+
+def test_iter_frames_without_time_state_starts_fresh_per_file(tmp_path: Path):
+    """Standaardgedrag (geen time_state meegegeven) blijft ongewijzigd: elk bestand op zichzelf."""
+    position_payload = struct.pack("<ii", 1000000, 2000000)
+    position_record = _bst95_record(_encode_can_id(priority=2, pgn=129025, source=0), position_payload)
+
+    file1 = tmp_path / "file1.ebl"
+    file1.write_bytes(
+        bytes(_frame_bytes(_system_time_record(datetime(2026, 7, 29, 12, 0, 0))) + _frame_bytes(position_record))
+    )
+    file2 = tmp_path / "file2.ebl"
+    file2.write_bytes(bytes(_frame_bytes(position_record)))
+
+    assert len(list(iter_frames(file1))) == 1
+    assert list(iter_frames(file2)) == []
