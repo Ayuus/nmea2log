@@ -1,4 +1,6 @@
-"""Schrijft reizen weg als een CSV-logboek (Nederlandse Excel-conventie: ';' als scheidingsteken)."""
+"""Schrijft reizen weg als een CSV-logboek (Nederlandse Excel-conventie: ';' als scheidingsteken
+en ',' als decimaalteken -- de kolomnamen zelf zijn Engels zodat het bestand ook buiten NL
+leesbaar is)."""
 
 from __future__ import annotations
 
@@ -10,23 +12,24 @@ from typing import Dict, Iterable, Optional
 from .tripbuilder import EngineHealth, TripLeg
 
 _FIELDNAMES = [
-    "datum",
-    "vertrektijd",
-    "vertrekhaven",
-    "aankomsttijd",
-    "aankomsthaven",
-    "vaartijd",
-    "afstand_nm",
-    "gem_snelheid_kn",
-    "max_snelheid_kn",
-    "brandstof_L_berekend",
-    "brandstof_L_motorteller",
-    "gem_verbruik_L_per_uur",
-    "draaiuren",
-    "motorgezondheid",
-    "waarschuwingen",
-    "min_diepte_m",
-    "min_diepte_positie",
+    "date",
+    "departure_time",
+    "departure_port",
+    "arrival_time",
+    "arrival_port",
+    "duration",
+    "distance_nm",
+    "avg_speed_kn",
+    "max_speed_kn",
+    "fuel_L_calculated",
+    "fuel_L_engine_meter",
+    "avg_consumption_L_per_hour",
+    "avg_consumption_L_per_nm",
+    "engine_hours",
+    "engine_health",
+    "warnings",
+    "min_depth_m",
+    "min_depth_position",
 ]
 
 
@@ -45,17 +48,17 @@ def _format_engine_health(engine_health: Dict[int, EngineHealth]) -> str:
     for instance, health in sorted(engine_health.items()):
         bits = []
         if health.oil_pressure_bar_avg is not None:
-            bits.append(f"olie {_nl_num(health.oil_pressure_bar_avg)} bar")
+            bits.append(f"oil {_nl_num(health.oil_pressure_bar_avg)} bar")
         if health.oil_temperature_c_avg is not None:
-            bits.append(f"olietemp {_nl_num(health.oil_temperature_c_avg, 0)}°C")
+            bits.append(f"oil temp {_nl_num(health.oil_temperature_c_avg, 0)}°C")
         if health.coolant_temperature_c_avg is not None:
-            bits.append(f"koelvloeistof {_nl_num(health.coolant_temperature_c_avg, 0)}°C")
+            bits.append(f"coolant {_nl_num(health.coolant_temperature_c_avg, 0)}°C")
         if health.alternator_voltage_v_avg is not None:
             bits.append(f"alternator {_nl_num(health.alternator_voltage_v_avg)} V")
         if health.engine_load_pct_max is not None:
-            bits.append(f"belasting max {_nl_num(health.engine_load_pct_max, 0)}%")
+            bits.append(f"load max {_nl_num(health.engine_load_pct_max, 0)}%")
         if bits:
-            parts.append(f"motor {instance}: " + ", ".join(bits))
+            parts.append(f"engine {instance}: " + ", ".join(bits))
     return "; ".join(parts)
 
 
@@ -63,7 +66,7 @@ def _format_warnings(engine_health: Dict[int, EngineHealth]) -> str:
     parts = []
     for instance, health in sorted(engine_health.items()):
         if health.warnings:
-            parts.append(f"motor {instance}: " + ", ".join(sorted(health.warnings)))
+            parts.append(f"engine {instance}: " + ", ".join(sorted(health.warnings)))
     return "; ".join(parts)
 
 
@@ -86,6 +89,22 @@ def _to_local(dt: datetime, offset_hours: float) -> datetime:
     return dt + timedelta(hours=offset_hours)
 
 
+def _avg_consumption_l_per_nm(trip: TripLeg) -> Optional[float]:
+    return trip.fuel_liters / trip.distance_nm if trip.distance_nm > 0 else None
+
+
+def _engine_hours_text(trip: TripLeg) -> str:
+    return ", ".join(
+        f"engine {instance}: {_nl_num(hours)} h" for instance, hours in sorted(trip.engine_hours.items())
+    )
+
+
+def _min_depth_position_text(trip: TripLeg) -> str:
+    if trip.min_depth_lat is None or trip.min_depth_lon is None:
+        return ""
+    return f"{trip.min_depth_lat:.4f}, {trip.min_depth_lon:.4f}"
+
+
 def write_csv(trips: Iterable[TripLeg], path: Path, utc_offset_hours: Optional[float] = None) -> None:
     """``utc_offset_hours``: vaste tijdzone-offset (bv. 2 voor CEST) om op alle reizen toe te
     passen. Standaard (None) wordt de offset per reis geschat uit de vertreklengtegraad."""
@@ -100,34 +119,30 @@ def write_csv(trips: Iterable[TripLeg], path: Path, utc_offset_hours: Optional[f
             duration = trip.duration
             duration_h = duration.total_seconds() / 3600.0
             avg_consumption = trip.fuel_liters / duration_h if duration_h > 0 else None
-            draaiuren = ", ".join(
-                f"motor {instance}: {_nl_num(hours)} u" for instance, hours in sorted(trip.engine_hours.items())
-            )
-            min_diepte_positie = (
-                f"{trip.min_depth_lat:.4f}, {trip.min_depth_lon:.4f}"
-                if trip.min_depth_lat is not None and trip.min_depth_lon is not None
-                else ""
-            )
+            avg_consumption_per_nm = _avg_consumption_l_per_nm(trip)
             writer.writerow(
                 {
-                    "datum": depart_local.date().isoformat(),
-                    "vertrektijd": depart_local.strftime("%H:%M"),
-                    "vertrekhaven": trip.depart_place,
-                    "aankomsttijd": arrive_local.strftime("%H:%M"),
-                    "aankomsthaven": trip.arrive_place,
-                    "vaartijd": _format_duration(duration),
-                    "afstand_nm": _nl_num(trip.distance_nm),
-                    "gem_snelheid_kn": _nl_num(trip.avg_speed_kn) if trip.avg_speed_kn is not None else "",
-                    "max_snelheid_kn": _nl_num(trip.max_speed_kn) if trip.max_speed_kn is not None else "",
-                    "brandstof_L_berekend": _nl_num(trip.fuel_liters),
-                    "brandstof_L_motorteller": _nl_num(trip.fuel_liters_device)
+                    "date": depart_local.date().isoformat(),
+                    "departure_time": depart_local.strftime("%H:%M"),
+                    "departure_port": trip.depart_place,
+                    "arrival_time": arrive_local.strftime("%H:%M"),
+                    "arrival_port": trip.arrive_place,
+                    "duration": _format_duration(duration),
+                    "distance_nm": _nl_num(trip.distance_nm),
+                    "avg_speed_kn": _nl_num(trip.avg_speed_kn) if trip.avg_speed_kn is not None else "",
+                    "max_speed_kn": _nl_num(trip.max_speed_kn) if trip.max_speed_kn is not None else "",
+                    "fuel_L_calculated": _nl_num(trip.fuel_liters),
+                    "fuel_L_engine_meter": _nl_num(trip.fuel_liters_device)
                     if trip.fuel_liters_device is not None
                     else "",
-                    "gem_verbruik_L_per_uur": _nl_num(avg_consumption) if avg_consumption is not None else "",
-                    "draaiuren": draaiuren,
-                    "motorgezondheid": _format_engine_health(trip.engine_health),
-                    "waarschuwingen": _format_warnings(trip.engine_health),
-                    "min_diepte_m": _nl_num(trip.min_depth_m) if trip.min_depth_m is not None else "",
-                    "min_diepte_positie": min_diepte_positie,
+                    "avg_consumption_L_per_hour": _nl_num(avg_consumption) if avg_consumption is not None else "",
+                    "avg_consumption_L_per_nm": _nl_num(avg_consumption_per_nm, 2)
+                    if avg_consumption_per_nm is not None
+                    else "",
+                    "engine_hours": _engine_hours_text(trip),
+                    "engine_health": _format_engine_health(trip.engine_health),
+                    "warnings": _format_warnings(trip.engine_health),
+                    "min_depth_m": _nl_num(trip.min_depth_m) if trip.min_depth_m is not None else "",
+                    "min_depth_position": _min_depth_position_text(trip),
                 }
             )

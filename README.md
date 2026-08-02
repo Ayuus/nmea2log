@@ -1,9 +1,13 @@
 # nmea2000processor
 
 Pure Python-applicatie die NMEA2000-logbestanden van een **Actisense W2K-2** omzet naar een
-vaarlogboek (CSV): vertrek-/aankomsthaven, brandstofverbruik (uit motordata, niet uit een
-tanksensor) en gedraaide motoruren. Schrijft daarnaast een **GPX-bestand** met de gevaren
-route per reis, te openen in navigatiesoftware (OpenCPN, Navionics, etc.).
+vaarlogboek: vertrek-/aankomsthaven, brandstofverbruik (uit motordata, niet uit een tanksensor)
+en gedraaide motoruren. Schrijft vier bestanden weg (zelfde naam als `-o`, verschillende
+extensie): een **CSV** (`.csv`), een **GPX** met de gevaren route per reis (`.gpx`, te openen in
+navigatiesoftware zoals OpenCPN/Navionics), een **open werkmap** (`.ods`, opent in Excel en
+LibreOffice/OpenOffice Calc) met dezelfde gegevens plus een totalenblad en een klikbaar
+kaartplaatje per reis, en een **HTML-bestand** (`_routes.html`) met de volledige interactieve
+kaart waar dat plaatje naartoe linkt.
 
 Geen enkele runtime-dependency buiten de Python-standaardbibliotheek — alleen `pytest` als
 dev-dependency voor de tests.
@@ -62,12 +66,22 @@ dev-dependency voor de tests.
 4. **Havennamen** (`geocode.py`): de GPS-positie van elk havenbezoek wordt via
    OpenStreetMap/Nominatim (reverse geocoding) omgezet naar een plaatsnaam, met lokale
    caching zodat je nooit twee keer dezelfde positie opvraagt.
-5. **Logboek wegschrijven** (`logbook_writer.py`): CSV met `;` als scheidingsteken en `,` als
-   decimaalteken — opent direct correct in de Nederlandse Excel.
+5. **Logboek wegschrijven** (`logbook_writer.py`): CSV met Engelse kolomnamen maar Nederlandse
+   Excel-conventie voor de waarden (`;` als scheidingsteken, `,` als decimaalteken) — opent
+   direct correct in de Nederlandse Excel.
 6. **Route wegschrijven** (`gpx_writer.py`): naast de CSV wordt altijd ook een GPX-bestand
    geschreven (zelfde bestandsnaam, `.gpx`-extensie) met één track per reis. Klik je in een
    kaartprogramma op een track, dan zie je naam en beschrijving met vaartijd, afstand,
    brandstof en draaiuren van die reis.
+7. **Open werkmap + kaarten** (`ods_writer.py`, `route_maps.py`, `static_map.py`): een
+   `.ods`-bestand met twee bladen — 'Logbook' (dezelfde gegevens als de CSV, plus een
+   'route'-kolom met een klein kaartplaatje + routelijn) en 'Totals' (opgeteld over alle
+   reizen: aantal reizen, totale afstand, totale brandstof, totale draaiuren per motor). Het
+   kaartplaatje is een losse OpenStreetMap-tegel die wordt opgehaald en lokaal gecachet
+   (`.map_tile_cache/`); klik je erop, dan opent de volledige interactieve kaart
+   (`_routes.html`, Leaflet + OpenStreetMap, kan in-/uitgezoomd worden). Vereist internet bij
+   het aanmaken van het logboek — met `--no-route-thumbnails` sla je dat over (de kolom valt
+   dan terug op een gewone tekstlink).
 
 ## Installatie
 
@@ -105,7 +119,7 @@ alleen de nieuwe bestanden op. Standaard komen de bestanden in `Actisense/` (map
 Verwerk de gedownloade bestanden vervolgens zoals gewoonlijk:
 
 ```bash
-nmea2log Actisense/EBL000000/*.ebl Actisense/EBL000001/*.ebl -o logboek.csv
+nmea2log Actisense/EBL000000/*.ebl Actisense/EBL000001/*.ebl -o logbook.csv
 ```
 
 Dit EBL-pad is reverse-engineered (zie "Aannames & beperkingen") en inmiddels gevalideerd tegen
@@ -120,16 +134,17 @@ doorgangen correct te herkennen (het tijdstip in het formaat bevat zelf geen dat
 bestanden hebben dit probleem niet, die halen hun tijd uit de data zelf).
 
 ```bash
-nmea2log 2026-07-15.raw -o logboek.csv
+nmea2log 2026-07-15.raw -o logbook.csv
 ```
 
-Dit schrijft zowel `logboek.csv` als `logboek.gpx` (de route per reis).
+Dit schrijft `logbook.csv`, `logbook.gpx` (de route per reis), `logbook.ods` (open werkmap met
+totalenblad en kaartplaatjes) en `logbook_routes.html` (de interactieve kaart).
 
 Meerdere bestanden (bijvoorbeeld één per dag, `.ebl` en `.raw` door elkaar) in één keer
 verwerken:
 
 ```bash
-nmea2log 2026-07-14.raw 2026-07-15.ebl 2026-07-16.raw -o logboek.csv
+nmea2log 2026-07-14.raw 2026-07-15.ebl 2026-07-16.raw -o logbook.csv
 ```
 
 ### Optie B: live meelezen
@@ -138,7 +153,7 @@ Verbind rechtstreeks met de W2K-2 terwijl je vaart. Vervang `192.168.4.1` door h
 van de W2K-2 op jouw netwerk (te vinden op de statuspagina/webinterface van het apparaat):
 
 ```bash
-nmea2log --live 192.168.4.1 -o logboek.csv
+nmea2log --live 192.168.4.1 -o logbook.csv
 ```
 
 De sessie loopt door tot je op Ctrl+C drukt (of tot `--duration` verstrijkt); daarna wordt het
@@ -148,7 +163,7 @@ aankomsthaven. Met `--tee` bewaar je tegelijk de ruwe ASCII-stream naar een best
 zowel live verwerkt als een permanent logbestand overhoudt:
 
 ```bash
-nmea2log --live 192.168.4.1:60001 --tee 2026-07-16.raw -o logboek.csv
+nmea2log --live 192.168.4.1:60001 --tee 2026-07-16.raw -o logbook.csv
 ```
 
 ### Nuttige opties
@@ -166,6 +181,7 @@ nmea2log --live 192.168.4.1:60001 --tee 2026-07-16.raw -o logboek.csv
 | `--cache-file` | Pad naar het cachebestand voor havennamen (standaard `.geocode_cache.json`) |
 | `--start-date` | Forceer de startdatum van het eerste logbestand (`YYYY-MM-DD`); niet van toepassing bij `--live` |
 | `--utc-offset UREN` | Vaste tijdzone-offset (bv. `2` voor CEST) voor de weergegeven tijden. Standaard: automatisch geschat per reis uit de vertreklengtegraad |
+| `--no-route-thumbnails` | Sla het ophalen van kaartplaatjes voor de ODS 'route'-kolom over (geen internet nodig; kolom valt terug op een tekstlink) |
 
 Alle NMEA2000-tijden zijn UTC; in de CSV en de GPX-tracknamen wordt dit omgerekend naar lokale
 tijd. Zonder `--utc-offset` wordt de offset per reis geschat uit de lengtegraad van het

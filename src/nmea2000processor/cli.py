@@ -15,6 +15,7 @@ from .gpx_writer import write_gpx
 from .logbook_writer import write_csv
 from .model import DepthSample, EngineSample, Frame, PositionFix, SogSample, TripFuelSample
 from .network_reader import DEFAULT_PORT, iter_frames_tcp
+from .ods_writer import write_ods
 from .pgn_decode import (
     PGN_COG_SOG_RAPID,
     PGN_ENGINE_DYNAMIC,
@@ -27,6 +28,7 @@ from .pgn_decode import (
     decode_trip_fuel_engine,
     decode_water_depth,
 )
+from .route_maps import write_route_maps
 from .tripbuilder import build_trips
 
 _T = TypeVar("_T")
@@ -182,7 +184,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "(toevoegend), zodat je naast live-verwerking ook een logbestand overhoudt",
     )
     parser.add_argument(
-        "-o", "--output", type=Path, default=Path("logboek.csv"), help="Pad naar het CSV-bestand (standaard: logboek.csv)"
+        "-o", "--output", type=Path, default=Path("logbook.csv"), help="Pad naar het CSV-bestand (standaard: logbook.csv)"
     )
     parser.add_argument(
         "--start-date",
@@ -236,6 +238,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Vaste tijdzone-offset in uren t.o.v. UTC (bv. 2 voor CEST) voor de weergegeven "
         "tijden. Standaard: automatisch geschat per reis uit de vertreklengtegraad (zie README).",
+    )
+    parser.add_argument(
+        "--no-route-thumbnails",
+        action="store_true",
+        help="Sla het ophalen van kaartplaatjes voor de 'route'-kolom in het ODS-bestand over "
+        "(scheelt internetverkeer bij het aanmaken; de kolom valt dan terug op een tekstlink)",
     )
     _apply_config_defaults(parser)
     return parser
@@ -355,8 +363,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     write_csv(trips, args.output, utc_offset_hours=args.utc_offset)
     gpx_path = args.output.with_suffix(".gpx")
     write_gpx(trips, gpx_path, utc_offset_hours=args.utc_offset)
+    routes_path = args.output.with_name(args.output.stem + "_routes.html")
+    write_route_maps(trips, routes_path, utc_offset_hours=args.utc_offset)
+    ods_path = args.output.with_suffix(".ods")
+    write_ods(
+        trips,
+        ods_path,
+        utc_offset_hours=args.utc_offset,
+        routes_filename=routes_path.name,
+        use_route_thumbnails=not args.no_route_thumbnails,
+    )
     print(f"Logboek geschreven: {args.output} ({len(trips)} reis/reizen)")
     print(f"Route geschreven: {gpx_path}")
+    print(f"Open werkmap (ODS) geschreven: {ods_path}")
+    print(f"Routekaarten geschreven: {routes_path}")
     return 0
 
 

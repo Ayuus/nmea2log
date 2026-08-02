@@ -31,7 +31,7 @@ def _trip(**overrides) -> TripLeg:
 
 def test_write_csv_basic(tmp_path: Path):
     trip = _trip()
-    out_path = tmp_path / "logboek.csv"
+    out_path = tmp_path / "logbook.csv"
 
     write_csv([trip], out_path)
 
@@ -40,34 +40,35 @@ def test_write_csv_basic(tmp_path: Path):
 
     assert len(rows) == 1
     row = rows[0]
-    assert row["datum"] == "2026-07-15"
-    assert row["vertrektijd"] == "09:00"
-    assert row["vertrekhaven"] == "Marina A"
-    assert row["aankomsttijd"] == "10:30"
-    assert row["aankomsthaven"] == "Marina B"
-    assert row["vaartijd"] == "1:30"
-    assert row["afstand_nm"] == "12,3"
-    assert row["gem_snelheid_kn"] == ""
-    assert row["max_snelheid_kn"] == ""
-    assert row["brandstof_L_berekend"] == "9,8"
-    assert row["brandstof_L_motorteller"] == ""
-    assert row["draaiuren"] == "motor 0: 1,5 u"
-    assert row["motorgezondheid"] == ""
-    assert row["waarschuwingen"] == ""
-    assert row["min_diepte_m"] == ""
-    assert row["min_diepte_positie"] == ""
+    assert row["date"] == "2026-07-15"
+    assert row["departure_time"] == "09:00"
+    assert row["departure_port"] == "Marina A"
+    assert row["arrival_time"] == "10:30"
+    assert row["arrival_port"] == "Marina B"
+    assert row["duration"] == "1:30"
+    assert row["distance_nm"] == "12,3"
+    assert row["avg_speed_kn"] == ""
+    assert row["max_speed_kn"] == ""
+    assert row["fuel_L_calculated"] == "9,8"
+    assert row["fuel_L_engine_meter"] == ""
+    assert row["avg_consumption_L_per_nm"] == "0,79"
+    assert row["engine_hours"] == "engine 0: 1,5 h"
+    assert row["engine_health"] == ""
+    assert row["warnings"] == ""
+    assert row["min_depth_m"] == ""
+    assert row["min_depth_position"] == ""
 
 
 def test_write_csv_with_device_fuel(tmp_path: Path):
     trip = _trip(fuel_liters_device=8.0)
-    out_path = tmp_path / "logboek.csv"
+    out_path = tmp_path / "logbook.csv"
 
     write_csv([trip], out_path)
 
     with out_path.open(encoding="utf-8-sig") as handle:
         rows = list(csv.DictReader(handle, delimiter=";"))
 
-    assert rows[0]["brandstof_L_motorteller"] == "8,0"
+    assert rows[0]["fuel_L_engine_meter"] == "8,0"
 
 
 def test_write_csv_engine_health_warnings_and_depth(tmp_path: Path):
@@ -88,7 +89,7 @@ def test_write_csv_engine_health_warnings_and_depth(tmp_path: Path):
         min_depth_lat=52.3235,
         min_depth_lon=4.9422,
     )
-    out_path = tmp_path / "logboek.csv"
+    out_path = tmp_path / "logbook.csv"
 
     write_csv([trip], out_path)
 
@@ -96,13 +97,13 @@ def test_write_csv_engine_health_warnings_and_depth(tmp_path: Path):
         rows = list(csv.DictReader(handle, delimiter=";"))
 
     row = rows[0]
-    assert row["gem_snelheid_kn"] == "6,2"
-    assert row["max_snelheid_kn"] == "8,9"
-    assert "olie 3,2 bar" in row["motorgezondheid"]
-    assert "koelvloeistof 82°C" in row["motorgezondheid"]
-    assert row["waarschuwingen"] == "motor 0: Low Oil Pressure"
-    assert row["min_diepte_m"] == "2,4"
-    assert row["min_diepte_positie"] == "52.3235, 4.9422"
+    assert row["avg_speed_kn"] == "6,2"
+    assert row["max_speed_kn"] == "8,9"
+    assert "oil 3,2 bar" in row["engine_health"]
+    assert "coolant 82°C" in row["engine_health"]
+    assert row["warnings"] == "engine 0: Low Oil Pressure"
+    assert row["min_depth_m"] == "2,4"
+    assert row["min_depth_position"] == "52.3235, 4.9422"
 
 
 def test_write_csv_estimates_local_time_from_departure_longitude(tmp_path: Path):
@@ -110,26 +111,38 @@ def test_write_csv_estimates_local_time_from_departure_longitude(tmp_path: Path)
     # verschil hier; gebruik in plaats daarvan een lengtegraad die duidelijk een ander uur geeft.
     track = [NavSample(datetime(2026, 7, 15, 9, 0), 45.0, 26.0, 3.0, None)]  # ~Roemenië, UTC+2
     trip = _trip(track=track)
-    out_path = tmp_path / "logboek.csv"
+    out_path = tmp_path / "logbook.csv"
 
     write_csv([trip], out_path)
 
     with out_path.open(encoding="utf-8-sig") as handle:
         rows = list(csv.DictReader(handle, delimiter=";"))
 
-    assert rows[0]["vertrektijd"] == "11:00"
-    assert rows[0]["aankomsttijd"] == "12:30"
-    assert rows[0]["vaartijd"] == "1:30"  # vaartijd blijft offset-onafhankelijk
+    assert rows[0]["departure_time"] == "11:00"
+    assert rows[0]["arrival_time"] == "12:30"
+    assert rows[0]["duration"] == "1:30"  # vaartijd blijft offset-onafhankelijk
+
+
+def test_write_csv_consumption_per_nm_blank_when_no_distance(tmp_path: Path):
+    trip = _trip(distance_nm=0.0)
+    out_path = tmp_path / "logbook.csv"
+
+    write_csv([trip], out_path)
+
+    with out_path.open(encoding="utf-8-sig") as handle:
+        rows = list(csv.DictReader(handle, delimiter=";"))
+
+    assert rows[0]["avg_consumption_L_per_nm"] == ""
 
 
 def test_write_csv_fixed_utc_offset_overrides_estimate(tmp_path: Path):
     track = [NavSample(datetime(2026, 7, 15, 9, 0), 45.0, 26.0, 3.0, None)]
     trip = _trip(track=track)
-    out_path = tmp_path / "logboek.csv"
+    out_path = tmp_path / "logbook.csv"
 
     write_csv([trip], out_path, utc_offset_hours=-1.0)
 
     with out_path.open(encoding="utf-8-sig") as handle:
         rows = list(csv.DictReader(handle, delimiter=";"))
 
-    assert rows[0]["vertrektijd"] == "08:00"
+    assert rows[0]["departure_time"] == "08:00"

@@ -11,7 +11,14 @@ from pathlib import Path
 from typing import Iterable, Optional
 from xml.etree.ElementTree import Element, ElementTree, SubElement, indent
 
-from .logbook_writer import _format_duration, _format_warnings, _nl_num, _to_local, _trip_utc_offset_hours
+from .logbook_writer import (
+    _engine_hours_text,
+    _format_duration,
+    _format_warnings,
+    _nl_num,
+    _to_local,
+    _trip_utc_offset_hours,
+)
 from .tripbuilder import TripLeg
 
 _GPX_NAMESPACE = "http://www.topografix.com/GPX/1/1"
@@ -26,24 +33,22 @@ def _trip_name(trip: TripLeg, utc_offset_hours: Optional[float] = None) -> str:
 def _trip_description(trip: TripLeg) -> str:
     duration = trip.duration
     parts = [
-        f"Vaartijd: {_format_duration(duration)}",
-        f"Afstand: {_nl_num(trip.distance_nm)} nm",
+        f"Duration: {_format_duration(duration)}",
+        f"Distance: {_nl_num(trip.distance_nm)} nm",
     ]
     if trip.avg_speed_kn is not None and trip.max_speed_kn is not None:
-        parts.append(f"Snelheid: gem. {_nl_num(trip.avg_speed_kn)} kn, max {_nl_num(trip.max_speed_kn)} kn")
-    parts.append(f"Brandstof (berekend): {_nl_num(trip.fuel_liters)} L")
+        parts.append(f"Speed: avg {_nl_num(trip.avg_speed_kn)} kn, max {_nl_num(trip.max_speed_kn)} kn")
+    parts.append(f"Fuel (calculated): {_nl_num(trip.fuel_liters)} L")
     if trip.fuel_liters_device is not None:
-        parts.append(f"Brandstof (motorteller): {_nl_num(trip.fuel_liters_device)} L")
-    draaiuren = ", ".join(
-        f"motor {instance}: {_nl_num(hours)} u" for instance, hours in sorted(trip.engine_hours.items())
-    )
-    if draaiuren:
-        parts.append(f"Draaiuren: {draaiuren}")
+        parts.append(f"Fuel (engine meter): {_nl_num(trip.fuel_liters_device)} L")
+    engine_hours = _engine_hours_text(trip)
+    if engine_hours:
+        parts.append(f"Engine hours: {engine_hours}")
     warnings = _format_warnings(trip.engine_health)
     if warnings:
-        parts.append(f"Waarschuwingen: {warnings}")
+        parts.append(f"Warnings: {warnings}")
     if trip.min_depth_m is not None:
-        parts.append(f"Min. diepte: {_nl_num(trip.min_depth_m)} m")
+        parts.append(f"Min. depth: {_nl_num(trip.min_depth_m)} m")
     return ", ".join(parts)
 
 

@@ -62,13 +62,13 @@ def test_write_gpx_basic(tmp_path: Path):
     assert "Marina A" in name and "Marina B" in name
 
     desc = trk.find("gpx:desc", _NS).text
-    assert "Vaartijd" in desc
-    assert "Snelheid: gem. 5,8 kn, max 6,1 kn" in desc
-    assert "Brandstof (berekend): 4,0 L" in desc
-    assert "Brandstof (motorteller): 3,8 L" in desc
-    assert "motor 0: 0,5 u" in desc
-    assert "Waarschuwingen: motor 0: Low Oil Pressure" in desc
-    assert "Min. diepte: 3,1 m" in desc
+    assert "Duration" in desc
+    assert "Speed: avg 5,8 kn, max 6,1 kn" in desc
+    assert "Fuel (calculated): 4,0 L" in desc
+    assert "Fuel (engine meter): 3,8 L" in desc
+    assert "engine 0: 0,5 h" in desc
+    assert "Warnings: engine 0: Low Oil Pressure" in desc
+    assert "Min. depth: 3,1 m" in desc
 
     points = trk.findall("gpx:trkseg/gpx:trkpt", _NS)
     assert len(points) == 3
