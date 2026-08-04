@@ -61,3 +61,10 @@ class DepthSample:
 class WaterTempSample:
     time: datetime
     temp_c: Optional[float]  # sea/outside water temperature (PGN 130312), in degrees Celsius
+
+
+@dataclass(frozen=True)
+class BatterySample:
+    time: datetime
+    instance: int
+    voltage_v: Optional[float]  # battery monitor's own voltage reading (PGN 127508), in volts

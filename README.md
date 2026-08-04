@@ -33,7 +33,7 @@ the tests.
    - everything else, e.g. `.raw`/`.n2k` (`ascii_reader.py`): an *N2K ASCII* log file, such as
      you can capture with `--live --tee`. Each line has already been reassembled by the Actisense
      hardware (fast-packet/multi-packet), so no reassembly is needed there.
-2. **Decoding** (`pgn_decode.py`): picks seven PGNs out of the stream:
+2. **Decoding** (`pgn_decode.py`): picks eight PGNs out of the stream:
    - **127489** (*Engine Parameters, Dynamic*) → fuel rate, engine-hour meter, and health
      indicators (oil pressure/temperature, coolant temperature, alternator voltage, engine load)
      plus the two "Discrete Status" warning fields. This is engine data, so explicitly not the
@@ -50,6 +50,9 @@ the tests.
    - **130312** (*Temperature*) → sea/outside water temperature, filtered to that specific
      "source" (the same PGN can also carry cabin, exhaust gas, etc. temperature, which is
      ignored).
+   - **127508** (*Battery Status*) → a dedicated battery monitor's own voltage reading, distinct
+     from PGN 127489's alternator voltage (that's the engine's charging output, only present
+     while the engine is running; this keeps reporting at anchor with the engine off too).
 3. **Recognizing trips** (`tripbuilder.py`): periods where the boat is stationary for long
    enough (default ≥ 10 minutes, adjustable via `--min-stop-minutes`) count as a port visit; the
    periods in between are the trips. A large gap in the data itself (default also 10 minutes,
@@ -75,6 +78,9 @@ the tests.
      voltage, and maximum engine load during the trip, plus a separate **warnings** column with
      all active status flags (e.g. "Low Oil Pressure") that occurred at any point during the
      trip.
+   - **Battery voltage**: average and minimum voltage during the trip, per battery instance. If
+     the minimum drops below `--battery-warning-voltage` (default 12.2 V) at any point, that
+     also shows up in the same **warnings** column (e.g. "low battery 11.8 V").
    - **Speed**: average and maximum speed over ground.
    - **Water temperature**: average, minimum, and maximum sea temperature during the trip.
    - **Minimum water depth**, including the position where it was measured.
@@ -90,14 +96,16 @@ the tests.
 7. **HTML logbook** (`html_writer.py`): one self-contained `.html` file (same file name, `.html`
    extension) — no separate map file or workbook needed anymore. At the top, the boat name
    (`--boat-name`, or the `boat_name` setting in the config file) and totals: trip count, total
-   distance, fuel, average consumption, **engine hour meter** (the absolute reading of the
-   engine's own hour counter as of the most recently logged trip — handy for maintenance
+   distance, fuel, average consumption, top speed, **engine hour meter** (the absolute reading
+   of the engine's own hour counter as of the most recently logged trip — handy for maintenance
    intervals, so it also counts hours the engine ran before you started logging) and "hours
-   logged" (summed over only the trips in this logbook). Below that, the trips grouped by year
-   and ISO week. Each trip with a track has a "Map" button that opens a zoomable
-   Leaflet/OpenStreetMap map with the route line inline, embedded in the same page. Map tiles and
-   the Leaflet library come from a CDN, so **viewing** requires internet (generating doesn't).
-   Trips with a logged water temperature also get a colored badge (blue → red by temperature).
+   logged" (summed over only the trips in this logbook). The same totals are repeated per
+   calendar year, right under that year's heading, so you can also see a season at a glance
+   rather than only the all-time numbers. Below that, the trips grouped by year and ISO week.
+   Each trip with a track has a "Map" button that opens a zoomable Leaflet/OpenStreetMap map with
+   the route line inline, embedded in the same page. Map tiles and the Leaflet library come from
+   a CDN, so **viewing** requires internet (generating doesn't). Trips with a logged water
+   temperature also get a colored badge (blue → red by temperature).
 
 ## Installation
 
@@ -202,6 +210,7 @@ nmea2log --live 192.168.4.1:60001 --tee 2026-07-16.raw -o logbook.csv
 | `--boat-name NAME` | Boat name at the top of the HTML logbook (default: none, or the `boat_name` setting from the config file) |
 | `--engine-count N` | Number of physical engines. With `1`, any extra engine instance in the data is ignored as noise (same idea as the GPS source-dominance filtering) |
 | `--ebl-dir DIR` | Folder to search recursively for `.ebl` files when no logfiles are given and `--live` isn't used either. Default: not set, or the `ebl_dir` setting from the config file |
+| `--battery-warning-voltage V` | Flags a trip's battery voltage as low in the 'Warnings' column if it drops below this at any point (default 12.2 V; a common threshold for a 12V lead-acid battery -- adjust for a 24V system or a different chemistry) |
 
 All NMEA2000 times are UTC; in the CSV, the HTML logbook, and the GPX track names this is
 converted to local time. Without `--utc-offset`, the offset is estimated per trip from the

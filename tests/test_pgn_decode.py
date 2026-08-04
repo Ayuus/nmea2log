@@ -4,6 +4,7 @@ from datetime import date, datetime, timedelta
 import pytest
 
 from nmea2000processor.pgn_decode import (
+    decode_battery_status,
     decode_engine_dynamic,
     decode_position_rapid,
     decode_sea_temperature,
@@ -156,3 +157,23 @@ def test_decode_sea_temperature_not_available():
     data = struct.pack("<BBBHH", 0, 0, 0, 0xFFFF, 0xFFFF)
 
     assert decode_sea_temperature(data) is None
+
+
+def test_decode_battery_status():
+    # instance(1B) + voltage(2B, res 0.01V, signed) + current(2B, res 0.1A, signed) + temp(2B) + sid(1B)
+    voltage_raw = round(13.45 / 0.01)
+    data = struct.pack("<BhhHB", 0, voltage_raw, 0x7FFF, 0xFFFF, 0)
+
+    instance, voltage_v = decode_battery_status(data)
+
+    assert instance == 0
+    assert voltage_v == pytest.approx(13.45)
+
+
+def test_decode_battery_status_not_available():
+    data = struct.pack("<BhhHB", 1, 0x7FFF, 0x7FFF, 0xFFFF, 0)
+
+    instance, voltage_v = decode_battery_status(data)
+
+    assert instance == 1
+    assert voltage_v is None

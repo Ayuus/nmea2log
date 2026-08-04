@@ -17,7 +17,15 @@ from itertools import groupby
 from typing import Dict, FrozenSet, List, Optional, Tuple
 
 from .geocode import Geocoder, NoGeocoder
-from .model import DepthSample, EngineSample, PositionFix, SogSample, TripFuelSample, WaterTempSample
+from .model import (
+    BatterySample,
+    DepthSample,
+    EngineSample,
+    PositionFix,
+    SogSample,
+    TripFuelSample,
+    WaterTempSample,
+)
 
 _KNOT_IN_MS = 0.514444
 _EARTH_RADIUS_NM = 3440.065
@@ -56,6 +64,12 @@ class EngineHealth:
 
 
 @dataclass(frozen=True)
+class BatteryHealth:
+    avg_voltage_v: Optional[float]
+    min_voltage_v: Optional[float]
+
+
+@dataclass(frozen=True)
 class TripLeg:
     depart_time: datetime
     arrive_time: datetime
@@ -70,6 +84,7 @@ class TripLeg:
     engine_hours: Dict[int, float]  # engine instance -> hours run during this trip
     engine_hours_total: Dict[int, float]  # engine instance -> absolute hour-meter reading at arrival
     engine_health: Dict[int, EngineHealth]  # engine instance -> health indicators + warnings
+    battery_health: Dict[int, BatteryHealth]  # battery instance -> voltage stats during this trip
     min_depth_m: Optional[float]  # shallowest water depth measured during this trip
     min_depth_lat: Optional[float]
     min_depth_lon: Optional[float]
@@ -348,6 +363,22 @@ def _engine_health(
     return result
 
 
+def _battery_health(samples: List[BatterySample], start: datetime, end: datetime) -> Dict[int, BatteryHealth]:
+    by_instance: Dict[int, List[BatterySample]] = {}
+    for sample in samples:
+        if sample.voltage_v is None:
+            continue
+        by_instance.setdefault(sample.instance, []).append(sample)
+
+    result: Dict[int, BatteryHealth] = {}
+    for instance, seq in by_instance.items():
+        window = [s.voltage_v for s in seq if start <= s.time <= end]
+        if not window:
+            continue
+        result[instance] = BatteryHealth(avg_voltage_v=sum(window) / len(window), min_voltage_v=min(window))
+    return result
+
+
 def build_trips(
     fixes: List[PositionFix],
     sogs: List[SogSample],
@@ -355,6 +386,7 @@ def build_trips(
     trip_fuel_samples: Optional[List[TripFuelSample]] = None,
     depth_samples: Optional[List[DepthSample]] = None,
     water_temp_samples: Optional[List[WaterTempSample]] = None,
+    battery_samples: Optional[List[BatterySample]] = None,
     *,
     geocoder: Optional[object] = None,
     speed_threshold_kn: float = 0.5,
@@ -376,6 +408,8 @@ def build_trips(
         geocoder = NoGeocoder()
     if trip_fuel_samples is None:
         trip_fuel_samples = []
+    if battery_samples is None:
+        battery_samples = []
     if max_gap_minutes is None:
         max_gap_minutes = min_stop_minutes
 
@@ -435,6 +469,7 @@ def build_trips(
                 engine_hours=_engine_hours_delta(engine_samples, depart_time, arrive_time),
                 engine_hours_total=_engine_hours_total(engine_samples, depart_time, arrive_time),
                 engine_health=_engine_health(engine_samples, depart_time, arrive_time),
+                battery_health=_battery_health(battery_samples, depart_time, arrive_time),
                 min_depth_m=min_depth_m,
                 min_depth_lat=min_depth_lat,
                 min_depth_lon=min_depth_lon,

@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from nmea2000processor.html_writer import write_html_logbook
-from nmea2000processor.tripbuilder import NavSample, TripLeg
+from nmea2000processor.tripbuilder import BatteryHealth, NavSample, TripLeg
 
 
 def _trip(**overrides) -> TripLeg:
@@ -20,6 +20,7 @@ def _trip(**overrides) -> TripLeg:
         engine_hours={0: 1.5},
         engine_hours_total={0: 123.4},
         engine_health={},
+        battery_health={},
         min_depth_m=None,
         min_depth_lat=None,
         min_depth_lon=None,
@@ -110,6 +111,28 @@ def test_write_html_logbook_groups_by_year_and_week(tmp_path: Path):
     assert html.index("<h2>2026</h2>") < html.index("<h2>2025</h2>")
 
 
+def test_write_html_logbook_shows_per_year_totals(tmp_path: Path):
+    trip_2025 = _trip(
+        depart_time=datetime(2025, 6, 10, 9, 0), arrive_time=datetime(2025, 6, 10, 10, 0), distance_nm=7.0,
+    )
+    trip_2026a = _trip(
+        depart_time=datetime(2026, 7, 15, 9, 0), arrive_time=datetime(2026, 7, 15, 10, 0), distance_nm=10.0,
+    )
+    trip_2026b = _trip(
+        depart_time=datetime(2026, 8, 1, 9, 0), arrive_time=datetime(2026, 8, 1, 10, 0), distance_nm=6.0,
+    )
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([trip_2025, trip_2026a, trip_2026b], out_path)
+
+    html = out_path.read_text(encoding="utf-8")
+    # overall total (23.0) and the 2026-only total (16.0) must both appear
+    assert "23,0 nm" in html
+    assert "16,0 nm" in html
+    # the per-year total must land after that year's heading, not before it
+    assert html.index("<h2>2026</h2>") < html.index("16,0 nm")
+
+
 def test_write_html_logbook_map_button_only_with_track(tmp_path: Path):
     track = [NavSample(datetime(2026, 7, 15, 9, 0), 52.30, 4.90, 3.0, None)]
     trip_with_track = _trip(track=track)
@@ -161,6 +184,16 @@ def test_write_html_logbook_shows_max_speed_per_trip_and_overall(tmp_path: Path)
     assert "8,2 kn" in html
     assert "11,6 kn" in html
     assert "Top speed</div>" in html
+
+
+def test_write_html_logbook_shows_low_battery_warning(tmp_path: Path):
+    trip = _trip(battery_health={0: BatteryHealth(avg_voltage_v=12.6, min_voltage_v=11.8)})
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([trip], out_path, battery_warning_voltage=12.2)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert "low battery 11,8 V" in html
 
 
 def test_write_html_logbook_shows_water_temp_badge(tmp_path: Path):

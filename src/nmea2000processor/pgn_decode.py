@@ -18,6 +18,7 @@ PGN_TRIP_FUEL_ENGINE = 127497  # Trip Parameters, Engine
 PGN_WATER_DEPTH = 128267  # Water Depth
 PGN_SYSTEM_TIME = 126992  # System Time
 PGN_TEMPERATURE = 130312  # Temperature
+PGN_BATTERY_STATUS = 127508  # Battery Status
 
 _EPOCH = date(1970, 1, 1)
 _KELVIN_TO_CELSIUS = 273.15
@@ -162,6 +163,19 @@ def decode_sea_temperature(data: bytes) -> Optional[float]:
     if temp_raw is None:
         return None
     return temp_raw * 0.01 - _KELVIN_TO_CELSIUS
+
+
+def decode_battery_status(data: bytes) -> Optional[Tuple[int, Optional[float]]]:
+    """PGN 127508: battery instance and voltage, in volts. Distinct from PGN 127489's alternator
+    voltage -- that's the engine's charging output, only present while the engine PGN is being
+    sent (effectively only while running); this is a dedicated battery monitor's own reading,
+    which keeps reporting at anchor with the engine off too."""
+    instance = _extract(data, 0, 8, signed=False)
+    if instance is None:
+        return None
+    voltage_raw = _extract(data, 8, 16, signed=True)
+    voltage_v = voltage_raw * 0.01 if voltage_raw is not None else None
+    return instance, voltage_v
 
 
 def decode_trip_fuel_engine(data: bytes) -> Optional[Tuple[int, Optional[float]]]:

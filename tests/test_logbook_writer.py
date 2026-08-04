@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from nmea2000processor.logbook_writer import _is_eu_dst, write_csv
-from nmea2000processor.tripbuilder import EngineHealth, NavSample, TripLeg
+from nmea2000processor.tripbuilder import BatteryHealth, EngineHealth, NavSample, TripLeg
 
 
 def _trip(**overrides) -> TripLeg:
@@ -21,6 +21,7 @@ def _trip(**overrides) -> TripLeg:
         engine_hours={0: 1.5},
         engine_hours_total={0: 123.4},
         engine_health={},
+        battery_health={},
         min_depth_m=None,
         min_depth_lat=None,
         min_depth_lon=None,
@@ -98,6 +99,30 @@ def test_write_csv_labels_engines_when_there_are_more_than_one(tmp_path: Path):
     row = rows[0]
     assert row["engine_hours"] == "engine 0: 1,5 h, engine 1: 1,4 h"
     assert row["warnings"] == "engine 0: Low Oil Pressure"
+
+
+def test_write_csv_low_battery_warning(tmp_path: Path):
+    trip = _trip(battery_health={0: BatteryHealth(avg_voltage_v=12.6, min_voltage_v=11.8)})
+    out_path = tmp_path / "logbook.csv"
+
+    write_csv([trip], out_path, battery_warning_voltage=12.2)
+
+    with out_path.open(encoding="utf-8-sig") as handle:
+        rows = list(csv.DictReader(handle, delimiter=";"))
+
+    assert "low battery 11,8 V" in rows[0]["warnings"]
+
+
+def test_write_csv_no_battery_warning_when_voltage_is_healthy(tmp_path: Path):
+    trip = _trip(battery_health={0: BatteryHealth(avg_voltage_v=12.8, min_voltage_v=12.6)})
+    out_path = tmp_path / "logbook.csv"
+
+    write_csv([trip], out_path, battery_warning_voltage=12.2)
+
+    with out_path.open(encoding="utf-8-sig") as handle:
+        rows = list(csv.DictReader(handle, delimiter=";"))
+
+    assert rows[0]["warnings"] == ""
 
 
 def test_write_csv_with_device_fuel(tmp_path: Path):

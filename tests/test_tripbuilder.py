@@ -2,7 +2,15 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from nmea2000processor.model import DepthSample, EngineSample, PositionFix, SogSample, TripFuelSample, WaterTempSample
+from nmea2000processor.model import (
+    BatterySample,
+    DepthSample,
+    EngineSample,
+    PositionFix,
+    SogSample,
+    TripFuelSample,
+    WaterTempSample,
+)
 from nmea2000processor.tripbuilder import build_trips
 
 
@@ -162,6 +170,43 @@ def test_water_temp_stats_absent_without_samples():
     assert trip.avg_water_temp_c is None
     assert trip.min_water_temp_c is None
     assert trip.max_water_temp_c is None
+
+
+def test_battery_health_with_low_voltage():
+    fixes, sogs, engine_samples = _build_scenario()
+    geocoder = _StubGeocoder()
+
+    # voltage sags to a low point mid-trip, then recovers
+    battery_samples = []
+    for m in range(0, 54):
+        if 12 <= m < 42:
+            voltage = 11.5 if m == 25 else 12.8
+        else:
+            voltage = 12.9  # in port, not relevant to this trip
+        battery_samples.append(BatterySample(_dt(m), 0, voltage))
+
+    trips = build_trips(
+        fixes, sogs, engine_samples, battery_samples=battery_samples,
+        geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+    )
+
+    assert len(trips) == 1
+    trip = trips[0]
+    assert trip.battery_health[0].min_voltage_v == pytest.approx(11.5)
+    assert trip.battery_health[0].avg_voltage_v is not None
+
+
+def test_battery_health_absent_without_samples():
+    fixes, sogs, engine_samples = _build_scenario()
+    geocoder = _StubGeocoder()
+
+    trips = build_trips(
+        fixes, sogs, engine_samples,
+        geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+    )
+
+    assert len(trips) == 1
+    assert trips[0].battery_health == {}
 
 
 def test_engine_health_and_warnings():

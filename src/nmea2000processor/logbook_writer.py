@@ -9,7 +9,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Dict, Iterable, Optional
 
-from .tripbuilder import EngineHealth, TripLeg
+from .tripbuilder import BatteryHealth, EngineHealth, TripLeg
 
 _FIELDNAMES = [
     "date",
@@ -76,6 +76,33 @@ def _format_warnings(engine_health: Dict[int, EngineHealth]) -> str:
         if health.warnings:
             prefix = "" if single_engine else f"engine {instance}: "
             parts.append(prefix + ", ".join(sorted(health.warnings)))
+    return "; ".join(parts)
+
+
+def _battery_warning_text(battery_health: Dict[int, BatteryHealth], threshold: Optional[float]) -> str:
+    """Flags a battery instance whose voltage dropped below ``threshold`` at any point during
+    the trip. Unlike engine warnings (manufacturer-defined bit flags), this is a numeric
+    threshold we define ourselves -- see --battery-warning-voltage."""
+    if threshold is None:
+        return ""
+    single_battery = len(battery_health) == 1
+    parts = []
+    for instance, health in sorted(battery_health.items()):
+        if health.min_voltage_v is not None and health.min_voltage_v < threshold:
+            prefix = "" if single_battery else f"battery {instance}: "
+            parts.append(f"{prefix}low battery {_nl_num(health.min_voltage_v)} V")
+    return "; ".join(parts)
+
+
+def _all_warnings_text(trip: TripLeg, battery_warning_voltage: Optional[float] = None) -> str:
+    parts = [
+        text
+        for text in (
+            _format_warnings(trip.engine_health),
+            _battery_warning_text(trip.battery_health, battery_warning_voltage),
+        )
+        if text
+    ]
     return "; ".join(parts)
 
 
@@ -172,9 +199,17 @@ def _min_depth_position_text(trip: TripLeg) -> str:
     return f"{trip.min_depth_lat:.4f}, {trip.min_depth_lon:.4f}"
 
 
-def write_csv(trips: Iterable[TripLeg], path: Path, utc_offset_hours: Optional[float] = None) -> None:
+def write_csv(
+    trips: Iterable[TripLeg],
+    path: Path,
+    utc_offset_hours: Optional[float] = None,
+    battery_warning_voltage: Optional[float] = None,
+) -> None:
     """``utc_offset_hours``: fixed timezone offset (e.g. 2 for CEST) to apply to all trips.
-    Default (None) estimates the offset per trip from the departure longitude."""
+    Default (None) estimates the offset per trip from the departure longitude.
+
+    ``battery_warning_voltage``: flags a trip's "warnings" column if the battery voltage
+    dropped below this at any point (see --battery-warning-voltage)."""
     with path.open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.DictWriter(handle, fieldnames=_FIELDNAMES, delimiter=";")
         writer.writeheader()
@@ -208,7 +243,7 @@ def write_csv(trips: Iterable[TripLeg], path: Path, utc_offset_hours: Optional[f
                     else "",
                     "engine_hours": _engine_hours_text(trip),
                     "engine_health": _format_engine_health(trip.engine_health),
-                    "warnings": _format_warnings(trip.engine_health),
+                    "warnings": _all_warnings_text(trip, battery_warning_voltage),
                     "min_depth_m": _nl_num(trip.min_depth_m) if trip.min_depth_m is not None else "",
                     "min_depth_position": _min_depth_position_text(trip),
                     "avg_water_temp_c": _nl_num(trip.avg_water_temp_c) if trip.avg_water_temp_c is not None else "",

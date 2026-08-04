@@ -12,9 +12,9 @@ from typing import Iterable, Optional
 from xml.etree.ElementTree import Element, ElementTree, SubElement, indent
 
 from .logbook_writer import (
+    _all_warnings_text,
     _engine_hours_text,
     _format_duration,
-    _format_warnings,
     _nl_num,
     _to_local,
     _trip_utc_offset_hours,
@@ -30,7 +30,7 @@ def _trip_name(trip: TripLeg, utc_offset_hours: Optional[float] = None) -> str:
     return f"{depart_local:%Y-%m-%d %H:%M} {trip.depart_place} -> {trip.arrive_place}"
 
 
-def _trip_description(trip: TripLeg) -> str:
+def _trip_description(trip: TripLeg, battery_warning_voltage: Optional[float] = None) -> str:
     duration = trip.duration
     parts = [
         f"Duration: {_format_duration(duration)}",
@@ -44,7 +44,7 @@ def _trip_description(trip: TripLeg) -> str:
     engine_hours = _engine_hours_text(trip)
     if engine_hours:
         parts.append(f"Engine hours: {engine_hours}")
-    warnings = _format_warnings(trip.engine_health)
+    warnings = _all_warnings_text(trip, battery_warning_voltage)
     if warnings:
         parts.append(f"Warnings: {warnings}")
     if trip.min_depth_m is not None:
@@ -59,14 +59,19 @@ def _trip_description(trip: TripLeg) -> str:
     return ", ".join(parts)
 
 
-def write_gpx(trips: Iterable[TripLeg], path: Path, utc_offset_hours: Optional[float] = None) -> None:
+def write_gpx(
+    trips: Iterable[TripLeg],
+    path: Path,
+    utc_offset_hours: Optional[float] = None,
+    battery_warning_voltage: Optional[float] = None,
+) -> None:
     gpx = Element("gpx", version="1.1", creator="nmea2000processor", xmlns=_GPX_NAMESPACE)
     for trip in trips:
         if not trip.track:
             continue
         trk = SubElement(gpx, "trk")
         SubElement(trk, "name").text = _trip_name(trip, utc_offset_hours)
-        SubElement(trk, "desc").text = _trip_description(trip)
+        SubElement(trk, "desc").text = _trip_description(trip, battery_warning_voltage)
         trkseg = SubElement(trk, "trkseg")
         for point in trip.track:
             trkpt = SubElement(trkseg, "trkpt", lat=f"{point.lat:.7f}", lon=f"{point.lon:.7f}")

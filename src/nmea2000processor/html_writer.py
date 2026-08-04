@@ -19,11 +19,10 @@ from typing import Dict, Iterable, List, Optional, Tuple
 from xml.sax.saxutils import escape
 
 from .logbook_writer import (
+    _all_warnings_text,
     _avg_consumption_l_per_nm,
     _engine_hours_text,
     _format_duration,
-    _format_engine_health,
-    _format_warnings,
     _nl_num,
     _to_local,
     _trip_utc_offset_hours,
@@ -166,7 +165,11 @@ def _totals_html(totals: _Totals) -> str:
 
 
 def _trip_row_html(
-    trip: TripLeg, idx: int, utc_offset_hours: Optional[float], trip_uid: Optional[str] = None
+    trip: TripLeg,
+    idx: int,
+    utc_offset_hours: Optional[float],
+    trip_uid: Optional[str] = None,
+    battery_warning_voltage: Optional[float] = None,
 ) -> str:
     offset = _trip_utc_offset_hours(trip, utc_offset_hours)
     depart_local = _to_local(trip.depart_time, offset)
@@ -190,7 +193,7 @@ def _trip_row_html(
         _nl_num(trip.fuel_liters) + " L",
         f"{_nl_num(avg_consumption_nm, 2)} L/nm" if avg_consumption_nm is not None else "",
         escape(_engine_hours_text(trip)),
-        escape(_format_warnings(trip.engine_health)),
+        escape(_all_warnings_text(trip, battery_warning_voltage)),
         _water_temp_badge_html(trip),
         map_cell,
     ]
@@ -232,6 +235,7 @@ def write_html_logbook(
     boat_name: Optional[str] = None,
     utc_offset_hours: Optional[float] = None,
     trip_uids: Optional[List[str]] = None,
+    battery_warning_voltage: Optional[float] = None,
 ) -> None:
     """``trip_uids``: one id per trip, in the same order as ``trips`` *before* sorting -- e.g.
     from ``trip_ids.assign_trip_ids(trips)``. Embedded as an invisible ``data-uid`` attribute on
@@ -253,11 +257,14 @@ def write_html_logbook(
     sections: List[str] = []
     for iso_year in sorted({y for y, _ in by_week}, reverse=True):
         weeks_in_year = sorted((w for y, w in by_week if y == iso_year), reverse=True)
+        year_trips = [trips[i] for w in weeks_in_year for i in by_week[(iso_year, w)]]
         week_sections = []
         for iso_week in weeks_in_year:
             indices = by_week[(iso_year, iso_week)]
             rows_html = "".join(
-                _trip_row_html(trips[i], i, utc_offset_hours, uid_by_trip.get(id(trips[i])))
+                _trip_row_html(
+                    trips[i], i, utc_offset_hours, uid_by_trip.get(id(trips[i])), battery_warning_voltage
+                )
                 for i in indices
             )
             week_sections.append(
@@ -265,7 +272,11 @@ def write_html_logbook(
                 f'<table class="trips"><thead><tr>{header_html}</tr></thead>'
                 f"<tbody>{rows_html}</tbody></table></section>"
             )
-        sections.append(f'<section class="year"><h2>{iso_year}</h2>{"".join(week_sections)}</section>')
+        sections.append(
+            f'<section class="year"><h2>{iso_year}</h2>'
+            f"{_totals_html(_compute_totals(year_trips))}"
+            f'{"".join(week_sections)}</section>'
+        )
 
     trip_data = {
         idx: {"points": _decimated_points(trip)}
