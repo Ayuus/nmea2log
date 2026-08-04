@@ -109,35 +109,87 @@ the tests.
 
 ## Installation
 
+Requires Python 3.9 or newer. One-time setup, from the project directory:
+
 ```bash
 pip install -e ".[test]"
 ```
 
+This installs three commands (`nmea2log`, `nmea2log-download`, and their shared library) in
+editable mode, so pulling a code update doesn't require reinstalling. No other dependency gets
+installed — `pytest` (for the tests) is the only thing pulled in beyond the Python standard
+library. On Windows, run this once from a terminal (PowerShell or Command Prompt) with `py` on
+the `PATH`; after that, the `.bat` files below don't need a terminal at all.
+
+## Configuration
+
+Both `nmea2log-download` (downloading from the W2K-2) and `nmea2log` itself (processing defaults)
+read their settings from one shared config file, `nmea2log.ini` **in the project directory**.
+It's in `.gitignore` and so never gets committed — create it yourself (there's no template
+checked in, since it holds your device password):
+
+```ini
+[w2k2]
+; IP address or hostname of the W2K-2 on your network.
+url = http://10.164.231.101
+; Username + password (the download command logs in with these automatically).
+user = admin
+password = your-password-here
+; Folder the downloaded .ebl files land in (structure EBL000000/, EBL000001/, ... created
+; underneath). Also in .gitignore.
+download_dir = Actisense
+
+[nmea2log]
+; Boat name, shown at the top of the HTML logbook.
+boat_name = Zeevalk
+; Same folder as download_dir above, so `nmea2log` with no arguments finds the files on its own
+; after downloading -- no more selecting or dragging files by hand.
+ebl_dir = Actisense
+```
+
+Every setting in `[nmea2log]` can also be passed as a command-line flag instead (see "Useful
+options" below); an explicit flag always overrides what's in the config file. `[w2k2]` only has
+the four keys shown above (see `w2k2_download.py` for the optional `token` alternative to
+user/password).
+
+Note: if the project directory is synced (e.g. OneDrive, as in the original setup this was built
+for), the password in `nmea2log.ini` syncs along to the cloud/your other PC too — a deliberate
+tradeoff for convenience. If you don't want that, keep the file outside the synced folder instead
+and pass `--config path/to/nmea2log.ini` (for `nmea2log`) or `nmea2log-download --config
+path/to/nmea2log.ini`.
+
 ## Usage
 
-The W2K-2 has three independent "data servers" (in the device's web interface, default ports
-60001-60003). Set one to **protocol TCP** and **format N2K ASCII** — you can then use it in two
-ways:
+### Windows quick start
+
+Once configured (see above), day-to-day use is one double-click, no terminal needed:
+
+- **`nmea2log.bat`** — downloads any new `.ebl` files from the W2K-2, then processes everything
+  under `ebl_dir` into `logbook.csv`, `logbook.gpx`, and `logbook.html`. If the boat isn't
+  reachable (no wifi), it prints a message and just processes whatever's already local instead of
+  getting stuck — nothing to babysit.
+  Drag a single log file onto it instead to skip both the download and the `ebl_dir` search, and
+  process just that one file.
+- **`nmea2log-no-download.bat`** — the same, but always skips the download step. Handy for
+  regenerating the logbook after tweaking a setting in `nmea2log.ini`, without needing the boat's
+  wifi.
+
+The rest of this section explains what these do underneath, and the full command-line options,
+for other platforms or more control.
 
 ### Option A: stored log files
 
 **From the SD card** (no live connection needed — recommended if you don't want to depend on a
 connection while sailing): download the `.ebl` files, either manually via the W2K-2's web
-interface ("Download Logs"), or automatically with the included `nmea2log-download` command:
+interface ("Download Logs"), or automatically with the included `nmea2log-download` command
+(reads `nmea2log.ini`, see "Configuration" above):
 
 ```bash
 nmea2log-download
 ```
 
-This reads settings (IP address/hostname, username+password or a token, target folder) from a
-config file, by default `nmea2log.ini` **in the current directory** (usually the project
-directory), so you don't have to type them in every time. `nmea2log.ini` is in `.gitignore` and
-so is never committed. Note: this project directory is in OneDrive though, so a password here
-syncs along to the cloud/your other PC — a deliberate choice; if you don't want that, pass
-`--config path/outside/onedrive/nmea2log.ini` instead. The command only downloads what's still
-missing or incomplete (compared by file size), so running it again after a later sail only
-fetches the new files. By default the files land in `Actisense/` (folder structure
-`EBL000000/`, `EBL000001/`, ... underneath), also in `.gitignore`.
+The command only downloads what's still missing or incomplete (compared by file size), so
+running it again after a later sail only fetches the new files.
 
 Then process the downloaded files as usual:
 
@@ -146,8 +198,8 @@ nmea2log Actisense/EBL000000/*.ebl Actisense/EBL000001/*.ebl -o logbook.csv
 ```
 
 Or, simpler: run `nmea2log` with no arguments at all. It then searches the `ebl_dir` folder from
-the config file (see "Config file for defaults" below) recursively for `.ebl` files — set once,
-so after downloading you never have to select or drag files by hand again.
+`nmea2log.ini` recursively for `.ebl` files — set once, so after downloading you never have to
+select or drag files by hand again.
 
 This EBL path is reverse-engineered (see "Assumptions & limitations") and has since been
 validated against real SD card logs — when in doubt, always check that the outcome feels
@@ -155,7 +207,9 @@ plausible for your own boat/engine.
 
 **Alternative**: capture the N2K ASCII stream from a Data Server to a file, for example by
 running `nmea2log --live ... --tee 2026-07-15.raw` (see Option B), or with another terminal
-program that writes the TCP stream to a file. Preferably name the file with a date in it, e.g.
+program that writes the TCP stream to a file. This needs one of the W2K-2's three independent
+"data servers" (in the device's web interface, default ports 60001-60003) set to **protocol TCP**
+and **format N2K ASCII** — the EBL/SD-card path above doesn't need this at all. Preferably name the file with a date in it, e.g.
 `2026-07-15.raw` — that's used to correctly detect midnight rollovers (the time-of-day in the
 format doesn't itself contain a date; `.ebl` files don't have this problem, they get their time
 from the data itself).
@@ -175,8 +229,9 @@ nmea2log 2026-07-14.raw 2026-07-15.ebl 2026-07-16.raw -o logbook.csv
 
 ### Option B: live reading
 
-Connect directly to the W2K-2 while sailing. Replace `192.168.4.1` with the W2K-2's IP address
-on your network (found on the device's status page/web interface):
+Connect directly to the W2K-2 while sailing. Needs the same data-server setup mentioned above
+(protocol TCP, format N2K ASCII). Replace `192.168.4.1` with the W2K-2's IP address on your
+network (found on the device's status page/web interface):
 
 ```bash
 nmea2log --live 192.168.4.1 -o logbook.csv
@@ -226,20 +281,9 @@ value yourself if that matters to you. `<trkpt><time>` in the GPX always stays s
 the GPX convention. The "duration" column is offset-independent (it's a span, not a point in
 time).
 
-### Config file for defaults
-
-Instead of passing the options above on the command line every time, you can set them in the
-`[nmea2log]` section of `nmea2log.ini` (see also "Option A: stored log files" above for the
-`[w2k2]` section in the same file). Command-line arguments always override what's in the config
-file. Example:
-
-```ini
-[nmea2log]
-boat_name = Zeevalk
-ebl_dir = Actisense
-min_trip_distance_nm = 0.3
-no_geocode = false
-```
+Any of the options above can also be set as a default in `nmea2log.ini`'s `[nmea2log]` section
+instead of typing them every time (see "Configuration" near the top) — a command-line flag always
+overrides the config file.
 
 ## Tests
 
