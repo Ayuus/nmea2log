@@ -1,11 +1,11 @@
-"""Schrijft reizen weg als een CSV-logboek (Nederlandse Excel-conventie: ';' als scheidingsteken
-en ',' als decimaalteken -- de kolomnamen zelf zijn Engels zodat het bestand ook buiten NL
-leesbaar is)."""
+"""Writes trips out as a CSV logbook (Dutch Excel convention: ';' as the delimiter and ',' as
+the decimal separator -- the column names themselves are English so the file is also readable
+outside the Netherlands)."""
 
 from __future__ import annotations
 
 import csv
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Dict, Iterable, Optional
 
@@ -70,18 +70,73 @@ def _format_warnings(engine_health: Dict[int, EngineHealth]) -> str:
     return "; ".join(parts)
 
 
-def _estimate_utc_offset_hours(longitude: float) -> int:
-    """Ruwe schatting van de tijdzone-offset uit de lengtegraad (15 graden per uur), zonder
-    tijdzone-database. Geen zomer-/wintertijd-besef en kan vlak bij een tijdzone-grens tot
-    ~1 uur afwijken -- voor een exacte offset kan je die met --utc-offset zelf opleggen."""
-    return max(-12, min(14, round(longitude / 15)))
+def _last_sunday(year: int, month: int) -> date:
+    next_month = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
+    last_day = next_month - timedelta(days=1)
+    return last_day - timedelta(days=(last_day.weekday() - 6) % 7)
+
+
+def _is_eu_dst(when_utc: datetime) -> bool:
+    """EU summer time runs from 01:00 UTC on the last Sunday of March to 01:00 UTC on the last
+    Sunday of October, every year, with no exceptions -- unlike most of the rest of the world,
+    this doesn't need a timezone database to compute correctly."""
+    year = when_utc.year
+    dst_start = datetime.combine(_last_sunday(year, 3), datetime.min.time().replace(hour=1))
+    dst_end = datetime.combine(_last_sunday(year, 10), datetime.min.time().replace(hour=1))
+    return dst_start <= when_utc < dst_end
+
+
+# Rough bounding boxes (lat, lon) for Western Europe's two civil timezones. Longitude alone
+# can't tell CET France apart from WET Portugal/UK/Ireland -- they overlap in longitude despite
+# using different zones for political/historical reasons, not solar ones -- but combined with
+# latitude these boxes are good enough to tell them apart without a timezone database.
+_WET_BOXES = (
+    # UK & Ireland
+    (49.5, 61.0, -11.0, 2.0),
+    # Portugal (mainland)
+    (36.8, 42.2, -9.6, -6.0),
+)
+# France, Benelux, Germany, Switzerland/Austria, Denmark, Italy, Spain -- deliberately not
+# extended further east (Poland, the Balkans, ...) where the solar estimate and the real CET/EET
+# border both roughly agree anyway, so there's little to gain and more risk of guessing wrong.
+_CET_BOX = (36.0, 71.0, -9.5, 15.5)
+
+
+def _base_offset_hours(lat: float, longitude: float) -> Optional[int]:
+    """Base (winter) UTC offset for the Western European civil timezones, or None outside that
+    region -- callers fall back to a plain solar-longitude estimate in that case."""
+    for lat_min, lat_max, lon_min, lon_max in _WET_BOXES:
+        if lat_min <= lat <= lat_max and lon_min <= longitude <= lon_max:
+            return 0  # WET/WEST: UTC+0 winter, UTC+1 summer
+    lat_min, lat_max, lon_min, lon_max = _CET_BOX
+    if lat_min <= lat <= lat_max and lon_min <= longitude <= lon_max:
+        return 1  # CET/CEST: UTC+1 winter, UTC+2 summer
+    return None
+
+
+def _estimate_utc_offset_hours(lat: float, longitude: float, when_utc: datetime) -> int:
+    """Estimates the timezone offset without a timezone database. Within Western Europe, uses
+    the actual CET/CEST vs. WET/WEST civil zones (see ``_base_offset_hours``) rather than pure
+    solar longitude -- France, for instance, is geographically in the same longitude band as the
+    UK but observes Central European Time, a full hour off from what longitude alone would
+    suggest. Outside that region, falls back to a plain solar estimate (15 degrees per hour),
+    which is at best a rough approximation of the real, politically-defined timezone -- use
+    --utc-offset to force an exact offset yourself if that matters to you there. Even within
+    Europe this is still just an estimate and can be off by up to ~1 hour near a timezone
+    border."""
+    base = _base_offset_hours(lat, longitude)
+    if base is None:
+        base = max(-12, min(14, round(longitude / 15)))
+    if _is_eu_dst(when_utc):
+        base += 1
+    return base
 
 
 def _trip_utc_offset_hours(trip: TripLeg, fixed_offset: Optional[float]) -> float:
     if fixed_offset is not None:
         return fixed_offset
     if trip.track:
-        return _estimate_utc_offset_hours(trip.track[0].lon)
+        return _estimate_utc_offset_hours(trip.track[0].lat, trip.track[0].lon, trip.depart_time)
     return 0.0
 
 
@@ -106,8 +161,8 @@ def _min_depth_position_text(trip: TripLeg) -> str:
 
 
 def write_csv(trips: Iterable[TripLeg], path: Path, utc_offset_hours: Optional[float] = None) -> None:
-    """``utc_offset_hours``: vaste tijdzone-offset (bv. 2 voor CEST) om op alle reizen toe te
-    passen. Standaard (None) wordt de offset per reis geschat uit de vertreklengtegraad."""
+    """``utc_offset_hours``: fixed timezone offset (e.g. 2 for CEST) to apply to all trips.
+    Default (None) estimates the offset per trip from the departure longitude."""
     with path.open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.DictWriter(handle, fieldnames=_FIELDNAMES, delimiter=";")
         writer.writeheader()

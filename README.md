@@ -2,12 +2,11 @@
 
 Pure Python-applicatie die NMEA2000-logbestanden van een **Actisense W2K-2** omzet naar een
 vaarlogboek: vertrek-/aankomsthaven, brandstofverbruik (uit motordata, niet uit een tanksensor)
-en gedraaide motoruren. Schrijft vier bestanden weg (zelfde naam als `-o`, verschillende
+en gedraaide motoruren. Schrijft drie bestanden weg (zelfde naam als `-o`, verschillende
 extensie): een **CSV** (`.csv`), een **GPX** met de gevaren route per reis (`.gpx`, te openen in
-navigatiesoftware zoals OpenCPN/Navionics), een **open werkmap** (`.ods`, opent in Excel en
-LibreOffice/OpenOffice Calc) met dezelfde gegevens plus een totalenblad en een klikbaar
-kaartplaatje per reis, en een **HTML-bestand** (`_routes.html`) met de volledige interactieve
-kaart waar dat plaatje naartoe linkt.
+navigatiesoftware zoals OpenCPN/Navionics), en een **HTML-logboek** (`.html`) — één zelfstandig
+bestand met bootnaam, totalen (afstand/brandstof/draaiuren/gemiddeld verbruik), reizen per
+jaar/week gegroepeerd, en een klikbare, inzoombare kaart per reis.
 
 Geen enkele runtime-dependency buiten de Python-standaardbibliotheek — alleen `pytest` als
 dev-dependency voor de tests.
@@ -73,15 +72,14 @@ dev-dependency voor de tests.
    geschreven (zelfde bestandsnaam, `.gpx`-extensie) met één track per reis. Klik je in een
    kaartprogramma op een track, dan zie je naam en beschrijving met vaartijd, afstand,
    brandstof en draaiuren van die reis.
-7. **Open werkmap + kaarten** (`ods_writer.py`, `route_maps.py`, `static_map.py`): een
-   `.ods`-bestand met twee bladen — 'Logbook' (dezelfde gegevens als de CSV, plus een
-   'route'-kolom met een klein kaartplaatje + routelijn) en 'Totals' (opgeteld over alle
-   reizen: aantal reizen, totale afstand, totale brandstof, totale draaiuren per motor). Het
-   kaartplaatje is een losse OpenStreetMap-tegel die wordt opgehaald en lokaal gecachet
-   (`.map_tile_cache/`); klik je erop, dan opent de volledige interactieve kaart
-   (`_routes.html`, Leaflet + OpenStreetMap, kan in-/uitgezoomd worden). Vereist internet bij
-   het aanmaken van het logboek — met `--no-route-thumbnails` sla je dat over (de kolom valt
-   dan terug op een gewone tekstlink).
+7. **HTML-logboek** (`html_writer.py`): één zelfstandig `.html`-bestand (zelfde bestandsnaam,
+   `.html`-extensie) — geen los kaartbestand of werkmap meer nodig. Bovenin de bootnaam
+   (`--boat-name`, of de `boat_name`-instelling in het configbestand) en totalen (aantal
+   reizen, totale afstand, brandstof, gemiddeld verbruik, draaiuren per motor). Daaronder de
+   reizen gegroepeerd per jaar en ISO-week. Elke reis met een track heeft een "Map"-knop die
+   een inzoombare Leaflet/OpenStreetMap-kaart met de routelijn erbij opent, ingebed in dezelfde
+   pagina. Kaarttegels en de Leaflet-bibliotheek komen van een CDN, dus **bekijken** vereist
+   internet (aanmaken niet).
 
 ## Installatie
 
@@ -137,8 +135,8 @@ bestanden hebben dit probleem niet, die halen hun tijd uit de data zelf).
 nmea2log 2026-07-15.raw -o logbook.csv
 ```
 
-Dit schrijft `logbook.csv`, `logbook.gpx` (de route per reis), `logbook.ods` (open werkmap met
-totalenblad en kaartplaatjes) en `logbook_routes.html` (de interactieve kaart).
+Dit schrijft `logbook.csv`, `logbook.gpx` (de route per reis) en `logbook.html` (het
+zelfstandige HTML-logboek met totalen, jaar/week-indeling en klikbare kaarten).
 
 Meerdere bestanden (bijvoorbeeld één per dag, `.ebl` en `.raw` door elkaar) in één keer
 verwerken:
@@ -181,14 +179,19 @@ nmea2log --live 192.168.4.1:60001 --tee 2026-07-16.raw -o logbook.csv
 | `--cache-file` | Pad naar het cachebestand voor havennamen (standaard `.geocode_cache.json`) |
 | `--start-date` | Forceer de startdatum van het eerste logbestand (`YYYY-MM-DD`); niet van toepassing bij `--live` |
 | `--utc-offset UREN` | Vaste tijdzone-offset (bv. `2` voor CEST) voor de weergegeven tijden. Standaard: automatisch geschat per reis uit de vertreklengtegraad |
-| `--no-route-thumbnails` | Sla het ophalen van kaartplaatjes voor de ODS 'route'-kolom over (geen internet nodig; kolom valt terug op een tekstlink) |
+| `--boat-name NAAM` | Bootnaam bovenin het HTML-logboek (standaard: geen, of de `boat_name`-instelling uit het configbestand) |
 
-Alle NMEA2000-tijden zijn UTC; in de CSV en de GPX-tracknamen wordt dit omgerekend naar lokale
-tijd. Zonder `--utc-offset` wordt de offset per reis geschat uit de lengtegraad van het
-vertrekpunt (15° per uur) — een grove schatting zonder tijdzone-database (dus geen
-zomer-/wintertijd-besef, en kan vlak bij een tijdzone-grens tot ~1 uur afwijken), maar wel zonder
-extra dependency. `<trkpt><time>` in de GPX blijft altijd strikt UTC, conform de GPX-conventie.
-De "vaartijd"-kolom is offset-onafhankelijk (het is een duur, geen tijdstip).
+Alle NMEA2000-tijden zijn UTC; in de CSV, het HTML-logboek en de GPX-tracknamen wordt dit
+omgerekend naar lokale tijd. Zonder `--utc-offset` wordt de offset per reis geschat uit de
+lengtegraad van het vertrekpunt (15° per uur), plus 1 uur als de vertrekdatum binnen de
+EU-zomertijd valt (laatste zondag van maart t/m laatste zondag van oktober, 01:00 UTC) — dat
+laatste is een vaste, jaarlijks terugkerende regel die zonder tijdzone-database te berekenen is,
+dus geen extra dependency nodig. Dit is nog steeds een schatting (kan vlak bij een
+tijdzone-grens tot ~1 uur afwijken) en gaat uit van Europese zomertijdregels — vaar je buiten
+Europa (bv. Caribisch gebied, VS), dan klopt de zomertijd-aanname niet en kun je met
+`--utc-offset` een vaste waarde afdwingen. `<trkpt><time>` in de GPX blijft altijd strikt UTC,
+conform de GPX-conventie. De "vaartijd"-kolom is offset-onafhankelijk (het is een duur, geen
+tijdstip).
 
 ### Configbestand voor standaardwaarden
 
@@ -199,8 +202,8 @@ het configbestand staat. Voorbeeld:
 
 ```ini
 [nmea2log]
+boat_name = Zeevalk
 min_trip_distance_nm = 0.3
-utc_offset = 2
 no_geocode = false
 ```
 

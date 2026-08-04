@@ -2,7 +2,7 @@ import csv
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from nmea2000processor.logbook_writer import write_csv
+from nmea2000processor.logbook_writer import _is_eu_dst, write_csv
 from nmea2000processor.tripbuilder import EngineHealth, NavSample, TripLeg
 
 
@@ -106,10 +106,10 @@ def test_write_csv_engine_health_warnings_and_depth(tmp_path: Path):
     assert row["min_depth_position"] == "52.3235, 4.9422"
 
 
-def test_write_csv_estimates_local_time_from_departure_longitude(tmp_path: Path):
-    # Lengtegraad 4.9 (Nederland) -> geschatte offset UTC+0 (rond(4.9/15) == 0), dus geen
-    # verschil hier; gebruik in plaats daarvan een lengtegraad die duidelijk een ander uur geeft.
-    track = [NavSample(datetime(2026, 7, 15, 9, 0), 45.0, 26.0, 3.0, None)]  # ~Roemenië, UTC+2
+def test_write_csv_estimates_local_time_from_departure_longitude_in_summer(tmp_path: Path):
+    # Longitude 26 (~Romania) -> solar estimate round(26/15) == 2, plus 1 hour because
+    # mid-July falls within EU summer time, so the effective offset is UTC+3.
+    track = [NavSample(datetime(2026, 7, 15, 9, 0), 45.0, 26.0, 3.0, None)]
     trip = _trip(track=track)
     out_path = tmp_path / "logbook.csv"
 
@@ -118,9 +118,64 @@ def test_write_csv_estimates_local_time_from_departure_longitude(tmp_path: Path)
     with out_path.open(encoding="utf-8-sig") as handle:
         rows = list(csv.DictReader(handle, delimiter=";"))
 
+    assert rows[0]["departure_time"] == "12:00"
+    assert rows[0]["arrival_time"] == "13:30"
+    assert rows[0]["duration"] == "1:30"  # duration stays offset-independent
+
+
+def test_write_csv_estimates_local_time_from_departure_longitude_in_winter(tmp_path: Path):
+    # Same longitude, but mid-January falls outside EU summer time, so no +1 hour is added.
+    track = [NavSample(datetime(2026, 1, 15, 9, 0), 45.0, 26.0, 3.0, None)]
+    trip = _trip(depart_time=datetime(2026, 1, 15, 9, 0), arrive_time=datetime(2026, 1, 15, 10, 30), track=track)
+    out_path = tmp_path / "logbook.csv"
+
+    write_csv([trip], out_path)
+
+    with out_path.open(encoding="utf-8-sig") as handle:
+        rows = list(csv.DictReader(handle, delimiter=";"))
+
     assert rows[0]["departure_time"] == "11:00"
-    assert rows[0]["arrival_time"] == "12:30"
-    assert rows[0]["duration"] == "1:30"  # vaartijd blijft offset-onafhankelijk
+
+
+def test_write_csv_uses_cet_not_solar_estimate_for_brittany_in_summer(tmp_path: Path):
+    # Concarneau, Brittany: solar longitude alone would suggest UTC+0, but France observes
+    # CEST (UTC+2) in July -- this is exactly the real-world mismatch the lat/lon-aware
+    # estimate exists to fix.
+    track = [NavSample(datetime(2026, 7, 30, 8, 36), 47.87, -3.91, 3.0, None)]
+    trip = _trip(depart_time=datetime(2026, 7, 30, 8, 36), track=track)
+    out_path = tmp_path / "logbook.csv"
+
+    write_csv([trip], out_path)
+
+    with out_path.open(encoding="utf-8-sig") as handle:
+        rows = list(csv.DictReader(handle, delimiter=";"))
+
+    assert rows[0]["departure_time"] == "10:36"
+
+
+def test_write_csv_uses_wet_not_cet_for_uk_in_summer(tmp_path: Path):
+    # Falmouth, UK: similar longitude to Brittany, but the UK observes BST (UTC+1) in July, not
+    # CEST (UTC+2) -- latitude is what tells these two apart.
+    track = [NavSample(datetime(2026, 7, 30, 8, 36), 50.15, -5.07, 3.0, None)]
+    trip = _trip(depart_time=datetime(2026, 7, 30, 8, 36), track=track)
+    out_path = tmp_path / "logbook.csv"
+
+    write_csv([trip], out_path)
+
+    with out_path.open(encoding="utf-8-sig") as handle:
+        rows = list(csv.DictReader(handle, delimiter=";"))
+
+    assert rows[0]["departure_time"] == "09:36"
+
+
+def test_is_eu_dst_boundaries_2026():
+    # EU summer time 2026: starts 01:00 UTC on 2026-03-29 (last Sunday of March), ends 01:00 UTC
+    # on 2026-10-25 (last Sunday of October).
+    assert _is_eu_dst(datetime(2026, 3, 28, 23, 59)) is False
+    assert _is_eu_dst(datetime(2026, 3, 29, 1, 0)) is True
+    assert _is_eu_dst(datetime(2026, 7, 15, 12, 0)) is True
+    assert _is_eu_dst(datetime(2026, 10, 25, 0, 59)) is True
+    assert _is_eu_dst(datetime(2026, 10, 25, 1, 0)) is False
 
 
 def test_write_csv_consumption_per_nm_blank_when_no_distance(tmp_path: Path):

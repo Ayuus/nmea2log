@@ -42,18 +42,18 @@ def test_decode_engine_dynamic_full_fields():
         "<BHHHhhIHHBHHbb",
         0,  # instance
         3000,  # oil pressure raw -> 300000 Pa
-        3531,  # oil temperature raw -> 353,1 K
-        35315,  # koelvloeistoftemperatuur raw -> 353,15 K
-        1420,  # alternatorspanning raw -> 14,20 V
-        45,  # fuel rate raw -> 4,5 L/uur
+        3531,  # oil temperature raw -> 353.1 K
+        35315,  # coolant temperature raw -> 353.15 K
+        1420,  # alternator voltage raw -> 14.20 V
+        45,  # fuel rate raw -> 4.5 L/hour
         36000,  # total engine hours (s)
-        0xFFFF,  # coolant pressure (n.v.t., niet uitgelezen)
-        0xFFFF,  # fuel pressure (n.v.t., niet uitgelezen)
+        0xFFFF,  # coolant pressure (n/a, not read out)
+        0xFFFF,  # fuel pressure (n/a, not read out)
         0xFF,  # reserved
         0b0000000000000100,  # discrete status 1: bit 2 = Low Oil Pressure
         0b0000000000001000,  # discrete status 2: bit 3 = Maintenance Needed
         45,  # engine load (%)
-        0x7F,  # engine torque (n.v.t., niet uitgelezen)
+        0x7F,  # engine torque (n/a, not read out)
     )
 
     result = decode_engine_dynamic(data)

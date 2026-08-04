@@ -1,24 +1,24 @@
-"""Leest Actisense 'N2K ASCII'-logbestanden (het formaat dat de W2K-2 wegschrijft).
+"""Reads Actisense 'N2K ASCII' log files (the format the W2K-2 writes to disk).
 
-Regelformaat (zie Actisense-documentatie 'NMEA 2000 ASCII Output format'):
+Line format (see Actisense's 'NMEA 2000 ASCII Output format' documentation):
 
     Ahhmmss.ddd SSDDP PPPPP b0b1b2...bn
 
-    A            vaste letter, "ontvangen bericht"
-    hhmmss.ddd   tijdstip op de dag (géén datum!)
-    SS           bronadres, 2 hex-cijfers
-    DD           doeladres, 2 hex-cijfers
-    P            prioriteit 0-7, 1 hex-cijfer
-    PPPPP        PGN, 5 hex-cijfers (de bruikbare PGN zit in de laagste 18 bits)
-    b0..bn       payload, hex-cijferparen, aaneengesloten (geen spaties)
+    A            fixed letter, "message received"
+    hhmmss.ddd   time of day (no date!)
+    SS           source address, 2 hex digits
+    DD           destination address, 2 hex digits
+    P            priority 0-7, 1 hex digit
+    PPPPP        PGN, 5 hex digits (the usable PGN is in the lowest 18 bits)
+    b0..bn       payload, hex digit pairs, concatenated (no spaces)
 
-De Actisense-hardware zet fast-packet/multi-packet-berichten al in elkaar voordat ze als
-ASCII-regel worden weggeschreven, dus onze parser hoeft géén CAN-frame reassemblage te doen.
+The Actisense hardware already reassembles fast-packet/multi-packet messages before writing
+them out as an ASCII line, so our parser doesn't need to do any CAN frame reassembly.
 
-Omdat het tijdstip geen datum bevat, wordt de datum geraden uit de bestandsnaam (bv.
-``2026-07-15.raw``) of anders uit de wijzigingsdatum van het bestand, met ``--start-date``
-als expliciete override. Een middernacht-doorgang binnen één bestand wordt automatisch
-gedetecteerd (het tijdstip springt terug) en telt als een nieuwe dag.
+Since the time of day has no date, the date is guessed from the file name (e.g.
+``2026-07-15.raw``), falling back to the file's modification date, with ``--start-date`` as an
+explicit override. A midnight rollover within a single file is detected automatically (the
+time jumps backwards) and counts as a new day.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ _DATE_IN_NAME_RE = re.compile(r"(20\d{2})[-_]?(\d{2})[-_]?(\d{2})")
 
 
 class _RollingDate:
-    """Houdt de actuele datum bij en verhoogt die bij een middernacht-doorgang."""
+    """Tracks the current date and advances it on a midnight rollover."""
 
     def __init__(self, start_date: date) -> None:
         self.current = start_date
@@ -95,11 +95,10 @@ def _parse_line(line: str, roller: _RollingDate) -> Optional[Frame]:
 
 
 def iter_frames_from_lines(lines: Iterable[str], start_date: date) -> Iterator[Frame]:
-    """Zet een reeks tekstregels (uit een bestand óf een live socket-stream) om in Frame's.
+    """Turns a sequence of text lines (from a file or a live socket stream) into Frames.
 
-    Wordt gedeeld door :func:`iter_frames` (bestand) en ``network_reader.iter_frames_tcp``
-    (live TCP-verbinding met de W2K-2) zodat beide dezelfde parsing- en
-    middernacht-doorgang-logica gebruiken.
+    Shared by :func:`iter_frames` (file) and ``network_reader.iter_frames_tcp`` (live TCP
+    connection to the W2K-2) so both use the same parsing and midnight-rollover logic.
     """
     roller = _RollingDate(start_date)
     for line in lines:
@@ -111,7 +110,7 @@ def iter_frames_from_lines(lines: Iterable[str], start_date: date) -> Iterator[F
 
 
 def iter_frames(path: Union[str, Path], start_date: Optional[date] = None) -> Iterator[Frame]:
-    """Lees een N2K ASCII-logbestand en geef er gedecodeerde Frame's van terug, in bestandsvolgorde."""
+    """Read an N2K ASCII log file and yield decoded Frames from it, in file order."""
     path = Path(path)
     resolved_start_date = start_date if start_date is not None else _guess_start_date(path)
     with path.open("r", encoding="ascii", errors="replace") as handle:

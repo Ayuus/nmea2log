@@ -10,7 +10,7 @@ _NL = 0x0A
 
 
 def _frame_bytes(message: bytes) -> bytes:
-    """Omkadert een record met ESC/SOH...ESC/NL en past byte-stuffing toe op 0x1B-bytes."""
+    """Wraps a record with ESC/SOH...ESC/NL and applies byte stuffing to 0x1B bytes."""
     stuffed = bytearray()
     for b in message:
         stuffed.append(b)
@@ -20,7 +20,7 @@ def _frame_bytes(message: bytes) -> bytes:
 
 
 def _encode_can_id(priority: int, pgn: int, source: int, destination: int = 0xFF) -> int:
-    """Inverse van ebl_reader._parse_can_id — geverifieerd tegen het bekende voorbeeld hieronder."""
+    """Inverse of ebl_reader._parse_can_id -- verified against the known example below."""
     dp = (pgn >> 16) & 0x1
     pf = (pgn >> 8) & 0xFF
     ps = destination if pf < 240 else pgn & 0xFF
@@ -33,8 +33,8 @@ def test_encode_can_id_matches_verified_example():
 
 
 def _bst95_record(can_id: int, payload: bytes) -> bytes:
-    """Bouwt een compleet '07 95 <len> <tijdteller> <canid> <payload>'-record (vóór omkadering)."""
-    body = struct.pack("<H", 0) + struct.pack("<I", can_id) + payload  # tijdteller wordt genegeerd
+    """Builds a complete '07 95 <len> <time counter> <canid> <payload>' record (before wrapping)."""
+    body = struct.pack("<H", 0) + struct.pack("<I", can_id) + payload  # time counter is ignored
     length = len(body)
     return bytes([0x07, 0x95, length]) + body
 
@@ -64,7 +64,7 @@ def _fast_packet_records(can_id: int, full_payload: bytes, seq_counter: int = 0)
 
 
 def test_iter_frames_verified_reference_example(tmp_path: Path):
-    """Exact het voorbeeld uit go-nmea-client's eblreader_test.go (met bevestigde uitkomst)."""
+    """Exactly the example from go-nmea-client's eblreader_test.go (with confirmed outcome)."""
     system_time = _system_time_record(datetime(2026, 7, 15, 9, 0, 0))
     position_record = bytes.fromhex("07950e289a0001f8093d0db3224832590d")
     data = _frame_bytes(system_time) + _frame_bytes(position_record)
@@ -84,7 +84,7 @@ def test_iter_frames_verified_reference_example(tmp_path: Path):
 
 def test_iter_frames_before_system_time_are_dropped(tmp_path: Path):
     position_record = bytes.fromhex("07950e289a0001f8093d0db3224832590d")
-    data = _frame_bytes(position_record)  # geen System Time hiervoor
+    data = _frame_bytes(position_record)  # no System Time before this
     path = tmp_path / "test.ebl"
     path.write_bytes(data)
 
@@ -92,7 +92,7 @@ def test_iter_frames_before_system_time_are_dropped(tmp_path: Path):
 
 
 def test_iter_frames_byte_stuffing(tmp_path: Path):
-    # data bevat expres een 0x1B-byte, die in het bestand dubbel moet voorkomen
+    # the data deliberately contains a 0x1B byte, which must appear doubled in the file
     payload_with_esc = bytes([0x00, 0x1B, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07])
     record = _bst95_record(_encode_can_id(priority=2, pgn=129025, source=0), payload_with_esc)
 
@@ -108,7 +108,7 @@ def test_iter_frames_byte_stuffing(tmp_path: Path):
 
 
 def test_iter_frames_fast_packet_reassembly(tmp_path: Path):
-    # PGN 127489 (Engine Parameters, Dynamic), 26 bytes -> verspreid over 4 CAN-frames
+    # PGN 127489 (Engine Parameters, Dynamic), 26 bytes -> spread over 4 CAN frames
     full_payload = struct.pack(
         "<BHHHhhIHHBHHbb",
         0, 0xFFFF, 0xFFFF, 0xFFFF, 0x7FFF, 68, 36000, 0xFFFF, 0xFFFF, 0xFF, 0xFFFF, 0xFFFF, 0x7F, 0x7F,
@@ -156,9 +156,10 @@ def test_iter_frames_time_updates_between_system_time_messages(tmp_path: Path):
 
 
 def test_iter_frames_carries_time_across_files_via_time_state(tmp_path: Path):
-    """Regressietest: een bestand zonder eigen System Time-boodschap (bv. lang voor anker met
-    GPS/plotter stil, maar autopiloot/gyro die wel doorloopt) mag niet stilzwijgend volledig
-    worden weggegooid als de tijd al bekend is uit een eerder bestand in dezelfde sessie."""
+    """Regression test: a file without its own System Time message (e.g. anchored for a long
+    time with GPS/plotter idle, but autopilot/gyro still coming in) must not be silently
+    discarded entirely when the time is already known from an earlier file in the same
+    session."""
     when = datetime(2026, 7, 29, 12, 0, 0)
     position_payload = struct.pack("<ii", 1000000, 2000000)
     position_record = _bst95_record(_encode_can_id(priority=2, pgn=129025, source=0), position_payload)
@@ -166,8 +167,8 @@ def test_iter_frames_carries_time_across_files_via_time_state(tmp_path: Path):
     file1 = tmp_path / "file1.ebl"
     file1.write_bytes(bytes(_frame_bytes(_system_time_record(when)) + _frame_bytes(position_record)))
 
-    # file2 bevat GEEN System Time-boodschap, alleen nog een positiebericht (zoals tijdens een
-    # ankerperiode met stille GPS maar actieve autopiloot/gyro).
+    # file2 contains NO System Time message, only another position message (like during an
+    # anchoring period with quiet GPS but an active autopilot/gyro).
     file2 = tmp_path / "file2.ebl"
     file2.write_bytes(bytes(_frame_bytes(position_record)))
 
@@ -176,12 +177,12 @@ def test_iter_frames_carries_time_across_files_via_time_state(tmp_path: Path):
     frames_file2 = list(iter_frames(file2, time_state=time_state))
 
     assert len(frames_file1) == 1
-    assert len(frames_file2) == 1  # zonder de fix: 0, want file2 heeft geen eigen tijdreferentie
+    assert len(frames_file2) == 1  # without the fix: 0, since file2 has no time reference of its own
     assert frames_file2[0].time == when
 
 
 def test_iter_frames_without_time_state_starts_fresh_per_file(tmp_path: Path):
-    """Standaardgedrag (geen time_state meegegeven) blijft ongewijzigd: elk bestand op zichzelf."""
+    """Default behavior (no time_state supplied) stays unchanged: each file on its own."""
     position_payload = struct.pack("<ii", 1000000, 2000000)
     position_record = _bst95_record(_encode_can_id(priority=2, pgn=129025, source=0), position_payload)
 

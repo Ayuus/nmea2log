@@ -78,7 +78,7 @@ def test_write_gpx_basic(tmp_path: Path):
 
 
 def test_write_gpx_name_uses_local_time(tmp_path: Path):
-    track = [_sample(11, 45.0, 26.0), _sample(31, 45.0, 26.0)]  # ~Roemenië, UTC+2
+    track = [_sample(11, 45.0, 26.0), _sample(31, 45.0, 26.0)]  # ~Romania, UTC+2 solar + 1h EU DST in July
     trip = _trip(depart_time=track[0].time, arrive_time=track[-1].time, track=track)
     out_path = tmp_path / "logboek.gpx"
 
@@ -86,8 +86,8 @@ def test_write_gpx_name_uses_local_time(tmp_path: Path):
 
     tree = ET.parse(out_path)
     name = tree.getroot().find("gpx:trk/gpx:name", _NS).text
-    assert name.startswith("2026-07-15 11:11")  # 09:11 UTC + 2u geschat
-    # <trkpt><time> blijft strikt UTC, ongeacht de geschatte offset voor de naam.
+    assert name.startswith("2026-07-15 12:11")  # 09:11 UTC + 3h estimated (incl. EU DST)
+    # <trkpt><time> stays strictly UTC, regardless of the estimated offset used for the name.
     point_time = tree.getroot().find("gpx:trk/gpx:trkseg/gpx:trkpt/gpx:time", _NS).text
     assert point_time == "2026-07-15T09:11:00Z"
 

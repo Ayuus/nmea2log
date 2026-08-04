@@ -12,10 +12,10 @@ from .config import load_section
 from .ebl_reader import iter_frames as iter_frames_ebl
 from .geocode import Geocoder, NoGeocoder
 from .gpx_writer import write_gpx
+from .html_writer import write_html_logbook
 from .logbook_writer import write_csv
 from .model import DepthSample, EngineSample, Frame, PositionFix, SogSample, TripFuelSample
 from .network_reader import DEFAULT_PORT, iter_frames_tcp
-from .ods_writer import write_ods
 from .pgn_decode import (
     PGN_COG_SOG_RAPID,
     PGN_ENGINE_DYNAMIC,
@@ -28,20 +28,19 @@ from .pgn_decode import (
     decode_trip_fuel_engine,
     decode_water_depth,
 )
-from .route_maps import write_route_maps
 from .tripbuilder import build_trips
 
 _T = TypeVar("_T")
 
 
 def _dominant_source_only(by_source: Dict[int, List[_T]]) -> List[_T]:
-    """Sommige boten hebben meerdere apparaten die dezelfde PGN sturen (bv. twee GPS-
-    antennes die allebei positie of vaart over de grond versturen). Zonder filtering worden
-    hun onafhankelijke, licht afwijkende metingen puur op tijd door elkaar gesorteerd, wat
-    voor honderden valse kleine "sprongen" zorgt die samen de afstand flink kunnen opblazen.
-    We houden daarom alleen de bron aan die de meeste berichten stuurde -- over de hele sessie
-    (alle bestanden/de hele live-verbinding) samen, niet per bestand, anders kan een andere
-    bron "winnen" in elk bestand en het probleem juist terugkomen op de naad tussen bestanden."""
+    """Some boats have multiple devices sending the same PGN (e.g. two GPS antennas that both
+    send position or speed over ground). Without filtering, their independent, slightly
+    differing readings get interleaved purely by time, which causes hundreds of small false
+    "jumps" that together can significantly inflate the distance. We therefore only keep the
+    source that sent the most messages -- across the whole session (all files/the whole live
+    connection) together, not per file, otherwise a different source could "win" in each file
+    and the problem would just come back at the seam between files."""
     if not by_source:
         return []
     dominant_source = max(by_source, key=lambda source: len(by_source[source]))
@@ -56,20 +55,20 @@ def _merge_by_source(target: Dict[int, List[_T]], addition: Dict[int, List[_T]])
 def _select_primary_gps_source(
     fixes_by_source: Dict[int, List[PositionFix]], sogs_by_source: Dict[int, List[SogSample]]
 ) -> Tuple[List[PositionFix], List[SogSample], Optional[int]]:
-    """Kiest één samenhangende primaire GPS-bron voor positie én snelheid samen, in plaats van
-    onafhankelijk per PGN te kiezen (zoals ``_dominant_source_only`` op zichzelf zou doen).
+    """Picks one coherent primary GPS source for position AND speed together, instead of
+    choosing independently per PGN (as ``_dominant_source_only`` would do on its own).
 
-    Waarom: met echte data gemeten dat twee GPS-ontvangers op dezelfde boot een paar meter
-    positieverschil en een fractie knoop snelheidsverschil geven -- op zichzelf klein, maar als
-    de "winnende" positiebron en de "winnende" snelheidsbron toevallig twee verschillende
-    fysieke apparaten zijn, ontstaat een moeilijk te doorgronden inconsistentie tussen track en
-    snelheid-classificatie (stilliggend/varend). Door snelheid van dezelfde bron te pakken als
-    de gekozen positiebron, blijft dat samenhangend.
+    Why: measured with real data that two GPS receivers on the same boat give a few meters of
+    position difference and a fraction of a knot of speed difference -- small on its own, but
+    if the "winning" position source and the "winning" speed source happen to be two different
+    physical devices, that creates a hard-to-diagnose inconsistency between the track and the
+    stationary/underway classification. Taking speed from the same source as the chosen
+    position source keeps that coherent.
 
-    Aanpak: de bron met de meeste positieberichten (PGN 129025) is leidend. Snelheid van
-    diezelfde bron wordt gebruikt; alleen als die bron zelf geen snelheid stuurde, valt de code
-    terug op de snelheidsbron met de meeste berichten (dan dus wél een ander fysiek apparaat
-    dan de positiebron -- beter dan alle bronnen door elkaar mengen, maar niet ideaal)."""
+    Approach: the source with the most position messages (PGN 129025) leads. Speed from that
+    same source is used; only if that source itself didn't send speed does the code fall back
+    to the speed source with the most messages (so then a different physical device than the
+    position source after all -- better than mixing all sources together, but not ideal)."""
     if not fixes_by_source:
         return [], _dominant_source_only(sogs_by_source), None
 
@@ -88,9 +87,9 @@ def _collect_samples(
     List[TripFuelSample],
     Dict[int, List[DepthSample]],
 ]:
-    """Verwerkt frames tot samples, gegroepeerd per bronadres voor PGN's die van meerdere
-    apparaten tegelijk kunnen komen. Stopt netjes op Ctrl+C of als de deadline verstrijkt,
-    zodat een live-sessie altijd een logboek oplevert van wat er tot dan toe binnen is."""
+    """Processes frames into samples, grouped by source address for PGNs that can come from
+    multiple devices at once. Stops cleanly on Ctrl+C or once the deadline passes, so a live
+    session always produces a logbook of whatever came in up to that point."""
     fixes_by_source: Dict[int, List[PositionFix]] = {}
     sogs_by_source: Dict[int, List[SogSample]] = {}
     depth_by_source: Dict[int, List[DepthSample]] = {}
@@ -99,7 +98,7 @@ def _collect_samples(
     try:
         for frame in frames:
             if deadline is not None and time.monotonic() >= deadline:
-                print("Duur verstreken; live-sessie wordt afgesloten...", file=sys.stderr)
+                print("Duration elapsed; closing live session...", file=sys.stderr)
                 break
             if frame.pgn == PGN_POSITION_RAPID:
                 decoded = decode_position_rapid(frame.data)
@@ -124,20 +123,20 @@ def _collect_samples(
                 if depth_m is not None:
                     depth_by_source.setdefault(frame.source, []).append(DepthSample(frame.time, depth_m))
     except KeyboardInterrupt:
-        print("\nOnderbroken door gebruiker; logboek wordt geschreven met de tot nu toe verzamelde data...", file=sys.stderr)
+        print("\nInterrupted by user; writing the logbook with the data collected so far...", file=sys.stderr)
     return fixes_by_source, sogs_by_source, engine_samples, trip_fuel_samples, depth_by_source
 
 
 def _iter_frames_for_path(
     path: Path, start_date: Optional[date], ebl_time_state: Optional[Dict[str, object]] = None
 ) -> Iterable[Frame]:
-    """Kiest de juiste parser op basis van de bestandsextensie: .ebl -> binaire SD-kaartlog,
-    al het overige -> N2K ASCII (live-TCP-stream vastgelegd naar bestand, zie --tee).
+    """Picks the right parser based on the file extension: .ebl -> binary SD card log,
+    everything else -> N2K ASCII (live TCP stream captured to a file, see --tee).
 
-    ``ebl_time_state`` wordt doorgegeven aan opeenvolgende .ebl-bestanden zodat de laatst bekende
-    tijd (PGN 126992) behouden blijft over bestandsgrenzen heen -- anders wordt een bestand
-    zonder eigen System Time-boodschap (bv. lang voor anker, GPS/plotter stil) volledig
-    weggegooid, ook al is de tijd al bekend uit het vorige bestand (zie ebl_reader.py)."""
+    ``ebl_time_state`` is passed to consecutive .ebl files so the last known time (PGN 126992)
+    is preserved across file boundaries -- otherwise a file without its own System Time message
+    (e.g. anchored for a long time, GPS/plotter idle) gets discarded entirely, even though the
+    time is already known from the previous file (see ebl_reader.py)."""
     if path.suffix.lower() == ".ebl":
         return iter_frames_ebl(path, time_state=ebl_time_state)
     return iter_frames(path, start_date=start_date)
@@ -153,114 +152,115 @@ def _parse_host_port(value: str, default_port: int) -> Tuple[str, int]:
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="nmea2log",
-        description="Zet NMEA2000-data van een Actisense W2K-2 (N2K ASCII) om in een vaarlogboek (CSV), "
-        "uit opgeslagen logbestanden of live via een TCP-verbinding.",
+        description="Turn NMEA2000 data from an Actisense W2K-2 (N2K ASCII) into a sailing logbook (CSV), "
+        "from stored log files or live over a TCP connection.",
     )
     parser.add_argument(
         "logfiles",
         nargs="*",
         type=Path,
-        help="Eén of meer logbestanden: .ebl (SD-kaartlog van de W2K-2) of .raw/.n2k (N2K ASCII, "
-        "bv. vastgelegd via --live --tee). Niet combineren met --live.",
+        help="One or more log files: .ebl (SD card log from the W2K-2) or .raw/.n2k (N2K ASCII, "
+        "e.g. captured via --live --tee). Do not combine with --live.",
     )
     parser.add_argument(
         "--live",
         metavar="HOST[:PORT]",
         default=None,
-        help=f"Verbind live met de W2K-2 over TCP (bv. 192.168.4.1 of 192.168.4.1:60001; "
-        f"standaardpoort {DEFAULT_PORT}). Loopt tot Ctrl+C of --duration verstrijkt.",
+        help=f"Connect live to the W2K-2 over TCP (e.g. 192.168.4.1 or 192.168.4.1:60001; "
+        f"default port {DEFAULT_PORT}). Runs until Ctrl+C or --duration elapses.",
     )
     parser.add_argument(
         "--duration",
         type=float,
         default=None,
-        help="Alleen bij --live: stop automatisch na dit aantal seconden",
+        help="Only with --live: stop automatically after this many seconds",
     )
     parser.add_argument(
         "--tee",
         type=Path,
         default=None,
-        help="Alleen bij --live: schrijf de ruwe inkomende ASCII-regels ook weg naar dit bestand "
-        "(toevoegend), zodat je naast live-verwerking ook een logbestand overhoudt",
+        help="Only with --live: also write the raw incoming ASCII lines to this file "
+        "(appending), so alongside live processing you also end up with a log file",
     )
     parser.add_argument(
-        "-o", "--output", type=Path, default=Path("logbook.csv"), help="Pad naar het CSV-bestand (standaard: logbook.csv)"
+        "-o", "--output", type=Path, default=Path("logbook.csv"), help="Path to the CSV file (default: logbook.csv)"
     )
     parser.add_argument(
         "--start-date",
         type=str,
         default=None,
-        help="Startdatum YYYY-MM-DD voor het eerste logbestand (anders geraden uit bestandsnaam of wijzigingsdatum). "
-        "Niet van toepassing bij --live of .ebl-bestanden (die halen hun datum/tijd uit de data zelf).",
+        help="Start date YYYY-MM-DD for the first log file (otherwise guessed from the file name or "
+        "modification date). Not applicable with --live or .ebl files (those get their date/time from the data itself).",
     )
     parser.add_argument(
         "--speed-threshold-kn",
         type=float,
         default=0.5,
-        help="Vaart (kn) onder deze grens telt als 'stilliggend' (standaard 0.5)",
+        help="Speed (kn) below this threshold counts as 'stationary' (default 0.5)",
     )
     parser.add_argument(
         "--min-stop-minutes",
         type=float,
         default=10.0,
-        help="Minimale duur (minuten) van stilliggen om als haventoegang te tellen (standaard 10)",
+        help="Minimum duration (minutes) stationary to count as a port visit (default 10)",
     )
     parser.add_argument(
         "--max-gap-minutes",
         type=float,
         default=None,
-        help="Vanaf hoeveel minuten zonder enige data een reis wordt afgekapt (standaard: "
-        "zelfde als --min-stop-minutes). Voorkomt dat een reis een groot gat in de data "
-        "(apparaat/log lag stil) overbrugt met een veel te lange gerapporteerde vaartijd.",
+        help="From how many minutes without any data a trip gets cut short (default: same as "
+        "--min-stop-minutes). Prevents a trip from bridging a large data gap (device/log was "
+        "down) with a much-too-long reported duration.",
     )
     parser.add_argument(
         "--min-trip-distance-nm",
         type=float,
         default=0.1,
-        help="Reizen die minder dan dit afleggen worden weggefilterd als GPS-/snelheidsruis "
-        "i.p.v. als (nietszeggend) logboekregel getoond (standaard 0.1 nm)",
+        help="Trips covering less than this are filtered out as GPS/speed noise instead of "
+        "shown as a (meaningless) logbook row (default 0.1 nm)",
     )
     parser.add_argument(
         "--no-geocode",
         action="store_true",
-        help="Sla online havennaam-opzoeking over; toont coördinaten in plaats van namen",
+        help="Skip the online port-name lookup; shows coordinates instead of names",
     )
     parser.add_argument(
         "--cache-file",
         type=Path,
         default=Path(".geocode_cache.json"),
-        help="Cachebestand voor havennamen (standaard .geocode_cache.json)",
+        help="Cache file for port names (default .geocode_cache.json)",
     )
-    parser.add_argument("--language", type=str, default="nl", help="Taal voor havennamen (standaard nl)")
+    parser.add_argument("--language", type=str, default="nl", help="Language for port names (default nl)")
     parser.add_argument(
         "--utc-offset",
         type=float,
         default=None,
-        help="Vaste tijdzone-offset in uren t.o.v. UTC (bv. 2 voor CEST) voor de weergegeven "
-        "tijden. Standaard: automatisch geschat per reis uit de vertreklengtegraad (zie README).",
+        help="Fixed timezone offset in hours relative to UTC (e.g. 2 for CEST) for the displayed "
+        "times. Default: automatically estimated per trip from the departure longitude (see README).",
     )
     parser.add_argument(
-        "--no-route-thumbnails",
-        action="store_true",
-        help="Sla het ophalen van kaartplaatjes voor de 'route'-kolom in het ODS-bestand over "
-        "(scheelt internetverkeer bij het aanmaken; de kolom valt dan terug op een tekstlink)",
+        "--boat-name",
+        type=str,
+        default=None,
+        help="Boat name shown at the top of the HTML logbook (default: none, or the "
+        "'boat_name' setting from the config file)",
     )
     _apply_config_defaults(parser)
     return parser
 
 
 def _apply_config_defaults(parser: argparse.ArgumentParser) -> None:
-    """Vult argparse-standaardwaarden aan vanuit de ``[nmea2log]``-sectie van het configbestand
-    (zie ``config.py``; standaard ``nmea2log.ini`` in de huidige map), zodat je niet elke keer
-    dezelfde opties hoeft mee te geven. Expliciete command-line-argumenten overschrijven dit
-    altijd -- argparse past een ``set_defaults``-waarde alleen toe als de gebruiker de optie zelf
-    niet meegaf."""
+    """Fills in argparse defaults from the ``[nmea2log]`` section of the config file (see
+    ``config.py``; default ``nmea2log.ini`` in the current directory), so you don't have to
+    pass the same options every time. Explicit command-line arguments always override this --
+    argparse only applies a ``set_defaults`` value if the user didn't supply the option
+    themselves."""
     section = load_section("nmea2log")
     if not section:
         return
 
     def _bool(value: str) -> bool:
-        return value.strip().lower() in ("1", "true", "yes", "on", "ja")
+        return value.strip().lower() in ("1", "true", "yes", "on")
 
     defaults: Dict[str, object] = {}
     for key, caster in (
@@ -271,6 +271,7 @@ def _apply_config_defaults(parser: argparse.ArgumentParser) -> None:
         ("cache_file", Path),
         ("language", str),
         ("utc_offset", float),
+        ("boat_name", str),
     ):
         if key in section:
             defaults[key] = caster(section[key])
@@ -285,11 +286,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     if bool(args.logfiles) == bool(args.live):
-        parser.error("geef óf één of meer logfiles óf --live HOST[:PORT] op (niet beide, niet geen van beide)")
+        parser.error("provide either one or more logfiles or --live HOST[:PORT] (not both, not neither)")
     if args.duration is not None and not args.live:
-        parser.error("--duration is alleen van toepassing samen met --live")
+        parser.error("--duration only applies together with --live")
     if args.tee is not None and not args.live:
-        parser.error("--tee is alleen van toepassing samen met --live")
+        parser.error("--tee only applies together with --live")
 
     fixes_by_source: Dict[int, List[PositionFix]] = {}
     sogs_by_source: Dict[int, List[SogSample]] = {}
@@ -299,11 +300,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.live:
         host, port = _parse_host_port(args.live, DEFAULT_PORT)
-        print(f"Live verbinden met {host}:{port}... (Ctrl+C om te stoppen)", file=sys.stderr)
+        print(f"Connecting live to {host}:{port}... (Ctrl+C to stop)", file=sys.stderr)
         try:
             frames = iter_frames_tcp(host, port, tee_to=args.tee)
         except OSError as exc:
-            print(f"Kon niet verbinden met {host}:{port}: {exc}", file=sys.stderr)
+            print(f"Could not connect to {host}:{port}: {exc}", file=sys.stderr)
             return 1
         deadline = time.monotonic() + args.duration if args.duration else None
         fixes_by_source, sogs_by_source, all_engine, all_trip_fuel, depth_by_source = _collect_samples(
@@ -314,7 +315,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         ebl_time_state: Dict[str, object] = {}
         for index, path in enumerate(args.logfiles):
             if not path.exists():
-                print(f"Logbestand niet gevonden: {path}", file=sys.stderr)
+                print(f"Log file not found: {path}", file=sys.stderr)
                 return 1
             frames = _iter_frames_for_path(path, start_date if index == 0 else None, ebl_time_state)
             fixes, sogs, engine, trip_fuel, depth = _collect_samples(frames)
@@ -329,13 +330,13 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if len(fixes_by_source) > 1:
         print(
-            f"Meerdere positiebronnen gevonden ({sorted(fixes_by_source)}); "
-            f"bron {primary_gps_source} gebruikt als primaire GPS (meeste berichten).",
+            f"Multiple position sources found ({sorted(fixes_by_source)}); "
+            f"using source {primary_gps_source} as the primary GPS (most messages).",
             file=sys.stderr,
         )
 
     if not all_fixes:
-        print("Geen positiedata (PGN 129025) gevonden.", file=sys.stderr)
+        print("No position data (PGN 129025) found.", file=sys.stderr)
         return 1
 
     geocoder = NoGeocoder() if args.no_geocode else Geocoder(cache_file=args.cache_file, language=args.language)
@@ -355,7 +356,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if not trips:
         print(
-            "Geen reizen gevonden (misschien nooit lang genoeg gestopt of gevaren t.o.v. de drempels).",
+            "No trips found (maybe never stopped or underway long enough relative to the thresholds).",
             file=sys.stderr,
         )
         return 1
@@ -363,20 +364,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     write_csv(trips, args.output, utc_offset_hours=args.utc_offset)
     gpx_path = args.output.with_suffix(".gpx")
     write_gpx(trips, gpx_path, utc_offset_hours=args.utc_offset)
-    routes_path = args.output.with_name(args.output.stem + "_routes.html")
-    write_route_maps(trips, routes_path, utc_offset_hours=args.utc_offset)
-    ods_path = args.output.with_suffix(".ods")
-    write_ods(
-        trips,
-        ods_path,
-        utc_offset_hours=args.utc_offset,
-        routes_filename=routes_path.name,
-        use_route_thumbnails=not args.no_route_thumbnails,
-    )
-    print(f"Logboek geschreven: {args.output} ({len(trips)} reis/reizen)")
-    print(f"Route geschreven: {gpx_path}")
-    print(f"Open werkmap (ODS) geschreven: {ods_path}")
-    print(f"Routekaarten geschreven: {routes_path}")
+    html_path = args.output.with_suffix(".html")
+    write_html_logbook(trips, html_path, boat_name=args.boat_name, utc_offset_hours=args.utc_offset)
+    print(f"Logbook written: {args.output} ({len(trips)} trip(s))")
+    print(f"Route written: {gpx_path}")
+    print(f"HTML logbook written: {html_path}")
     return 0
 
 

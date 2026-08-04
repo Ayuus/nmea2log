@@ -41,13 +41,13 @@ def test_load_config_missing_file_uses_defaults(tmp_path: Path, monkeypatch):
 
 def test_load_config_env_vars_override_file(tmp_path: Path, monkeypatch):
     config_path = tmp_path / "w2k2.ini"
-    config_path.write_text("[w2k2]\nurl = http://192.168.1.50\nuser = filenaam\n", encoding="utf-8")
-    monkeypatch.setenv("W2K2_USER", "van-omgevingsvariabele")
+    config_path.write_text("[w2k2]\nurl = http://192.168.1.50\nuser = from-file\n", encoding="utf-8")
+    monkeypatch.setenv("W2K2_USER", "from-env-var")
 
     config = load_config(config_path)
 
-    assert config.user == "van-omgevingsvariabele"
-    assert config.url == "http://192.168.1.50"  # niet overschreven, blijft uit het bestand
+    assert config.user == "from-env-var"
+    assert config.url == "http://192.168.1.50"  # not overridden, stays from the file
 
 
 def test_needs_download_missing_file(tmp_path: Path):

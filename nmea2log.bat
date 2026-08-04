@@ -2,18 +2,18 @@
 setlocal
 
 if "%~1"=="" (
-    echo Sleep een .raw-logbestand op deze snelkoppeling om het te verwerken.
+    echo Drag a .raw log file onto this shortcut to process it.
     echo.
-    echo Of gebruik handmatig:
-    echo   nmea2log.bat pad\naar\logbestand.raw
+    echo Or use it manually:
+    echo   nmea2log.bat path\to\logfile.raw
     pause
     exit /b 1
 )
 
-set "OUTPUT=%~dp1logboek.csv"
+set "OUTPUT=%~dp1logbook.csv"
 
 py -m nmea2000processor %* -o "%OUTPUT%"
 
 echo.
-echo Klaar. Druk op een toets om dit venster te sluiten.
+echo Done. Press any key to close this window.
 pause >nul

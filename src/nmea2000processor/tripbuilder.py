@@ -1,10 +1,11 @@
-"""Zet reeksen posities/snelheden/motordata om in logboek-reizen (vertrekhaven -> aankomsthaven).
+"""Turns sequences of positions/speeds/engine data into logbook trips (departure port ->
+arrival port).
 
-Aanpak: elke GPS-fix wordt geclassificeerd als 'stilliggend' of 'varend' op basis van de
-snelheid over de grond. Aaneengesloten stilligperiodes die lang genoeg duren (drempel
-``min_stop_minutes``) worden beschouwd als een havenbezoek; de periodes daartussen zijn de
-reizen. Voor elke reis wordt het brandstofverbruik berekend door de brandstofdebiet-metingen
-(PGN 127489, motordata) te integreren over de tijd — dus expliciet niet via een tanksensor.
+Approach: every GPS fix is classified as 'stationary' or 'underway' based on speed over
+ground. Consecutive stationary periods that last long enough (threshold ``min_stop_minutes``)
+are considered a port visit; the periods in between are the trips. For each trip, fuel
+consumption is calculated by integrating the fuel-rate readings (PGN 127489, engine data) over
+time -- so explicitly not via a tank sensor.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from .model import DepthSample, EngineSample, PositionFix, SogSample, TripFuelSa
 
 _KNOT_IN_MS = 0.514444
 _EARTH_RADIUS_NM = 3440.065
-_MAX_INTEGRATION_GAP_H = 1.0  # grotere gaten tussen motorsamples wijzen op een logonderbreking
+_MAX_INTEGRATION_GAP_H = 1.0  # larger gaps between engine samples indicate a log interruption
 _KELVIN_TO_CELSIUS = 273.15
 _PA_TO_BAR = 1e-5
 
@@ -59,18 +60,18 @@ class TripLeg:
     arrive_time: datetime
     depart_place: str
     arrive_place: str
-    duration: timedelta  # gevaren tijd, exclusief eventuele gaten in de data (zie _moving_duration)
+    duration: timedelta  # time underway, excluding any gaps in the data (see _moving_duration)
     distance_nm: float
     avg_speed_kn: Optional[float]
     max_speed_kn: Optional[float]
-    fuel_liters: float  # berekend door brandstofdebiet (PGN 127489) te integreren over de tijd
-    fuel_liters_device: Optional[float]  # motor-eigen triptmeter (PGN 127497), None = niet beschikbaar
-    engine_hours: Dict[int, float]  # motor-instance -> gedraaide uren tijdens deze reis
-    engine_health: Dict[int, EngineHealth]  # motor-instance -> gezondheidsindicatoren + waarschuwingen
-    min_depth_m: Optional[float]  # ondiepste gemeten waterdiepte tijdens deze reis
+    fuel_liters: float  # calculated by integrating the fuel rate (PGN 127489) over time
+    fuel_liters_device: Optional[float]  # engine's own trip meter (PGN 127497), None = not available
+    engine_hours: Dict[int, float]  # engine instance -> hours run during this trip
+    engine_health: Dict[int, EngineHealth]  # engine instance -> health indicators + warnings
+    min_depth_m: Optional[float]  # shallowest water depth measured during this trip
     min_depth_lat: Optional[float]
     min_depth_lon: Optional[float]
-    track: List[NavSample]  # GPS-punten van deze reis, voor bv. GPX-export
+    track: List[NavSample]  # GPS points of this trip, e.g. for GPX export
 
 
 def _haversine_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -84,7 +85,7 @@ def _haversine_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 def _merge_nav_samples(
     fixes: List[PositionFix], sogs: List[SogSample], depths: Optional[List[DepthSample]] = None
 ) -> List[NavSample]:
-    """Combineert positie-, snelheids- en diepte-metingen chronologisch; beide worden forward-filled."""
+    """Combines position, speed, and depth readings chronologically; both are forward-filled."""
     sogs_sorted = sorted(sogs, key=lambda s: s.time)
     depths_sorted = sorted(depths, key=lambda s: s.time) if depths else []
     samples: List[NavSample] = []
@@ -113,14 +114,14 @@ def _classify_runs(
 def _merge_short_stops(
     runs: List[Tuple[str, List[NavSample]]], min_stop: timedelta, max_gap: timedelta
 ) -> List[Tuple[str, List[NavSample]]]:
-    """Stilligperiodes korter dan de drempel tellen normaliter niet als havenbezoek en worden
-    bij de reis getrokken -- BEHALVE als de periode grenst aan een gat in de data van minstens
-    ``max_gap``: de gemeten duur is dan artificieel kort (afgekapt door het gat, niet doordat de
-    boot écht maar heel even stillag), dus die telt wél mee als havenbezoek. Zonder deze
-    uitzondering zou een reis vlak vóór zo'n gat zijn "aankomsthaven" kwijtraken (in de praktijk
-    gevonden: een reis die eindigde bij een echte, bevestigde ligplaats kreeg toch "Onbekend"
-    als aankomsthaven, puur omdat er na aankomst maar een paar minuten data was voordat het gat
-    begon)."""
+    """Stationary periods shorter than the threshold normally don't count as a port visit and
+    get folded into the trip -- EXCEPT when the period is adjacent to a data gap of at least
+    ``max_gap``: the measured duration is then artificially short (cut off by the gap, not
+    because the boat really only stopped briefly), so it still counts as a port visit. Without
+    this exception, a trip right before such a gap would lose its "arrival port" (found in
+    practice: a trip that ended at a real, confirmed mooring still got "Unknown" as its arrival
+    port, purely because there were only a few minutes of data after arrival before the gap
+    started)."""
     relabelled = []
     for idx, (label, group) in enumerate(runs):
         if label == "stationary" and (group[-1].time - group[0].time) < min_stop:
@@ -139,11 +140,45 @@ def _merge_short_stops(
     return merged
 
 
+def _split_moving_runs_on_gaps(
+    runs: List[Tuple[str, List[NavSample]]], max_gap: timedelta
+) -> List[Tuple[str, List[NavSample]]]:
+    """A "moving" run can silently swallow a large data gap if the classification happens to be
+    "moving" on both sides of it (e.g. a moment of GPS/SOG noise right as the boat was actually
+    stopping, and again once data resumes) -- there's then no differently-labeled sample in
+    between for ``_classify_runs`` to split on, even though we have no idea what happened during
+    the gap. Found in practice: a trip that looked like one continuous ~4-hour "moving" run
+    actually had a ~2.5-hour data gap in the middle, right after the boat had actually arrived;
+    ``_moving_duration`` already excluded the gap from the reported *duration* correctly, but the
+    arrival itself was never recognized as a stay, so the CSV showed the *next* real stay (found
+    hours later) as the arrival port instead of the true one.
+
+    This splits a "moving" run at each internal gap >= ``max_gap``, inserting a single-sample
+    synthetic "stationary" stay at the last known position before the gap -- the same treatment
+    as an unresolved position at a file/session boundary, just discovered mid-run instead of at
+    the edges."""
+    result: List[Tuple[str, List[NavSample]]] = []
+    for label, group in runs:
+        if label != "moving":
+            result.append((label, group))
+            continue
+        segment: List[NavSample] = [group[0]]
+        for prev, curr in zip(group, group[1:]):
+            if curr.time - prev.time >= max_gap:
+                result.append(("moving", segment))
+                result.append(("stationary", [prev]))
+                segment = [curr]
+            else:
+                segment.append(curr)
+        result.append(("moving", segment))
+    return result
+
+
 def _moving_duration(group: List[NavSample], max_gap: timedelta) -> timedelta:
-    """Som van de tijd tussen opeenvolgende punten in een reis, met uitzondering van gaten
-    >= ``max_gap`` daarbinnen -- die tellen niet mee als "gevaren tijd", want we weten niet wat
-    er in zo'n gat gebeurde. Zonder dit zou de gerapporteerde vaartijd een intern gat in de data
-    overbruggen (in de praktijk gevonden: 3:21 vaartijd terwijl de motor maar 0:48 draaide)."""
+    """Sum of the time between consecutive points in a trip, excluding gaps >= ``max_gap``
+    within it -- those don't count as "time underway", since we don't know what happened during
+    such a gap. Without this, the reported duration would bridge an internal data gap (found in
+    practice: a reported 3:21 duration while the engine only ran for 0:48)."""
     total = timedelta()
     for a, b in zip(group, group[1:]):
         delta = b.time - a.time
@@ -192,10 +227,11 @@ def _fuel_liters(samples: List[EngineSample], start: datetime, end: datetime) ->
 def _device_fuel_delta(
     samples: List[TripFuelSample], start: datetime, end: datetime
 ) -> Optional[float]:
-    """Verschil tussen begin- en eindstand van de motor-eigen triptmeter binnen het tijdvak.
+    """Difference between the start and end reading of the engine's own trip meter within the
+    time window.
 
-    Geeft None terug als deze PGN niet (voldoende) beschikbaar was voor deze reis — bijvoorbeeld
-    omdat het apparaat 'm niet verstuurt — in plaats van een misleidende 0.
+    Returns None if this PGN wasn't (sufficiently) available for this trip -- e.g. because the
+    device doesn't send it -- instead of a misleading 0.
     """
     by_instance: Dict[int, List[TripFuelSample]] = {}
     for sample in samples:
@@ -223,7 +259,7 @@ def _speed_stats_kn(track: List[NavSample]) -> Tuple[Optional[float], Optional[f
 
 
 def _min_depth(track: List[NavSample]) -> Tuple[Optional[float], Optional[float], Optional[float]]:
-    """Geeft (diepte_m, lat, lon) van het ondiepste gemeten punt, of (None, None, None)."""
+    """Returns (depth_m, lat, lon) of the shallowest measured point, or (None, None, None)."""
     candidates = [s for s in track if s.depth_m is not None]
     if not candidates:
         return None, None, None
@@ -283,16 +319,16 @@ def build_trips(
     max_gap_minutes: Optional[float] = None,
     min_trip_distance_nm: float = 0.1,
 ) -> List[TripLeg]:
-    """``max_gap_minutes``: hoelang er hooguit geen data mag zijn voordat de gerapporteerde
-    vaartijd van een reis wordt afgekapt (zie ``_moving_duration``). Standaard gelijk aan
-    ``min_stop_minutes`` -- eenzelfde getal, maar twee verschillende betekenissen: de één is
-    "hoelang moet je stilliggen", de ander "hoelang mag er geen data zijn". Havens worden nog
-    wel over zo'n gat heen gekoppeld (zie ``_merge_short_stops``) -- alleen de *duur* van de
-    reis negeert het gat, niet de vertrek-/aankomsthaven zelf.
+    """``max_gap_minutes``: how long there can be no data at most before a trip's reported
+    duration gets cut off (see ``_moving_duration``). Defaults to the same value as
+    ``min_stop_minutes`` -- the same number, but two different meanings: one is "how long do
+    you have to be stationary", the other "how long can there be no data". Ports are still
+    linked across such a gap (see ``_merge_short_stops``) -- only the trip's *duration* ignores
+    the gap, not the departure/arrival port itself.
 
-    ``min_trip_distance_nm``: reizen die minder dan dit afleggen worden weggefilterd. Dit is
-    GPS-/snelheidsruis (een paar seconden net boven ``speed_threshold_kn``), geen echte reis
-    (in de praktijk gevonden: 0,0 nm, een paar seconden tot minuten durend, motor uit)."""
+    ``min_trip_distance_nm``: trips covering less than this are filtered out. This is
+    GPS/speed noise (a few seconds just above ``speed_threshold_kn``), not a real trip (found
+    in practice: 0.0 nm, lasting a few seconds to minutes, engine off)."""
     if geocoder is None:
         geocoder = NoGeocoder()
     if trip_fuel_samples is None:
@@ -310,6 +346,7 @@ def build_trips(
 
     runs = _classify_runs(samples, speed_threshold_ms)
     runs = _merge_short_stops(runs, min_stop, max_gap)
+    runs = _split_moving_runs_on_gaps(runs, max_gap)
 
     stays: List[Optional[Stay]] = []
     for label, group in runs:
@@ -330,8 +367,8 @@ def build_trips(
 
         depart_time = prev_stay.end if prev_stay else group[0].time
         arrive_time = next_stay.start if next_stay else group[-1].time
-        depart_place = prev_stay.place if prev_stay else "Onbekend (start buiten logbestand)"
-        arrive_place = next_stay.place if next_stay else "Onbekend (einde buiten logbestand)"
+        depart_place = prev_stay.place if prev_stay else "Unknown (start outside log file)"
+        arrive_place = next_stay.place if next_stay else "Unknown (end outside log file)"
 
         distance_nm = sum(
             _haversine_nm(a.lat, a.lon, b.lat, b.lon) for a, b in zip(group, group[1:])

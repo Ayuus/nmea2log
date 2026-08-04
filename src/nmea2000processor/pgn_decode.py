@@ -1,9 +1,9 @@
-"""Decodeert de payload-bytes van een N2K-boodschap voor de PGN's die het logboek nodig heeft.
+"""Decodes the payload bytes of an N2K message for the PGNs the logbook needs.
 
-Veldindeling (bit-offset/lengte/resolutie) is overgenomen uit het publieke, door de community
-onderhouden NMEA2000-woordenboek van het canboat-project (https://github.com/canboat/canboat,
-docs/canboat.json). Multi-byte velden zijn little-endian; bitvelden worden LSB-eerst gepakt,
-zoals gebruikelijk in NMEA2000/J1939.
+Field layout (bit offset/length/resolution) is taken from the public, community-maintained
+NMEA2000 dictionary of the canboat project (https://github.com/canboat/canboat,
+docs/canboat.json). Multi-byte fields are little-endian; bit fields are packed LSB-first, as is
+customary in NMEA2000/J1939.
 """
 
 from __future__ import annotations
@@ -20,8 +20,8 @@ PGN_SYSTEM_TIME = 126992  # System Time
 
 _EPOCH = date(1970, 1, 1)
 
-# Bitbetekenis van de twee "Discrete Status"-velden in PGN 127489, overgenomen uit canboat's
-# ENGINE_STATUS_1 / ENGINE_STATUS_2 lookup-enumeraties.
+# Bit meanings of the two "Discrete Status" fields in PGN 127489, taken from canboat's
+# ENGINE_STATUS_1 / ENGINE_STATUS_2 lookup enumerations.
 _ENGINE_STATUS_1_BITS = {
     0: "Check Engine",
     1: "Over Temperature",
@@ -53,7 +53,7 @@ _ENGINE_STATUS_2_BITS = {
 
 
 def _extract(data: bytes, bit_offset: int, bit_length: int, *, signed: bool) -> Optional[int]:
-    """Lees een little-endian bitveld uit een N2K-payload en herken 'niet beschikbaar'-waarden."""
+    """Read a little-endian bit field from an N2K payload and recognize 'not available' values."""
     byte_start = bit_offset // 8
     bit_shift = bit_offset % 8
     n_bytes = (bit_shift + bit_length + 7) // 8
@@ -67,19 +67,19 @@ def _extract(data: bytes, bit_offset: int, bit_length: int, *, signed: bool) -> 
 
     if signed:
         sign_bit = 1 << (bit_length - 1)
-        not_available = sign_bit - 1  # hoogste positieve waarde = "niet beschikbaar" (NMEA2000-conventie)
+        not_available = sign_bit - 1  # highest positive value = "not available" (NMEA2000 convention)
         if raw == not_available:
             return None
         if raw & sign_bit:
             raw -= 1 << bit_length
     else:
-        if raw == (1 << bit_length) - 1:  # alle bits 1 = "niet beschikbaar"
+        if raw == (1 << bit_length) - 1:  # all bits 1 = "not available"
             return None
     return raw
 
 
 def decode_position_rapid(data: bytes) -> Optional[Tuple[float, float]]:
-    """PGN 129025: breedte- en lengtegraad in graden."""
+    """PGN 129025: latitude and longitude in degrees."""
     lat_raw = _extract(data, 0, 32, signed=True)
     lon_raw = _extract(data, 32, 32, signed=True)
     if lat_raw is None or lon_raw is None:
@@ -88,7 +88,7 @@ def decode_position_rapid(data: bytes) -> Optional[Tuple[float, float]]:
 
 
 def decode_sog(data: bytes) -> Optional[float]:
-    """PGN 129026: snelheid over de grond in m/s."""
+    """PGN 129026: speed over ground in m/s."""
     sog_raw = _extract(data, 32, 16, signed=False)
     if sog_raw is None:
         return None
@@ -102,9 +102,9 @@ def _decode_bit_warnings(raw: Optional[int], bit_names: Dict[int, str]) -> Froze
 
 
 def decode_engine_dynamic(data: bytes) -> Optional[dict]:
-    """PGN 127489: motor-instance, brandstofverbruik, draaiuren en gezondheidsindicatoren.
+    """PGN 127489: engine instance, fuel consumption, engine hours, and health indicators.
 
-    Geeft een dict terug met kwargs die direct in ``EngineSample(time=..., **result)`` passen.
+    Returns a dict with kwargs that plug directly into ``EngineSample(time=..., **result)``.
     """
     instance = _extract(data, 0, 8, signed=False)
     if instance is None:
@@ -138,7 +138,7 @@ def decode_engine_dynamic(data: bytes) -> Optional[dict]:
 
 
 def decode_water_depth(data: bytes) -> Optional[float]:
-    """PGN 128267: waterdiepte onder de transducer, in meter."""
+    """PGN 128267: water depth under the transducer, in meters."""
     depth_raw = _extract(data, 8, 32, signed=False)
     if depth_raw is None:
         return None
@@ -146,7 +146,7 @@ def decode_water_depth(data: bytes) -> Optional[float]:
 
 
 def decode_trip_fuel_engine(data: bytes) -> Optional[Tuple[int, Optional[float]]]:
-    """PGN 127497: motor-instance en de triptmeter-brandstofstand van de motor zelf, in liter."""
+    """PGN 127497: engine instance and the engine's own trip-meter fuel reading, in liters."""
     instance = _extract(data, 0, 8, signed=False)
     if instance is None:
         return None
@@ -156,10 +156,10 @@ def decode_trip_fuel_engine(data: bytes) -> Optional[Tuple[int, Optional[float]]
 
 
 def decode_system_time(data: bytes) -> Optional[datetime]:
-    """PGN 126992: absolute datum/tijd (UTC) — dagen sinds 1970-01-01 plus tijd-op-de-dag.
+    """PGN 126992: absolute date/time (UTC) -- days since 1970-01-01 plus time of day.
 
-    Gebruikt om EBL-logbestanden (die geen bruikbare eigen tijdstempel per record hebben) van
-    een absolute klok te voorzien, via de systeemtijd-PGN die elders in dezelfde N2K-stream zit.
+    Used to give EBL log files (which have no usable timestamp of their own per record) an
+    absolute clock, via the system-time PGN found elsewhere in the same N2K stream.
     """
     date_raw = _extract(data, 16, 16, signed=False)
     time_raw = _extract(data, 32, 32, signed=False)

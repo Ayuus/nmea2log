@@ -33,13 +33,13 @@ def test_merge_by_source_combines_across_calls():
 
 
 def test_dominant_source_only_after_merge_reflects_full_session():
-    """Regressietest voor een echte bug: bij meerdere bestanden moet de dominante bron over de
-    hele sessie bepaald worden, niet per bestand -- anders kan een minderheids-GPS-bron per
-    toeval 'winnen' in een van de bestanden en zo toch valse sprongen veroorzaken."""
+    """Regression test for a real bug: with multiple files, the dominant source must be
+    determined over the whole session, not per file -- otherwise a minority GPS source could
+    randomly "win" in one of the files and still cause false jumps."""
     target: dict = {}
-    # bestand 1: bron 10 licht in de minderheid
+    # file 1: source 10 slightly in the minority
     _merge_by_source(target, {10: [1, 2], 11: [1, 2, 3]})
-    # bestand 2: bron 10 juist ruim in de meerderheid -> over de hele sessie wint bron 10
+    # file 2: source 10 clearly in the majority -> source 10 wins over the whole session
     _merge_by_source(target, {10: [3, 4, 5, 6, 7], 11: [4]})
 
     result = _dominant_source_only(target)
@@ -56,22 +56,22 @@ def _sogs(n: int) -> list:
 
 
 def test_select_primary_gps_source_uses_sog_from_same_source():
-    """Positie en snelheid moeten van dezelfde fysieke bron komen als die bron ze allebei
-    stuurt -- ook als een andere bron toevallig meer snelheidsberichten stuurde."""
+    """Position and speed must come from the same physical source when that source sends both
+    -- even if a different source happened to send more speed messages."""
     fixes_by_source = {10: _fixes(100), 11: _fixes(90)}
-    sogs_by_source = {10: _sogs(5), 11: _sogs(50)}  # bron 11 stuurt veruit de meeste SOG
+    sogs_by_source = {10: _sogs(5), 11: _sogs(50)}  # source 11 sends by far the most SOG
 
     fixes, sogs, primary = _select_primary_gps_source(fixes_by_source, sogs_by_source)
 
-    assert primary == 10  # bron 10 heeft de meeste positieberichten, dus is leidend
+    assert primary == 10  # source 10 has the most position messages, so it leads
     assert fixes == fixes_by_source[10]
-    assert sogs == sogs_by_source[10]  # niet bron 11, ook al stuurde die meer SOG
+    assert sogs == sogs_by_source[10]  # not source 11, even though it sent more SOG
 
 
 def test_select_primary_gps_source_falls_back_when_primary_has_no_sog():
-    """Als de gekozen positiebron zelf geen snelheid stuurt, valt de code terug op de
-    snelheidsbron met de meeste berichten (een ander fysiek apparaat, maar beter dan niets)."""
-    fixes_by_source = {10: _fixes(100)}  # bron 10 stuurt geen SOG
+    """If the chosen position source itself doesn't send speed, the code falls back to the
+    speed source with the most messages (a different physical device, but better than nothing)."""
+    fixes_by_source = {10: _fixes(100)}  # source 10 doesn't send SOG
     sogs_by_source = {14: _sogs(20)}
 
     fixes, sogs, primary = _select_primary_gps_source(fixes_by_source, sogs_by_source)

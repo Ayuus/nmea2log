@@ -1,7 +1,7 @@
-"""Downloadt EBL-logbestanden van een Actisense W2K-2 via zijn lokale web-API.
+"""Downloads EBL log files from an Actisense W2K-2 via its local web API.
 
-Gevalideerde API-structuur (geobserveerd in browser DevTools, firmware-webapp; geen officiële
-API, kan wijzigen bij firmware-updates):
+Validated API structure (observed in browser DevTools, firmware web app; not an official API,
+can change with firmware updates):
 
     GET  /api/data_logs
          -> {"dataFolders": [{"name": "EBL000001", "size": ...}, ...]}
@@ -9,25 +9,25 @@ API, kan wijzigen bij firmware-updates):
          -> {"dataFiles": [{"file_name": "000001_000.ebl",
                             "file_size": 5000496,
                             "file_time": 1785491054}, ...]}
-         file_time = Unix-epoch (seconden). Waarde 315532816 (= 1980-01-01) betekent: gelogd
-         zonder GPS-tijd op de bus (default-klok van het apparaat).
+         file_time = Unix epoch (seconds). Value 315532816 (= 1980-01-01) means: logged
+         without GPS time on the bus (the device's default clock).
     GET  /api/download?file_name=/sdcard/logs/ebl_data_logs/<folder>/<file>
-         -> binaire inhoud van het logbestand.
-    Auth: header "Authorization: Bearer <token>", verkregen via POST /api/login met JSON-body
+         -> binary content of the log file.
+    Auth: header "Authorization: Bearer <token>", obtained via POST /api/login with JSON body
          {"user": "...", "password": "..."}.
 
-Gebruikt alleen de standaardbibliotheek (``urllib``), geen ``requests``, zodat de app
-dependency-vrij blijft.
+Uses only the standard library (``urllib``), not ``requests``, so the app stays
+dependency-free.
 
-Configuratie via een INI-bestand in plaats van steeds opnieuw inloggegevens intypen. Standaard
-wordt ``nmea2log.ini`` gezocht in de huidige map (dus meestal de projectmap) — dat bestand staat
-in ``.gitignore`` en wordt dus nooit gecommit. Let op: deze projectmap staat wel in OneDrive, dus
-een wachtwoord hier synct mee naar de cloud/je andere pc. Wil je dat niet, geef dan een pad
-buiten OneDrive op via ``--config``.
+Configuration via an INI file instead of typing in credentials every time. By default
+``nmea2log.ini`` is looked up in the current directory (usually the project directory) -- that
+file is in ``.gitignore`` and is therefore never committed. Note: this project directory does
+live in OneDrive, so a password here syncs along to the cloud/your other PC. If you don't want
+that, pass a path outside OneDrive via ``--config``.
 
-Gebruik:
-    nmea2log-download                       # leest ./nmea2log.ini
-    nmea2log-download --config pad/naar.ini
+Usage:
+    nmea2log-download                       # reads ./nmea2log.ini
+    nmea2log-download --config path/to.ini
 """
 
 from __future__ import annotations
@@ -49,15 +49,15 @@ from .config import DEFAULT_CONFIG_PATH, load_section
 
 SD_LOG_ROOT = "/sdcard/logs/ebl_data_logs"
 
-TIMEOUT = 30  # seconden per API-verzoek
-DOWNLOAD_TIMEOUT = 300  # ruimer voor de ~5 MB bestanden
+TIMEOUT = 30  # seconds per API request
+DOWNLOAD_TIMEOUT = 300  # more headroom for the ~5 MB files
 
-# file_time-waarde die de W2K-2 gebruikt als er geen GPS-tijd was (1980-01-01). Marge van 10
-# jaar: alles voor 1990 beschouwen we als "geen echte tijd".
+# file_time value the W2K-2 uses when there was no GPS time (1980-01-01). 10-year margin:
+# anything before 1990 is treated as "no real time".
 NO_GPS_TIME_BEFORE = 631152000  # 1990-01-01 UTC
 
-# Kandidaat-veldnamen voor het token in de login-response; nog niet 100% bevestigd welke de
-# W2K-2 gebruikt, dus we proberen de gangbare varianten.
+# Candidate field names for the token in the login response; not yet 100% confirmed which one
+# the W2K-2 uses, so we try the common variants.
 _TOKEN_KEYS = ("token", "bearer", "auth_token", "access_token", "sessionToken", "session")
 
 
@@ -71,9 +71,9 @@ class W2K2Config:
 
 
 def load_config(path: Optional[Path] = None) -> W2K2Config:
-    """Leest het configbestand. Vult ontbrekende inloggegevens aan uit omgevingsvariabelen
-    (W2K2_URL/W2K2_TOKEN/W2K2_USER/W2K2_PASS/W2K2_DOWNLOAD_DIR), zodat de oude manier van
-    werken (env vars, of interactief inloggen) ook nog gewoon werkt."""
+    """Reads the config file. Fills in missing credentials from environment variables
+    (W2K2_URL/W2K2_TOKEN/W2K2_USER/W2K2_PASS/W2K2_DOWNLOAD_DIR), so the old way of working
+    (env vars, or interactive login) still works too."""
     section: Dict[str, str] = load_section("w2k2", path or DEFAULT_CONFIG_PATH)
 
     url = os.environ.get("W2K2_URL") or section.get("url") or "http://10.164.231.101"
@@ -88,8 +88,8 @@ def load_config(path: Optional[Path] = None) -> W2K2Config:
 
 
 class _Session:
-    """Minimale HTTP-sessie op basis van urllib: bewaart het bearer-token en zet 'm op elk
-    verzoek, net als ``requests.Session`` dat zou doen."""
+    """Minimal HTTP session on top of urllib: keeps the bearer token and sets it on every
+    request, just like ``requests.Session`` would."""
 
     def __init__(self, base_url: str) -> None:
         self.base_url = base_url.rstrip("/")
@@ -139,24 +139,24 @@ def make_session(config: W2K2Config) -> _Session:
         session.token = config.token
         return session
 
-    user = config.user or input("Gebruikersnaam: ")
-    password = config.password or getpass.getpass("Wachtwoord: ")
+    user = config.user or input("Username: ")
+    password = config.password or getpass.getpass("Password: ")
     body = session.post_json("/api/login", {"user": user, "password": password})
     token = next((body[k] for k in _TOKEN_KEYS if body.get(k)), None)
     if not token:
         sys.exit(
-            "[fout] login gelukt maar geen token gevonden in de response; voeg de juiste "
-            f"veldnaam toe aan _TOKEN_KEYS. Response: {body}"
+            "[error] login succeeded but no token found in the response; add the correct "
+            f"field name to _TOKEN_KEYS. Response: {body}"
         )
     session.token = token
-    print("[ok] ingelogd, token ontvangen")
+    print("[ok] logged in, token received")
     return session
 
 
 def get_folders(session: _Session) -> List[dict]:
     body = session.get_json("/api/data_logs")
     folders = body.get("dataFolders", [])
-    print(f"[info] {len(folders)} map(pen): " + ", ".join(f["name"] for f in folders))
+    print(f"[info] {len(folders)} folder(s): " + ", ".join(f["name"] for f in folders))
     return folders
 
 
@@ -164,13 +164,13 @@ def get_files(session: _Session, folder: str) -> List[dict]:
     body = session.get_json("/api/data_logs", {"method": "fileList", "folder": folder})
     files = body.get("dataFiles", [])
     total_mb = sum(f["file_size"] for f in files) / 1e6
-    print(f"[info] {folder}: {len(files)} bestand(en), {total_mb:.0f} MB totaal")
+    print(f"[info] {folder}: {len(files)} file(s), {total_mb:.0f} MB total")
     return files
 
 
 def _needs_download(local: Path, remote_size: int) -> bool:
-    """Alleen downloaden wat we nog niet (volledig) hebben. Groottevergelijking vangt ook het
-    geval dat het laatste bestand op de W2K-2 nog groeide toen we het eerder ophaalden."""
+    """Only download what we don't (fully) have yet. The size comparison also catches the case
+    where the last file on the W2K-2 was still growing when we fetched it earlier."""
     return not local.exists() or local.stat().st_size != remote_size
 
 
@@ -180,7 +180,7 @@ def download_file(session: _Session, download_dir: Path, folder: str, info: dict
     target = target_dir / info["file_name"]
 
     if not _needs_download(target, info["file_size"]):
-        print(f"[skip] {folder}/{info['file_name']} al compleet lokaal")
+        print(f"[skip] {folder}/{info['file_name']} already complete locally")
         return
 
     session.download_to(
@@ -192,20 +192,20 @@ def download_file(session: _Session, download_dir: Path, folder: str, info: dict
         os.utime(target, (file_time, file_time))
         stamp = datetime.fromtimestamp(file_time, tz=timezone.utc).isoformat()
     else:
-        stamp = "GEEN GPS-TIJD (1980-stempel)"
+        stamp = "NO GPS TIME (1980 stamp)"
     print(f"[ok] {folder}/{info['file_name']} ({info['file_size']} bytes, {stamp})")
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="nmea2log-download",
-        description="Download EBL-logbestanden van een Actisense W2K-2 via zijn web-API.",
+        description="Download EBL log files from an Actisense W2K-2 via its web API.",
     )
     parser.add_argument(
         "--config",
         type=Path,
         default=None,
-        help=f"Pad naar het INI-configbestand (standaard: {DEFAULT_CONFIG_PATH})",
+        help=f"Path to the INI config file (default: {DEFAULT_CONFIG_PATH})",
     )
     return parser
 
@@ -222,12 +222,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     except urllib.error.HTTPError as exc:
         if exc.code == 401:
             sys.exit(
-                "[fout] 401: token verlopen of ongeldige inloggegevens -- controleer je "
-                "configbestand of haal een vers token op"
+                "[error] 401: token expired or invalid credentials -- check your config file "
+                "or get a fresh token"
             )
-        sys.exit(f"[fout] HTTP {exc.code}: {exc}")
+        sys.exit(f"[error] HTTP {exc.code}: {exc}")
     except urllib.error.URLError as exc:
-        sys.exit(f"[fout] netwerk: {exc}")
+        sys.exit(f"[error] network: {exc}")
     return 0
 
 

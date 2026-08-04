@@ -7,11 +7,9 @@ venv/
 build/
 dist/
 .geocode_cache.json
-.map_tile_cache/
 logbook.csv
 logbook.gpx
-logbook.ods
-logbook_routes.html
+logbook.html
 .claude/
 
 # lokale W2K-2-downloadconfiguratie/data -- bevat inloggegevens, hoort nooit in git

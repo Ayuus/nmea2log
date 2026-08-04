@@ -1,10 +1,9 @@
-"""Havennamen opzoeken bij GPS-posities via OpenStreetMap/Nominatim reverse geocoding.
+"""Look up port names for GPS positions via OpenStreetMap/Nominatim reverse geocoding.
 
-Gebruikt alleen de Python-standaardbibliotheek (urllib), geen extra dependency. Resultaten
-worden lokaal gecachet (op afgeronde coördinaten) zodat herhaalde runs geen nieuwe verzoeken
-sturen en het Nominatim-gebruiksbeleid (max. 1 verzoek/seconde, herkenbare User-Agent) wordt
-gerespecteerd. Voor zwaar/professioneel gebruik: overweeg een eigen Nominatim-instantie of een
-betaalde geocoding-dienst.
+Uses only the Python standard library (urllib), no extra dependency. Results are cached
+locally (keyed on rounded coordinates) so repeated runs don't send new requests, respecting
+Nominatim's usage policy (max. 1 request/second, identifiable User-Agent). For heavy/commercial
+use, consider running your own Nominatim instance or a paid geocoding service.
 """
 
 from __future__ import annotations
@@ -38,7 +37,7 @@ class Geocoder:
         self,
         *,
         cache_file: Optional[Path] = None,
-        user_agent: str = "nmea2000processor/0.1 (persoonlijk vaarlogboek)",
+        user_agent: str = "nmea2000processor/0.1 (personal sailing logbook)",
         language: str = "nl",
         precision: int = 4,
     ) -> None:
@@ -86,7 +85,7 @@ class Geocoder:
                 payload = json.loads(response.read().decode("utf-8"))
         except (urllib.error.URLError, TimeoutError, ValueError) as exc:
             self._last_request = time.monotonic()
-            return f"Onbekend ({lat:.4f}, {lon:.4f}) [geocoding mislukt: {exc}]"
+            return f"Unknown ({lat:.4f}, {lon:.4f}) [geocoding failed: {exc}]"
 
         self._last_request = time.monotonic()
         return _pick_place_name(payload, lat, lon)
@@ -100,7 +99,7 @@ class Geocoder:
 
 
 class NoGeocoder:
-    """Slaat online opzoeking over en toont in plaats daarvan de coördinaten."""
+    """Skips the online lookup and shows the coordinates instead."""
 
     def place_name(self, lat: float, lon: float) -> str:
         return f"{lat:.4f}, {lon:.4f}"
@@ -123,4 +122,4 @@ def _pick_place_name(payload: dict, lat: float, lon: float) -> str:
     if display_name:
         return display_name.split(",")[0]
 
-    return f"Onbekend ({lat:.4f}, {lon:.4f})"
+    return f"Unknown ({lat:.4f}, {lon:.4f})"

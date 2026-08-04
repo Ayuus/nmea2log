@@ -38,7 +38,7 @@ def test_iter_frames_tcp_reads_lines_and_tees(tmp_path: Path):
 
 
 def test_iter_frames_tcp_connect_error_raises_oserror():
-    # Er draait (waarschijnlijk) geen server op deze poort op localhost.
+    # There's (probably) no server running on this port on localhost.
     import pytest
 
     with pytest.raises(OSError):

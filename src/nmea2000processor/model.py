@@ -7,7 +7,7 @@ from typing import FrozenSet, Optional
 
 @dataclass(frozen=True)
 class Frame:
-    """Eén NMEA2000-boodschap, al herassembleerd door de Actisense-hardware (N2K ASCII-formaat)."""
+    """A single NMEA2000 message, already reassembled by the Actisense hardware (N2K ASCII format)."""
 
     time: datetime
     source: int
@@ -27,31 +27,31 @@ class PositionFix:
 @dataclass(frozen=True)
 class SogSample:
     time: datetime
-    sog_ms: float  # snelheid over de grond, meters/seconde
+    sog_ms: float  # speed over ground, meters/second
 
 
 @dataclass(frozen=True)
 class EngineSample:
     time: datetime
     instance: int
-    fuel_rate_lph: Optional[float]  # brandstofverbruik in L/uur, None = niet beschikbaar
-    total_hours_s: Optional[int]  # cumulatieve draaiurenteller van de motor, in seconden
+    fuel_rate_lph: Optional[float]  # fuel consumption in L/hour, None = not available
+    total_hours_s: Optional[int]  # engine's cumulative hour meter, in seconds
     oil_pressure_pa: Optional[float] = None
     oil_temperature_k: Optional[float] = None
     coolant_temperature_k: Optional[float] = None
     alternator_voltage_v: Optional[float] = None
     engine_load_pct: Optional[float] = None
-    warnings: FrozenSet[str] = field(default_factory=frozenset)  # actieve waarschuwingsvlaggen
+    warnings: FrozenSet[str] = field(default_factory=frozenset)  # active warning flags
 
 
 @dataclass(frozen=True)
 class TripFuelSample:
     time: datetime
     instance: int
-    trip_fuel_used_l: Optional[float]  # triptmeter van de motor zelf (PGN 127497), in liter
+    trip_fuel_used_l: Optional[float]  # the engine's own trip meter (PGN 127497), in liters
 
 
 @dataclass(frozen=True)
 class DepthSample:
     time: datetime
-    depth_m: Optional[float]  # waterdiepte onder de transducer (PGN 128267), in meter
+    depth_m: Optional[float]  # water depth under the transducer (PGN 128267), in meters

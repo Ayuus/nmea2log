@@ -1,8 +1,8 @@
-"""Schrijft reizen weg als één GPX-bestand (track per reis), voor gebruik in navigatiesoftware.
+"""Writes trips out as a single GPX file (one track per trip), for use in navigation software.
 
-Elke reis wordt een los <trk> met vaartijd, afstand, brandstof en draaiuren in de naam/
-beschrijving, zodat je in een kaartprogramma (OpenCPN, Navionics, etc.) in één oogopslag ziet
-wat een reis kostte als je erop klikt.
+Each trip becomes its own <trk> with duration, distance, fuel, and engine hours in the
+name/description, so a map program (OpenCPN, Navionics, etc.) shows at a glance what a trip
+cost when you click on it.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ _GPX_NAMESPACE = "http://www.topografix.com/GPX/1/1"
 
 
 def _trip_name(trip: TripLeg, utc_offset_hours: Optional[float] = None) -> str:
-    # Naam toont lokale tijd (zoals de CSV); <trkpt><time> blijft strikt UTC, zie write_gpx.
+    # Name shows local time (like the CSV); <trkpt><time> stays strictly UTC, see write_gpx.
     depart_local = _to_local(trip.depart_time, _trip_utc_offset_hours(trip, utc_offset_hours))
     return f"{depart_local:%Y-%m-%d %H:%M} {trip.depart_place} -> {trip.arrive_place}"
 
@@ -63,7 +63,7 @@ def write_gpx(trips: Iterable[TripLeg], path: Path, utc_offset_hours: Optional[f
         trkseg = SubElement(trk, "trkseg")
         for point in trip.track:
             trkpt = SubElement(trkseg, "trkpt", lat=f"{point.lat:.7f}", lon=f"{point.lon:.7f}")
-            # NMEA2000-posities zijn GPS-afgeleid en dus in UTC; we bewaren geen tijdzone apart.
+            # NMEA2000 positions are GPS-derived and thus UTC; we don't store a separate timezone.
             SubElement(trkpt, "time").text = point.time.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     tree = ElementTree(gpx)

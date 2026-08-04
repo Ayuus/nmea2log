@@ -1,34 +1,36 @@
-"""Leest Actisense EBL-logbestanden (SD-kaartlog van de W2K-1/W2K-2, BST-95 CAN-raw-formaat).
+"""Reads Actisense EBL log files (SD card log of the W2K-1/W2K-2, BST-95 CAN-raw format).
 
-Dit formaat is niet officieel door Actisense gepubliceerd. De framing (ESC/SOH/NL-omkadering
-met byte-stuffing) en de CAN-ID-decodering hieronder zijn overgenomen van de open-source
-Go-implementatie in github.com/aldas/go-nmea-client (actisense/eblreader.go) en met de hand
-geverifieerd tegen de testvectoren daarin (o.a. een PGN 129025-voorbeeld dat exact naar
-priority=2, pgn=129025, source=0, destination=255 decodeert).
+This format was never officially published by Actisense. The framing (ESC/SOH/NL wrapping
+with byte stuffing) and the CAN ID decoding below were taken from the open-source Go
+implementation in github.com/aldas/go-nmea-client (actisense/eblreader.go) and verified by
+hand against the test vectors in it (including a PGN 129025 example that decodes exactly to
+priority=2, pgn=129025, source=0, destination=255).
 
-Belangrijk verschil met het N2K ASCII-pad (``ascii_reader.py``):
+Important difference from the N2K ASCII path (``ascii_reader.py``):
 
-1. EBL bevat **rauwe CAN-frames** (max. 8 databytes), dus PGN's die groter zijn dan 8 bytes
-   (bij ons: 127489 en 127497) moeten zelf via het NMEA2000 "Fast Packet"-protocol weer in
-   elkaar gezet worden — dat gebeurt hier.
-2. Elk EBL-record heeft weliswaar een eigen 2-byte tijdteller, maar de betekenis daarvan is
-   nergens betrouwbaar gedocumenteerd (zelfs de referentie-implementatie hierboven gokt ernaar
-   en gebruikt in de praktijk gewoon de leestijd). Die teller wordt daarom hier genegeerd.
-   In plaats daarvan wordt de absolute datum/tijd afgeleid uit **PGN 126992 (System Time)**,
-   die zelf al in de N2K-stream zit en een volledig gedocumenteerde, ondubbelzinnige codering
-   heeft. Gevolg: frames vóór de eerste 126992-boodschap worden overgeslagen (er is dan nog
-   geen tijdreferentie), en de tijdsresolutie is gelijk aan de zendfrequentie van PGN 126992 op
-   jouw NMEA2000-netwerk (meestal rond de 1x/seconde).
+1. EBL contains **raw CAN frames** (max. 8 data bytes), so PGNs larger than 8 bytes (for us:
+   127489 and 127497) have to be reassembled ourselves via the NMEA2000 "Fast Packet"
+   protocol -- that happens here.
+2. Each EBL record does have its own 2-byte time counter, but its meaning is nowhere reliably
+   documented (even the reference implementation above only guesses at it, and in practice
+   just uses the read time). That counter is therefore ignored here. Instead, the absolute
+   date/time is derived from **PGN 126992 (System Time)**, which is already present in the
+   N2K stream itself and has a fully documented, unambiguous encoding. Consequence: frames
+   before the first 126992 message are skipped (there's no time reference yet at that point),
+   and the time resolution equals the transmit rate of PGN 126992 on your NMEA2000 network
+   (usually around 1x/second).
 
-   Bij lange periodes zonder GPS/instrumentactiviteit (bv. voor anker, plotter uit) kan een heel
-   bestand geen enkele 126992-boodschap bevatten, terwijl andere PGN's (autopiloot, gyro) wel
-   gewoon doorlopen. Geef daarom bij het verwerken van meerdere opeenvolgende bestanden dezelfde
-   ``time_state``-dict door aan elke ``iter_frames``-aanroep (zie ``cli.py``): de laatst bekende
-   tijd blijft dan geldig over bestandsgrenzen heen, in plaats van dat zo'n heel bestand stil
-   wordt weggegooid omdat het toevallig zelf geen 126992-boodschap bevat.
+   During long periods without GPS/instrument activity (e.g. at anchor, plotter off), an
+   entire file can contain no 126992 message at all, while other PGNs (autopilot, gyro) keep
+   coming in normally. So when processing multiple consecutive files, pass the same
+   ``time_state`` dict to every ``iter_frames`` call (see ``cli.py``): the last known time then
+   stays valid across file boundaries, instead of an entire file being silently discarded just
+   because it happens not to contain a 126992 message itself.
 
-Dit is nog niet tegen een echt EBL-bestand van een W2K-2 geverifieerd — controleer dit zodra
-je een echt bestand hebt (zie README).
+Validated against real SD card logs from a W2K-2 with a Yanmar 4LV195Z engine: a complete cold
+engine start (fuel rate, oil pressure build-up, warm-up, hour meter, even the "Preheat
+Indicator" warning during preheating) came out physically plausible and internally consistent
+(see README).
 """
 
 from __future__ import annotations
@@ -46,7 +48,7 @@ _SOH = 0x01
 _NL = 0x0A
 _CMD_RAW_ACTISENSE_MESSAGE_RECEIVED = 0x95
 
-# PGN's die bij ons groter zijn dan 8 bytes en dus als NMEA2000 "Fast Packet" over de bus gaan.
+# PGNs that are larger than 8 bytes for us and thus go over the bus as NMEA2000 "Fast Packet".
 _FAST_PACKET_PGNS = {PGN_ENGINE_DYNAMIC, PGN_TRIP_FUEL_ENGINE}
 
 _STATE_WAITING = 0
@@ -55,7 +57,7 @@ _STATE_ESCAPING = 2
 
 
 def _iter_raw_records(data: bytes) -> Iterator[bytes]:
-    """Haalt ESC/SOH/NL-omkaderde records uit de ruwe bestandsbytes (met byte-stuffing)."""
+    """Extracts ESC/SOH/NL-wrapped records from the raw file bytes (with byte stuffing)."""
     state = _STATE_WAITING
     message = bytearray()
     previous_byte: Optional[int] = None
@@ -71,42 +73,42 @@ def _iter_raw_records(data: bytes) -> Iterator[bytes]:
             else:
                 message.append(current_byte)
         elif state == _STATE_ESCAPING:
-            if current_byte == _ESC:  # dubbele ESC = letterlijke 0x1B-databyte
+            if current_byte == _ESC:  # double ESC = literal 0x1B data byte
                 message.append(current_byte)
                 state = _STATE_READING
-            elif current_byte == _NL:  # ESC+NL = einde record
+            elif current_byte == _NL:  # ESC+NL = end of record
                 if len(message) > 4:
                     yield bytes(message)
                 message = bytearray()
                 state = _STATE_WAITING
-            else:  # onbekende ESC+???-sequentie: negeer dit record, wacht op nieuwe start
+            else:  # unknown ESC+???  sequence: discard this record, wait for a new start
                 message = bytearray()
                 state = _STATE_WAITING
         previous_byte = current_byte
 
 
 def _parse_can_id(can_id: int) -> Tuple[int, int, int, int]:
-    """Ontleedt een 29-bit uitgebreide CAN-ID naar (priority, pgn, source, destination)."""
+    """Decomposes a 29-bit extended CAN ID into (priority, pgn, source, destination)."""
     source = can_id & 0xFF
     ps = (can_id >> 8) & 0xFF
     pf = (can_id >> 16) & 0xFF
     dp = (can_id >> 24) & 0x1
     priority = (can_id >> 26) & 0x7
-    if pf < 240:  # PDU1: gericht bericht, PS-byte is het bestemmingsadres
+    if pf < 240:  # PDU1: addressed message, the PS byte is the destination address
         pgn = (dp << 16) | (pf << 8)
         destination = ps
-    else:  # PDU2: broadcast, PS-byte hoort bij de PGN
+    else:  # PDU2: broadcast, the PS byte is part of the PGN
         pgn = (dp << 16) | (pf << 8) | ps
         destination = 0xFF
     return priority, pgn, source, destination
 
 
 def _decode_bst95_record(raw: bytes) -> Optional[Tuple[int, int, int, int, bytes]]:
-    """raw = alles ná de '07 95'-header: lengte(1) + tijdteller(2, genegeerd) + CAN-ID(4) + data."""
+    """raw = everything after the '07 95' header: length(1) + time counter(2, ignored) + CAN ID(4) + data."""
     if len(raw) < 8:
         return None
     if raw[0] != len(raw) - 1:
-        return None  # lengteveld klopt niet -> waarschijnlijk een corrupt record
+        return None  # length field doesn't match -> probably a corrupt record
     can_id = raw[3] | (raw[4] << 8) | (raw[5] << 16) | (raw[6] << 24)
     priority, pgn, source, destination = _parse_can_id(can_id)
     return priority, pgn, source, destination, raw[7:]
@@ -123,7 +125,7 @@ class _FastPacketAssembly:
 def _reassemble_fast_packet(
     key: Tuple[int, int], payload: bytes, state: Dict[Tuple[int, int], _FastPacketAssembly]
 ) -> Optional[bytes]:
-    """NMEA2000 Fast Packet-reassemblage: byte 0 = (volgnummer<<5 | frame-index)."""
+    """NMEA2000 Fast Packet reassembly: byte 0 = (sequence-counter<<5 | frame-index)."""
     if len(payload) < 2:
         return None
     frame_header = payload[0]
@@ -137,7 +139,7 @@ def _reassemble_fast_packet(
     else:
         assembly = state.get(key)
         if assembly is None or assembly.seq_counter != seq_counter or assembly.next_frame_index != frame_index:
-            state.pop(key, None)  # gemiste of onverwachte frame -> deze reassemblage opgeven
+            state.pop(key, None)  # missed or unexpected frame -> give up this reassembly
             return None
         assembly.data.extend(payload[1:8])
         assembly.next_frame_index += 1
@@ -151,14 +153,13 @@ def _reassemble_fast_packet(
 def iter_frames(
     path: Union[str, Path], time_state: Optional[Dict[str, Optional[datetime]]] = None
 ) -> Iterator[Frame]:
-    """Leest een EBL-logbestand en geeft er gedecodeerde Frame's van terug, in bestandsvolgorde.
+    """Reads an EBL log file and yields decoded Frames from it, in file order.
 
-    Vereist een PGN 126992 (System Time)-boodschap om een absolute tijdreferentie te krijgen;
-    frames daarvóór worden overgeslagen. ``time_state`` is een muteerbare dict (sleutel
-    ``"current"``) die de laatst bekende tijd bijhoudt; geef dezelfde dict door aan opeenvolgende
-    bestanden uit dezelfde sessie zodat de tijdreferentie behouden blijft over bestandsgrenzen
-    heen (zie de moduledocstring hierboven). Standaard (``None``) begint elk bestand met een
-    schone lei, zoals voorheen.
+    Requires a PGN 126992 (System Time) message to get an absolute time reference; frames
+    before that are skipped. ``time_state`` is a mutable dict (key ``"current"``) that tracks
+    the last known time; pass the same dict to consecutive files from the same session so the
+    time reference is preserved across file boundaries (see the module docstring above).
+    Default (``None``) starts each file with a clean slate, as before.
     """
     if time_state is None:
         time_state = {}
@@ -186,7 +187,7 @@ def iter_frames(
 
         current_time = time_state.get("current")
         if current_time is None:
-            continue  # nog geen tijdreferentie gezien (in dit bestand of een eerdere in de sessie)
+            continue  # no time reference seen yet (in this file or an earlier one in the session)
 
         yield Frame(
             time=current_time, source=source, destination=destination, priority=priority, pgn=pgn, data=payload
