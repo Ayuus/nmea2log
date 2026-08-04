@@ -43,6 +43,7 @@ class _Totals:
     fuel_liters_device: Optional[float]
     moving_hours: float
     engine_hours: Dict[int, float]
+    engine_hours_current: Dict[int, float]
 
 
 def _compute_totals(trips: List[TripLeg]) -> _Totals:
@@ -52,9 +53,14 @@ def _compute_totals(trips: List[TripLeg]) -> _Totals:
     fuel_liters_device = sum(device_values) if device_values else None
     moving_hours = sum(trip.duration.total_seconds() for trip in trips) / 3600.0
     engine_hours: Dict[int, float] = {}
+    engine_hours_current: Dict[int, float] = {}
+    # ``trips`` is already sorted chronologically by the caller, so the last value seen per
+    # engine instance is the most recent known reading of its absolute hour meter.
     for trip in trips:
         for instance, hours in trip.engine_hours.items():
             engine_hours[instance] = engine_hours.get(instance, 0.0) + hours
+        for instance, hours in trip.engine_hours_total.items():
+            engine_hours_current[instance] = hours
     return _Totals(
         trip_count=len(trips),
         distance_nm=distance_nm,
@@ -62,6 +68,7 @@ def _compute_totals(trips: List[TripLeg]) -> _Totals:
         fuel_liters_device=fuel_liters_device,
         moving_hours=moving_hours,
         engine_hours=engine_hours,
+        engine_hours_current=engine_hours_current,
     )
 
 
@@ -94,8 +101,23 @@ def _totals_html(totals: _Totals) -> str:
         items.append(("Avg. consumption", f"{_nl_num(avg_l_per_nm, 2)} L/nm"))
     if avg_l_per_hour is not None:
         items.append(("Avg. consumption", f"{_nl_num(avg_l_per_hour)} L/h"))
-    for instance, hours in sorted(totals.engine_hours.items()):
-        items.append((f"Engine hours, engine {instance}", f"{_nl_num(hours)} h"))
+
+    # The engine's own absolute hour meter (for maintenance intervals), as of the most recent
+    # trip -- distinct from "hours logged", which only counts time run during this logbook's
+    # own trips and misses everything the engine ran before logging started.
+    if len(totals.engine_hours_current) == 1:
+        hours = next(iter(totals.engine_hours_current.values()))
+        items.append(("Engine hour meter", f"{_nl_num(hours)} h"))
+    else:
+        for instance, hours in sorted(totals.engine_hours_current.items()):
+            items.append((f"Engine hour meter, engine {instance}", f"{_nl_num(hours)} h"))
+
+    if len(totals.engine_hours) == 1:
+        hours = next(iter(totals.engine_hours.values()))
+        items.append(("Hours logged", f"{_nl_num(hours)} h"))
+    else:
+        for instance, hours in sorted(totals.engine_hours.items()):
+            items.append((f"Hours logged, engine {instance}", f"{_nl_num(hours)} h"))
 
     cards = "".join(
         f'<div class="stat"><div class="stat-label">{escape(label)}</div>'

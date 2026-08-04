@@ -19,6 +19,7 @@ def _trip(**overrides) -> TripLeg:
         fuel_liters=9.75,
         fuel_liters_device=None,
         engine_hours={0: 1.5},
+        engine_hours_total={0: 123.4},
         engine_health={},
         min_depth_m=None,
         min_depth_lat=None,
@@ -52,11 +53,31 @@ def test_write_csv_basic(tmp_path: Path):
     assert row["fuel_L_calculated"] == "9,8"
     assert row["fuel_L_engine_meter"] == ""
     assert row["avg_consumption_L_per_nm"] == "0,79"
-    assert row["engine_hours"] == "engine 0: 1,5 h"
+    assert row["engine_hours"] == "1,5 h"  # no "engine 0:" label with just one engine
     assert row["engine_health"] == ""
     assert row["warnings"] == ""
     assert row["min_depth_m"] == ""
     assert row["min_depth_position"] == ""
+
+
+def test_write_csv_labels_engines_when_there_are_more_than_one(tmp_path: Path):
+    trip = _trip(
+        engine_hours={0: 1.5, 1: 1.4},
+        engine_health={
+            0: EngineHealth(None, None, None, None, None, warnings=frozenset({"Low Oil Pressure"})),
+            1: EngineHealth(None, None, None, None, None, warnings=frozenset()),
+        },
+    )
+    out_path = tmp_path / "logbook.csv"
+
+    write_csv([trip], out_path)
+
+    with out_path.open(encoding="utf-8-sig") as handle:
+        rows = list(csv.DictReader(handle, delimiter=";"))
+
+    row = rows[0]
+    assert row["engine_hours"] == "engine 0: 1,5 h, engine 1: 1,4 h"
+    assert row["warnings"] == "engine 0: Low Oil Pressure"
 
 
 def test_write_csv_with_device_fuel(tmp_path: Path):
@@ -101,7 +122,7 @@ def test_write_csv_engine_health_warnings_and_depth(tmp_path: Path):
     assert row["max_speed_kn"] == "8,9"
     assert "oil 3,2 bar" in row["engine_health"]
     assert "coolant 82°C" in row["engine_health"]
-    assert row["warnings"] == "engine 0: Low Oil Pressure"
+    assert row["warnings"] == "Low Oil Pressure"
     assert row["min_depth_m"] == "2,4"
     assert row["min_depth_position"] == "52.3235, 4.9422"
 

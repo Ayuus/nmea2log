@@ -52,6 +52,24 @@ def _merge_by_source(target: Dict[int, List[_T]], addition: Dict[int, List[_T]])
         target.setdefault(source, []).extend(items)
 
 
+def _filter_to_dominant_engine(
+    engine_samples: List[EngineSample], trip_fuel_samples: List[TripFuelSample]
+) -> Tuple[List[EngineSample], List[TripFuelSample]]:
+    """Keeps only the engine instance with the most samples, discarding any other instance
+    entirely. Used when ``--engine-count 1`` tells us there's really just one physical engine,
+    so any additional instance that shows up in the data is noise (a duplicate/ghost source),
+    not a second engine -- the same idea as ``_dominant_source_only`` for GPS sources."""
+    by_instance: Dict[int, List[EngineSample]] = {}
+    for sample in engine_samples:
+        by_instance.setdefault(sample.instance, []).append(sample)
+    if len(by_instance) <= 1:
+        return engine_samples, trip_fuel_samples
+
+    dominant = max(by_instance, key=lambda instance: len(by_instance[instance]))
+    filtered_fuel = [sample for sample in trip_fuel_samples if sample.instance == dominant]
+    return by_instance[dominant], filtered_fuel
+
+
 def _select_primary_gps_source(
     fixes_by_source: Dict[int, List[PositionFix]], sogs_by_source: Dict[int, List[SogSample]]
 ) -> Tuple[List[PositionFix], List[SogSample], Optional[int]]:
@@ -245,6 +263,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Boat name shown at the top of the HTML logbook (default: none, or the "
         "'boat_name' setting from the config file)",
     )
+    parser.add_argument(
+        "--engine-count",
+        type=int,
+        default=None,
+        help="Number of physical engines on the boat. With 1, any additional engine instance "
+        "found in the data is treated as noise (a duplicate/ghost source) and discarded, and "
+        "output drops the redundant 'engine 0:' label. Default: not set -- every distinct "
+        "engine instance found in the data is kept and labeled (already unlabeled "
+        "automatically if only one instance ever shows up).",
+    )
     _apply_config_defaults(parser)
     return parser
 
@@ -272,6 +300,7 @@ def _apply_config_defaults(parser: argparse.ArgumentParser) -> None:
         ("language", str),
         ("utc_offset", float),
         ("boat_name", str),
+        ("engine_count", int),
     ):
         if key in section:
             defaults[key] = caster(section[key])
@@ -338,6 +367,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not all_fixes:
         print("No position data (PGN 129025) found.", file=sys.stderr)
         return 1
+
+    if args.engine_count == 1:
+        all_engine, all_trip_fuel = _filter_to_dominant_engine(all_engine, all_trip_fuel)
 
     geocoder = NoGeocoder() if args.no_geocode else Geocoder(cache_file=args.cache_file, language=args.language)
 

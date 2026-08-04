@@ -18,6 +18,7 @@ def _trip(**overrides) -> TripLeg:
         fuel_liters=6.0,
         fuel_liters_device=None,
         engine_hours={0: 1.5},
+        engine_hours_total={0: 123.4},
         engine_health={},
         min_depth_m=None,
         min_depth_lat=None,
@@ -57,8 +58,39 @@ def test_write_html_logbook_shows_totals(tmp_path: Path):
     html = out_path.read_text(encoding="utf-8")
     assert "16,0 nm" in html  # total distance
     assert "8,0 L" in html  # total fuel
-    assert "Engine hours, engine 0" in html
-    assert "Engine hours, engine 1" in html
+    assert "Hours logged, engine 0" in html
+    assert "Hours logged, engine 1" in html
+
+
+def test_write_html_logbook_totals_omit_engine_label_with_one_engine(tmp_path: Path):
+    trip = _trip(engine_hours={0: 1.5})
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([trip], out_path)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert "Hours logged</div>" in html
+    assert "engine 0" not in html.lower()
+
+
+def test_write_html_logbook_shows_current_engine_hour_meter(tmp_path: Path):
+    # a later trip's reading should win over an earlier one, since it's the most recent
+    trip_a = _trip(
+        depart_time=datetime(2026, 7, 15, 9, 0), arrive_time=datetime(2026, 7, 15, 10, 0),
+        engine_hours_total={0: 100.0},
+    )
+    trip_b = _trip(
+        depart_time=datetime(2026, 7, 16, 9, 0), arrive_time=datetime(2026, 7, 16, 10, 0),
+        engine_hours_total={0: 102.5},
+    )
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([trip_a, trip_b], out_path)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert "Engine hour meter</div>" in html
+    assert "102,5 h" in html
+    assert "100,0 h" not in html
 
 
 def test_write_html_logbook_groups_by_year_and_week(tmp_path: Path):

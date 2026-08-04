@@ -25,6 +25,7 @@ def _trip(**overrides) -> TripLeg:
         fuel_liters=4.0,
         fuel_liters_device=None,
         engine_hours={},
+        engine_hours_total={},
         engine_health={},
         min_depth_m=None,
         min_depth_lat=None,
@@ -66,8 +67,8 @@ def test_write_gpx_basic(tmp_path: Path):
     assert "Speed: avg 5,8 kn, max 6,1 kn" in desc
     assert "Fuel (calculated): 4,0 L" in desc
     assert "Fuel (engine meter): 3,8 L" in desc
-    assert "engine 0: 0,5 h" in desc
-    assert "Warnings: engine 0: Low Oil Pressure" in desc
+    assert "Engine hours: 0,5 h" in desc  # no "engine 0:" label with just one engine
+    assert "Warnings: Low Oil Pressure" in desc
     assert "Min. depth: 3,1 m" in desc
 
     points = trk.findall("gpx:trkseg/gpx:trkpt", _NS)

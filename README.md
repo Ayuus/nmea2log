@@ -55,7 +55,11 @@ dev-dependency voor de tests.
      triptmeter is een teller die de motor zelf beheert en kan door de gebruiker op het
      display gereset zijn, dus hij hoeft niet exact overeen te komen met onze eigen
      vertrek/aankomst-indeling.
-   - **Draaiuren**: het verschil tussen de motoruren-teller bij vertrek en aankomst.
+   - **Draaiuren**: het verschil tussen de motoruren-teller bij vertrek en aankomst. Draaiuren,
+     motorgezondheid en waarschuwingen worden per motor-instance getoond ("engine 0: ...",
+     "engine 1: ...") zodra er meer dan één instance in de data voorkomt; met precies één motor
+     valt dat label vanzelf weg. Zie je toch een tweede instance verschijnen terwijl je maar één
+     motor hebt (een duplicaat/spook-bron), zet dan `--engine-count 1` om die te negeren.
    - **Motorgezondheid**: gemiddelde olie-druk/-temperatuur, koelvloeistoftemperatuur,
      alternatorspanning en maximale motorbelasting tijdens de reis, plus een aparte
      **waarschuwingen**-kolom met alle actieve statusvlaggen (bv. "Low Oil Pressure") die
@@ -74,8 +78,11 @@ dev-dependency voor de tests.
    brandstof en draaiuren van die reis.
 7. **HTML-logboek** (`html_writer.py`): één zelfstandig `.html`-bestand (zelfde bestandsnaam,
    `.html`-extensie) — geen los kaartbestand of werkmap meer nodig. Bovenin de bootnaam
-   (`--boat-name`, of de `boat_name`-instelling in het configbestand) en totalen (aantal
-   reizen, totale afstand, brandstof, gemiddeld verbruik, draaiuren per motor). Daaronder de
+   (`--boat-name`, of de `boat_name`-instelling in het configbestand) en totalen: aantal
+   reizen, totale afstand, brandstof, gemiddeld verbruik, **motoruren-teller** (de absolute
+   stand van de motor-eigen draaiurenteller bij de laatst gelogde reis — handig voor
+   onderhoudsintervallen, telt dus ook uren mee die de motor al draaide vóórdat je begon te
+   loggen) en "uren gelogd" (opgeteld over alleen de reizen in dit logboek). Daaronder de
    reizen gegroepeerd per jaar en ISO-week. Elke reis met een track heeft een "Map"-knop die
    een inzoombare Leaflet/OpenStreetMap-kaart met de routelijn erbij opent, ingebed in dezelfde
    pagina. Kaarttegels en de Leaflet-bibliotheek komen van een CDN, dus **bekijken** vereist
@@ -180,6 +187,7 @@ nmea2log --live 192.168.4.1:60001 --tee 2026-07-16.raw -o logbook.csv
 | `--start-date` | Forceer de startdatum van het eerste logbestand (`YYYY-MM-DD`); niet van toepassing bij `--live` |
 | `--utc-offset UREN` | Vaste tijdzone-offset (bv. `2` voor CEST) voor de weergegeven tijden. Standaard: automatisch geschat per reis uit de vertreklengtegraad |
 | `--boat-name NAAM` | Bootnaam bovenin het HTML-logboek (standaard: geen, of de `boat_name`-instelling uit het configbestand) |
+| `--engine-count N` | Aantal fysieke motoren. Met `1` wordt een eventuele extra motor-instance in de data als ruis genegeerd (net als bij de GPS-brondominantie) |
 
 Alle NMEA2000-tijden zijn UTC; in de CSV, het HTML-logboek en de GPX-tracknamen wordt dit
 omgerekend naar lokale tijd. Zonder `--utc-offset` wordt de offset per reis geschat uit de

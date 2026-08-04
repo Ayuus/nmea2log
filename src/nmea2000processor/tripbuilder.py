@@ -67,6 +67,7 @@ class TripLeg:
     fuel_liters: float  # calculated by integrating the fuel rate (PGN 127489) over time
     fuel_liters_device: Optional[float]  # engine's own trip meter (PGN 127497), None = not available
     engine_hours: Dict[int, float]  # engine instance -> hours run during this trip
+    engine_hours_total: Dict[int, float]  # engine instance -> absolute hour-meter reading at arrival
     engine_health: Dict[int, EngineHealth]  # engine instance -> health indicators + warnings
     min_depth_m: Optional[float]  # shallowest water depth measured during this trip
     min_depth_lat: Optional[float]
@@ -203,6 +204,25 @@ def _engine_hours_delta(
             continue
         delta_s = window[-1].total_hours_s - window[0].total_hours_s
         result[instance] = max(delta_s, 0) / 3600.0
+    return result
+
+
+def _engine_hours_total(samples: List[EngineSample], start: datetime, end: datetime) -> Dict[int, float]:
+    """Absolute engine-hour-meter reading (not a delta) at the end of the window, per engine
+    instance -- the engine's own lifetime counter, e.g. for tracking maintenance intervals,
+    as opposed to ``_engine_hours_delta``'s "hours run just during this trip"."""
+    by_instance: Dict[int, List[EngineSample]] = {}
+    for sample in samples:
+        if sample.total_hours_s is None:
+            continue
+        by_instance.setdefault(sample.instance, []).append(sample)
+
+    result: Dict[int, float] = {}
+    for instance, seq in by_instance.items():
+        window = sorted((s for s in seq if start <= s.time <= end), key=lambda s: s.time)
+        if not window:
+            continue
+        result[instance] = window[-1].total_hours_s / 3600.0
     return result
 
 
@@ -389,6 +409,7 @@ def build_trips(
                 fuel_liters=_fuel_liters(engine_samples, depart_time, arrive_time),
                 fuel_liters_device=_device_fuel_delta(trip_fuel_samples, depart_time, arrive_time),
                 engine_hours=_engine_hours_delta(engine_samples, depart_time, arrive_time),
+                engine_hours_total=_engine_hours_total(engine_samples, depart_time, arrive_time),
                 engine_health=_engine_health(engine_samples, depart_time, arrive_time),
                 min_depth_m=min_depth_m,
                 min_depth_lat=min_depth_lat,

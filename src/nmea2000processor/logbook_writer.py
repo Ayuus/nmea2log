@@ -44,6 +44,9 @@ def _format_duration(duration: timedelta) -> str:
 
 
 def _format_engine_health(engine_health: Dict[int, EngineHealth]) -> str:
+    # Only label per engine instance when there's more than one -- with a single engine the
+    # "engine 0:" prefix is just noise repeated on every row.
+    single_engine = len(engine_health) == 1
     parts = []
     for instance, health in sorted(engine_health.items()):
         bits = []
@@ -58,15 +61,18 @@ def _format_engine_health(engine_health: Dict[int, EngineHealth]) -> str:
         if health.engine_load_pct_max is not None:
             bits.append(f"load max {_nl_num(health.engine_load_pct_max, 0)}%")
         if bits:
-            parts.append(f"engine {instance}: " + ", ".join(bits))
+            prefix = "" if single_engine else f"engine {instance}: "
+            parts.append(prefix + ", ".join(bits))
     return "; ".join(parts)
 
 
 def _format_warnings(engine_health: Dict[int, EngineHealth]) -> str:
+    single_engine = len(engine_health) == 1
     parts = []
     for instance, health in sorted(engine_health.items()):
         if health.warnings:
-            parts.append(f"engine {instance}: " + ", ".join(sorted(health.warnings)))
+            prefix = "" if single_engine else f"engine {instance}: "
+            parts.append(prefix + ", ".join(sorted(health.warnings)))
     return "; ".join(parts)
 
 
@@ -149,6 +155,9 @@ def _avg_consumption_l_per_nm(trip: TripLeg) -> Optional[float]:
 
 
 def _engine_hours_text(trip: TripLeg) -> str:
+    if len(trip.engine_hours) == 1:
+        hours = next(iter(trip.engine_hours.values()))
+        return f"{_nl_num(hours)} h"
     return ", ".join(
         f"engine {instance}: {_nl_num(hours)} h" for instance, hours in sorted(trip.engine_hours.items())
     )

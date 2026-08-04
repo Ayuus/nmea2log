@@ -61,6 +61,9 @@ def test_build_trips_single_leg():
     assert trip.fuel_liters > 0
     assert 0 in trip.engine_hours
     assert trip.engine_hours[0] > 0
+    # absolute hour-meter reading at arrival, not just the delta run during this trip -- the
+    # scenario's engine samples start at total_hours_s = 3600*100 (i.e. 100h already on the clock)
+    assert trip.engine_hours_total[0] == pytest.approx(100.7, abs=0.05)
     assert trip.fuel_liters_device is None  # no PGN 127497 supplied
     assert trip.avg_speed_kn == pytest.approx(3.0 / 0.514444, rel=1e-3)
     assert trip.max_speed_kn == pytest.approx(3.0 / 0.514444, rel=1e-3)

@@ -2,11 +2,12 @@ from datetime import datetime
 
 from nmea2000processor.cli import (
     _dominant_source_only,
+    _filter_to_dominant_engine,
     _merge_by_source,
     _select_primary_gps_source,
     build_arg_parser,
 )
-from nmea2000processor.model import PositionFix, SogSample
+from nmea2000processor.model import EngineSample, PositionFix, SogSample, TripFuelSample
 
 
 def test_dominant_source_only_picks_largest_group():
@@ -111,3 +112,30 @@ def test_config_file_default_is_overridden_by_explicit_cli_arg(tmp_path, monkeyp
     args = build_arg_parser().parse_args(["--min-trip-distance-nm", "0.9"])
 
     assert args.min_trip_distance_nm == 0.9
+
+
+def test_filter_to_dominant_engine_keeps_only_largest_instance():
+    engine_samples = (
+        [EngineSample(datetime(2026, 7, 15, 9, 0), 0, 8.0, 3600) for _ in range(10)]
+        + [EngineSample(datetime(2026, 7, 15, 9, 0), 1, 8.0, 3600) for _ in range(2)]
+    )
+    trip_fuel_samples = [
+        TripFuelSample(datetime(2026, 7, 15, 9, 0), 0, 100.0),
+        TripFuelSample(datetime(2026, 7, 15, 9, 0), 1, 50.0),
+    ]
+
+    filtered_engine, filtered_fuel = _filter_to_dominant_engine(engine_samples, trip_fuel_samples)
+
+    assert all(sample.instance == 0 for sample in filtered_engine)
+    assert len(filtered_engine) == 10
+    assert filtered_fuel == [trip_fuel_samples[0]]
+
+
+def test_filter_to_dominant_engine_passthrough_when_already_single_instance():
+    engine_samples = [EngineSample(datetime(2026, 7, 15, 9, 0), 0, 8.0, 3600)]
+    trip_fuel_samples = [TripFuelSample(datetime(2026, 7, 15, 9, 0), 0, 100.0)]
+
+    filtered_engine, filtered_fuel = _filter_to_dominant_engine(engine_samples, trip_fuel_samples)
+
+    assert filtered_engine == engine_samples
+    assert filtered_fuel == trip_fuel_samples
