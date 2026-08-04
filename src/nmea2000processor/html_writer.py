@@ -44,6 +44,7 @@ class _Totals:
     moving_hours: float
     engine_hours: Dict[int, float]
     engine_hours_current: Dict[int, float]
+    max_speed_kn: Optional[float]
 
 
 def _compute_totals(trips: List[TripLeg]) -> _Totals:
@@ -61,6 +62,10 @@ def _compute_totals(trips: List[TripLeg]) -> _Totals:
             engine_hours[instance] = engine_hours.get(instance, 0.0) + hours
         for instance, hours in trip.engine_hours_total.items():
             engine_hours_current[instance] = hours
+
+    speeds = [trip.max_speed_kn for trip in trips if trip.max_speed_kn is not None]
+    max_speed_kn = max(speeds) if speeds else None
+
     return _Totals(
         trip_count=len(trips),
         distance_nm=distance_nm,
@@ -69,6 +74,7 @@ def _compute_totals(trips: List[TripLeg]) -> _Totals:
         moving_hours=moving_hours,
         engine_hours=engine_hours,
         engine_hours_current=engine_hours_current,
+        max_speed_kn=max_speed_kn,
     )
 
 
@@ -131,6 +137,8 @@ def _totals_html(totals: _Totals) -> str:
         items.append(("Avg. consumption", f"{_nl_num(avg_l_per_nm, 2)} L/nm"))
     if avg_l_per_hour is not None:
         items.append(("Avg. consumption", f"{_nl_num(avg_l_per_hour)} L/h"))
+    if totals.max_speed_kn is not None:
+        items.append(("Top speed", f"{_nl_num(totals.max_speed_kn)} kn"))
 
     # The engine's own absolute hour meter (for maintenance intervals), as of the most recent
     # trip -- distinct from "hours logged", which only counts time run during this logbook's
@@ -178,6 +186,7 @@ def _trip_row_html(
         _format_duration(trip.duration),
         f"{_nl_num(trip.distance_nm)} nm",
         _nl_num(trip.avg_speed_kn) + " kn" if trip.avg_speed_kn is not None else "",
+        _nl_num(trip.max_speed_kn) + " kn" if trip.max_speed_kn is not None else "",
         _nl_num(trip.fuel_liters) + " L",
         f"{_nl_num(avg_consumption_nm, 2)} L/nm" if avg_consumption_nm is not None else "",
         escape(_engine_hours_text(trip)),
@@ -191,7 +200,7 @@ def _trip_row_html(
         title = escape(f"{depart_local:%Y-%m-%d %H:%M} {trip.depart_place} -> {trip.arrive_place}")
         map_row = (
             f'<tr class="trip-map-row" data-trip="{idx}" style="display:none">'
-            f'<td colspan="14"><div class="trip-map-title">{title}</div>'
+            f'<td colspan="15"><div class="trip-map-title">{title}</div>'
             f'<div class="map" id="map-{idx}"></div></td></tr>'
         )
     uid_attr = f' data-uid="{escape(trip_uid)}"' if trip_uid else ""
@@ -207,6 +216,7 @@ _HEADERS = [
     "Duration",
     "Distance",
     "Avg speed",
+    "Max speed",
     "Fuel",
     "L/nm",
     "Engine hours",
