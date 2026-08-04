@@ -1,216 +1,233 @@
-# nmea2000processor
+# nmea2log
 
-Pure Python-applicatie die NMEA2000-logbestanden van een **Actisense W2K-2** omzet naar een
-vaarlogboek: vertrek-/aankomsthaven, brandstofverbruik (uit motordata, niet uit een tanksensor)
-en gedraaide motoruren. Schrijft drie bestanden weg (zelfde naam als `-o`, verschillende
-extensie): een **CSV** (`.csv`), een **GPX** met de gevaren route per reis (`.gpx`, te openen in
-navigatiesoftware zoals OpenCPN/Navionics), en een **HTML-logboek** (`.html`) — één zelfstandig
-bestand met bootnaam, totalen (afstand/brandstof/draaiuren/gemiddeld verbruik), reizen per
-jaar/week gegroepeerd, en een klikbare, inzoombare kaart per reis.
+Pure Python application that turns NMEA2000 log files from an **Actisense W2K-2** into a
+sailing logbook: departure/arrival port, fuel consumption (from engine data, not a tank sensor),
+and engine hours. Writes three files (same name as `-o`, different extension): a **CSV**
+(`.csv`), a **GPX** with the sailed route per trip (`.gpx`, opens in navigation software like
+OpenCPN/Navionics), and an **HTML logbook** (`.html`) — one self-contained file with the boat
+name, totals (distance/fuel/engine hours/average consumption), trips grouped by year/week, and a
+clickable, zoomable map per trip.
 
-Geen enkele runtime-dependency buiten de Python-standaardbibliotheek — alleen `pytest` als
-dev-dependency voor de tests.
+> **Attribution**: the SD-card `.ebl` binary log format has never been officially published by
+> Actisense. `ebl_reader.py` is a clean-room Python reimplementation based on reading the
+> open-source Go library [aldas/go-nmea-client](https://github.com/aldas/go-nmea-client)
+> (Apache-2.0 license), specifically
+> [`actisense/eblreader.go`](https://github.com/aldas/go-nmea-client/blob/main/actisense/eblreader.go)
+> — no code was copied from it, only the understanding of the framing/byte-stuffing/CAN-ID
+> layout it documents. See "Assumptions & limitations" below for how this was validated against
+> real data.
 
-## Hoe het werkt
+No runtime dependency beyond the Python standard library — only `pytest` as a dev dependency for
+the tests.
 
-1. **Inlezen** — twee bestandsformaten, automatisch gekozen op basis van de extensie:
-   - `.ebl` (`ebl_reader.py`): het binaire formaat van de **SD-kaart-logfunctie** van de W2K-2
-     (BST-95 CAN-raw). Hier moet de app zelf NMEA2000 Fast-Packet-frames herassembleren. Dit
-     formaat is reverse-engineered (zie "Aannames & beperkingen"), maar inmiddels wél
-     gevalideerd tegen echte SD-kaartlogs van een W2K-2 met een Yanmar 4LV195Z-motor: een
-     complete koude motorstart (brandstofdebiet, oliedruk-opbouw, opwarming, draaiurenteller,
-     zelfs de "Preheat Indicator"-waarschuwing tijdens het voorgloeien) kwam er fysiek
-     plausibel en intern consistent uit.
-   - overig, bv. `.raw`/`.n2k` (`ascii_reader.py`): een *N2K ASCII*-logbestand, zoals je dat met
-     `--live --tee` kunt vastleggen. Elke regel is al door de Actisense-hardware herassembleerd
-     (fast-packet/multi-packet), dus daar is geen reassemblage nodig.
-2. **Decoderen** (`pgn_decode.py`): pikt zes PGN's uit de stroom:
-   - **127489** (*Engine Parameters, Dynamic*) → brandstofdebiet, draaiurenteller, en
-     gezondheidsindicatoren (olie-druk/-temperatuur, koelvloeistoftemperatuur, alternator-
-     spanning, motorbelasting) plus de twee "Discrete Status"-waarschuwingsvelden. Dit is
-     motordata, dus expliciet niet de tankinhoud-sensor.
-   - **127497** (*Trip Parameters, Engine*) → optioneel: de triptmeter-brandstofstand die de
-     motor/ECU zelf bijhoudt (in liter), als het apparaat deze PGN verstuurt.
-   - **128267** (*Water Depth*) → waterdiepte onder de transducer.
-   - **129025** (*Position, Rapid Update*) → GPS-positie.
-   - **129026** (*COG & SOG, Rapid Update*) → vaart over de grond (SOG, GPS-afgeleid). Dit is
-     nadrukkelijk geen "speed through water" (dat zou PGN 128259 zijn, een paddlewheel-/
-     logsensor — niet gebruikt door deze app en op de tot nu toe geteste boot ook niet aanwezig
-     op de bus).
-   - **126992** (*System Time*) → alleen gebruikt bij `.ebl`-bestanden, om frames van een
-     absolute datum/tijd te voorzien (zie hieronder).
-3. **Reizen herkennen** (`tripbuilder.py`): periodes waarin de boot lang genoeg stilligt
-   (standaard ≥ 10 minuten, instelbaar via `--min-stop-minutes`) gelden als havenbezoek; de
-   periodes daartussen zijn de reizen. Een groot gat in de data zelf (standaard ook 10 minuten,
-   apart instelbaar via `--max-gap-minutes`) kapt een reis altijd af, ook als de stilligperiode
-   vlak vóór het gat te kort was om als havenbezoek te tellen — anders zou een reis een gat
-   overbruggen met een veel te lange gerapporteerde vaartijd (in de praktijk gevonden: 3:21
-   i.p.v. de echte ~0:45, terwijl de draaiurenteller — die niet van GPS-classificatie afhangt —
-   het wél bij het rechte eind had). Reizen korter dan 0.1 nm (instelbaar via
-   `--min-trip-distance-nm`) worden weggefilterd: dat is vrijwel altijd GPS-/snelheidsruis
-   vlak bij zo'n segmentgrens, geen echte reis. Per reis wordt berekend:
-   - **Brandstofverbruik**, op twee manieren: **berekend** door het brandstofdebiet
-     (PGN 127489) te integreren over de tijd, en — als beschikbaar — het verschil tussen
-     begin- en eindstand van de **motor-eigen triptmeter** (PGN 127497). Let op: die
-     triptmeter is een teller die de motor zelf beheert en kan door de gebruiker op het
-     display gereset zijn, dus hij hoeft niet exact overeen te komen met onze eigen
-     vertrek/aankomst-indeling.
-   - **Draaiuren**: het verschil tussen de motoruren-teller bij vertrek en aankomst. Draaiuren,
-     motorgezondheid en waarschuwingen worden per motor-instance getoond ("engine 0: ...",
-     "engine 1: ...") zodra er meer dan één instance in de data voorkomt; met precies één motor
-     valt dat label vanzelf weg. Zie je toch een tweede instance verschijnen terwijl je maar één
-     motor hebt (een duplicaat/spook-bron), zet dan `--engine-count 1` om die te negeren.
-   - **Motorgezondheid**: gemiddelde olie-druk/-temperatuur, koelvloeistoftemperatuur,
-     alternatorspanning en maximale motorbelasting tijdens de reis, plus een aparte
-     **waarschuwingen**-kolom met alle actieve statusvlaggen (bv. "Low Oil Pressure") die
-     ergens tijdens de reis voorkwamen.
-   - **Snelheid**: gemiddelde en maximale vaart over de grond.
-   - **Minimale waterdiepte**, inclusief de positie waar die werd gemeten.
-4. **Havennamen** (`geocode.py`): de GPS-positie van elk havenbezoek wordt via
-   OpenStreetMap/Nominatim (reverse geocoding) omgezet naar een plaatsnaam, met lokale
-   caching zodat je nooit twee keer dezelfde positie opvraagt.
-5. **Logboek wegschrijven** (`logbook_writer.py`): CSV met Engelse kolomnamen maar Nederlandse
-   Excel-conventie voor de waarden (`;` als scheidingsteken, `,` als decimaalteken) — opent
-   direct correct in de Nederlandse Excel.
-6. **Route wegschrijven** (`gpx_writer.py`): naast de CSV wordt altijd ook een GPX-bestand
-   geschreven (zelfde bestandsnaam, `.gpx`-extensie) met één track per reis. Klik je in een
-   kaartprogramma op een track, dan zie je naam en beschrijving met vaartijd, afstand,
-   brandstof en draaiuren van die reis.
-7. **HTML-logboek** (`html_writer.py`): één zelfstandig `.html`-bestand (zelfde bestandsnaam,
-   `.html`-extensie) — geen los kaartbestand of werkmap meer nodig. Bovenin de bootnaam
-   (`--boat-name`, of de `boat_name`-instelling in het configbestand) en totalen: aantal
-   reizen, totale afstand, brandstof, gemiddeld verbruik, **motoruren-teller** (de absolute
-   stand van de motor-eigen draaiurenteller bij de laatst gelogde reis — handig voor
-   onderhoudsintervallen, telt dus ook uren mee die de motor al draaide vóórdat je begon te
-   loggen) en "uren gelogd" (opgeteld over alleen de reizen in dit logboek). Daaronder de
-   reizen gegroepeerd per jaar en ISO-week. Elke reis met een track heeft een "Map"-knop die
-   een inzoombare Leaflet/OpenStreetMap-kaart met de routelijn erbij opent, ingebed in dezelfde
-   pagina. Kaarttegels en de Leaflet-bibliotheek komen van een CDN, dus **bekijken** vereist
-   internet (aanmaken niet).
+## How it works
 
-## Installatie
+1. **Reading** — two file formats, chosen automatically by extension:
+   - `.ebl` (`ebl_reader.py`): the binary format of the W2K-2's **SD card logging feature**
+     (BST-95 CAN-raw). The app has to reassemble NMEA2000 Fast Packet frames itself here. This
+     format is reverse-engineered (see "Assumptions & limitations"), but has since been
+     validated against real SD card logs from a W2K-2 with a Yanmar 4LV195Z engine: a complete
+     cold engine start (fuel rate, oil pressure buildup, warming up, engine-hour meter, even the
+     "Preheat Indicator" warning during glow-plug preheating) came out physically plausible and
+     internally consistent.
+   - everything else, e.g. `.raw`/`.n2k` (`ascii_reader.py`): an *N2K ASCII* log file, such as
+     you can capture with `--live --tee`. Each line has already been reassembled by the Actisense
+     hardware (fast-packet/multi-packet), so no reassembly is needed there.
+2. **Decoding** (`pgn_decode.py`): picks seven PGNs out of the stream:
+   - **127489** (*Engine Parameters, Dynamic*) → fuel rate, engine-hour meter, and health
+     indicators (oil pressure/temperature, coolant temperature, alternator voltage, engine load)
+     plus the two "Discrete Status" warning fields. This is engine data, so explicitly not the
+     tank-level sensor.
+   - **127497** (*Trip Parameters, Engine*) → optional: the trip-meter fuel reading the
+     engine/ECU keeps itself (in liters), if the device sends this PGN.
+   - **128267** (*Water Depth*) → water depth under the transducer.
+   - **129025** (*Position, Rapid Update*) → GPS position.
+   - **129026** (*COG & SOG, Rapid Update*) → speed over ground (SOG, GPS-derived). This is
+     explicitly not "speed through water" (that would be PGN 128259, a paddlewheel/log sensor —
+     not used by this app, and not present on the bus of the boat tested so far either).
+   - **126992** (*System Time*) → only used for `.ebl` files, to give frames an absolute
+     date/time (see below).
+   - **130312** (*Temperature*) → sea/outside water temperature, filtered to that specific
+     "source" (the same PGN can also carry cabin, exhaust gas, etc. temperature, which is
+     ignored).
+3. **Recognizing trips** (`tripbuilder.py`): periods where the boat is stationary for long
+   enough (default ≥ 10 minutes, adjustable via `--min-stop-minutes`) count as a port visit; the
+   periods in between are the trips. A large gap in the data itself (default also 10 minutes,
+   separately adjustable via `--max-gap-minutes`) always cuts a trip short, even if the
+   stationary period right before the gap was too short to count as a port visit on its own —
+   otherwise a trip would bridge a gap with a far-too-long reported duration (found in practice:
+   3:21 instead of the real ~0:45, while the engine-hour meter — which doesn't depend on GPS
+   classification — had it right). Trips shorter than 0.1 nm (adjustable via
+   `--min-trip-distance-nm`) are filtered out: that's almost always GPS/speed noise right at such
+   a segment boundary, not a real trip. Per trip, the app calculates:
+   - **Fuel consumption**, two ways: **calculated** by integrating the fuel-rate reading
+     (PGN 127489) over time, and — if available — the difference between the start and end
+     reading of the **engine's own trip meter** (PGN 127497). Note: that trip meter is a counter
+     the engine manages itself and may have been reset by the user on the display, so it doesn't
+     necessarily match our own departure/arrival split exactly.
+   - **Engine hours**: the difference between the engine-hour meter at departure and arrival.
+     Engine hours, engine health, and warnings are shown per engine instance ("engine 0: ...",
+     "engine 1: ...") as soon as more than one instance shows up in the data; with exactly one
+     engine that label is dropped automatically. If a second instance shows up anyway even
+     though you only have one engine (a duplicate/ghost source), set `--engine-count 1` to
+     ignore it.
+   - **Engine health**: average oil pressure/temperature, coolant temperature, alternator
+     voltage, and maximum engine load during the trip, plus a separate **warnings** column with
+     all active status flags (e.g. "Low Oil Pressure") that occurred at any point during the
+     trip.
+   - **Speed**: average and maximum speed over ground.
+   - **Water temperature**: average, minimum, and maximum sea temperature during the trip.
+   - **Minimum water depth**, including the position where it was measured.
+4. **Port names** (`geocode.py`): the GPS position of each port visit is turned into a place
+   name via OpenStreetMap/Nominatim (reverse geocoding), with local caching so the same position
+   is never looked up twice.
+5. **Writing the logbook** (`logbook_writer.py`): CSV with English column names but Dutch Excel
+   convention for the values (`;` as the delimiter, `,` as the decimal separator) — opens
+   correctly right away in Dutch-locale Excel.
+6. **Writing the route** (`gpx_writer.py`): alongside the CSV, a GPX file is always written too
+   (same file name, `.gpx` extension) with one track per trip. Click a track in a map program and
+   you see a name and description with duration, distance, fuel, and engine hours for that trip.
+7. **HTML logbook** (`html_writer.py`): one self-contained `.html` file (same file name, `.html`
+   extension) — no separate map file or workbook needed anymore. At the top, the boat name
+   (`--boat-name`, or the `boat_name` setting in the config file) and totals: trip count, total
+   distance, fuel, average consumption, **engine hour meter** (the absolute reading of the
+   engine's own hour counter as of the most recently logged trip — handy for maintenance
+   intervals, so it also counts hours the engine ran before you started logging) and "hours
+   logged" (summed over only the trips in this logbook). Below that, the trips grouped by year
+   and ISO week. Each trip with a track has a "Map" button that opens a zoomable
+   Leaflet/OpenStreetMap map with the route line inline, embedded in the same page. Map tiles and
+   the Leaflet library come from a CDN, so **viewing** requires internet (generating doesn't).
+   Trips with a logged water temperature also get a colored badge (blue → red by temperature).
+
+## Installation
 
 ```bash
 pip install -e ".[test]"
 ```
 
-## Gebruik
+## Usage
 
-De W2K-2 heeft drie onafhankelijke "data servers" (webinterface van het apparaat, standaard
-poorten 60001-60003). Zet er één op **protocol TCP** en **formaat N2K ASCII** — die kun je dan
-op twee manieren gebruiken:
+The W2K-2 has three independent "data servers" (in the device's web interface, default ports
+60001-60003). Set one to **protocol TCP** and **format N2K ASCII** — you can then use it in two
+ways:
 
-### Optie A: opgeslagen logbestanden
+### Option A: stored log files
 
-**Van de SD-kaart** (geen live verbinding nodig — aanbevolen als je niet afhankelijk wilt zijn
-van een verbinding tijdens het varen): download de `.ebl`-bestanden, óf handmatig via de
-webinterface van de W2K-2 ("Download Logs"), óf automatisch met het meegeleverde
-`nmea2log-download`-commando:
+**From the SD card** (no live connection needed — recommended if you don't want to depend on a
+connection while sailing): download the `.ebl` files, either manually via the W2K-2's web
+interface ("Download Logs"), or automatically with the included `nmea2log-download` command:
 
 ```bash
 nmea2log-download
 ```
 
-Dit leest instellingen (IP-adres/hostnaam, gebruikersnaam+wachtwoord óf een token, doelmap) uit
-een configbestand, standaard `nmea2log.ini` **in de huidige map** (dus meestal de projectmap),
-zodat je die niet telkens opnieuw hoeft in te typen. `nmea2log.ini` staat in `.gitignore` en
-wordt dus nooit gecommit. Let op: deze projectmap staat wel in OneDrive, dus een wachtwoord hier
-synct mee naar de cloud/je andere pc — een bewuste keuze; wil je dat niet, geef dan
-`--config pad/buiten/onedrive/nmea2log.ini` mee. Het commando downloadt alleen wat nog ontbreekt
-of onvolledig is (op bestandsgrootte vergeleken), dus opnieuw draaien na een volgende vaart haalt
-alleen de nieuwe bestanden op. Standaard komen de bestanden in `Actisense/` (mapstructuur
-`EBL000000/`, `EBL000001/`, ... eronder), ook in `.gitignore`.
+This reads settings (IP address/hostname, username+password or a token, target folder) from a
+config file, by default `nmea2log.ini` **in the current directory** (usually the project
+directory), so you don't have to type them in every time. `nmea2log.ini` is in `.gitignore` and
+so is never committed. Note: this project directory is in OneDrive though, so a password here
+syncs along to the cloud/your other PC — a deliberate choice; if you don't want that, pass
+`--config path/outside/onedrive/nmea2log.ini` instead. The command only downloads what's still
+missing or incomplete (compared by file size), so running it again after a later sail only
+fetches the new files. By default the files land in `Actisense/` (folder structure
+`EBL000000/`, `EBL000001/`, ... underneath), also in `.gitignore`.
 
-Verwerk de gedownloade bestanden vervolgens zoals gewoonlijk:
+Then process the downloaded files as usual:
 
 ```bash
 nmea2log Actisense/EBL000000/*.ebl Actisense/EBL000001/*.ebl -o logbook.csv
 ```
 
-Dit EBL-pad is reverse-engineered (zie "Aannames & beperkingen") en inmiddels gevalideerd tegen
-echte SD-kaartlogs — controleer bij twijfel altijd of de uitkomst logisch aanvoelt voor jouw
-eigen vaart/motor.
+Or, simpler: run `nmea2log` with no arguments at all. It then searches the `ebl_dir` folder from
+the config file (see "Config file for defaults" below) recursively for `.ebl` files — set once,
+so after downloading you never have to select or drag files by hand again.
 
-**Alternatief**: leg de N2K ASCII-stream van een Data Server vast naar een bestand, bijvoorbeeld
-door `nmea2log --live ... --tee 2026-07-15.raw` te draaien (zie Optie B), of met een ander
-terminalprogramma dat de TCP-stream naar een bestand wegschrijft. Noem het bestand bij voorkeur
-met een datum erin, bijvoorbeeld `2026-07-15.raw` — dat wordt gebruikt om middernacht-
-doorgangen correct te herkennen (het tijdstip in het formaat bevat zelf geen datum; `.ebl`-
-bestanden hebben dit probleem niet, die halen hun tijd uit de data zelf).
+This EBL path is reverse-engineered (see "Assumptions & limitations") and has since been
+validated against real SD card logs — when in doubt, always check that the outcome feels
+plausible for your own boat/engine.
+
+**Alternative**: capture the N2K ASCII stream from a Data Server to a file, for example by
+running `nmea2log --live ... --tee 2026-07-15.raw` (see Option B), or with another terminal
+program that writes the TCP stream to a file. Preferably name the file with a date in it, e.g.
+`2026-07-15.raw` — that's used to correctly detect midnight rollovers (the time-of-day in the
+format doesn't itself contain a date; `.ebl` files don't have this problem, they get their time
+from the data itself).
 
 ```bash
 nmea2log 2026-07-15.raw -o logbook.csv
 ```
 
-Dit schrijft `logbook.csv`, `logbook.gpx` (de route per reis) en `logbook.html` (het
-zelfstandige HTML-logboek met totalen, jaar/week-indeling en klikbare kaarten).
+This writes `logbook.csv`, `logbook.gpx` (the route per trip), and `logbook.html` (the
+self-contained HTML logbook with totals, year/week grouping, and clickable maps).
 
-Meerdere bestanden (bijvoorbeeld één per dag, `.ebl` en `.raw` door elkaar) in één keer
-verwerken:
+Processing multiple files at once (e.g. one per day, `.ebl` and `.raw` mixed together):
 
 ```bash
 nmea2log 2026-07-14.raw 2026-07-15.ebl 2026-07-16.raw -o logbook.csv
 ```
 
-### Optie B: live meelezen
+### Option B: live reading
 
-Verbind rechtstreeks met de W2K-2 terwijl je vaart. Vervang `192.168.4.1` door het IP-adres
-van de W2K-2 op jouw netwerk (te vinden op de statuspagina/webinterface van het apparaat):
+Connect directly to the W2K-2 while sailing. Replace `192.168.4.1` with the W2K-2's IP address
+on your network (found on the device's status page/web interface):
 
 ```bash
 nmea2log --live 192.168.4.1 -o logbook.csv
 ```
 
-De sessie loopt door tot je op Ctrl+C drukt (of tot `--duration` verstrijkt); daarna wordt het
-logboek geschreven met alles wat tot dan toe is binnengekomen — een reis die nog niet is
-afgesloten met een nieuw havenbezoek krijgt "Onbekend (einde buiten logbestand)" als
-aankomsthaven. Met `--tee` bewaar je tegelijk de ruwe ASCII-stream naar een bestand, zodat je
-zowel live verwerkt als een permanent logbestand overhoudt:
+The session keeps running until you press Ctrl+C (or `--duration` elapses); after that, the
+logbook is written with everything that came in up to that point — a trip that hasn't yet been
+closed off by a new port visit gets "Unknown (end outside log file)" as its arrival port. With
+`--tee` you also keep the raw ASCII stream to a file at the same time, so you get both live
+processing and a permanent log file:
 
 ```bash
 nmea2log --live 192.168.4.1:60001 --tee 2026-07-16.raw -o logbook.csv
 ```
 
-### Nuttige opties
+### Useful options
 
-| Optie | Betekenis |
+| Option | Meaning |
 |---|---|
-| `--live HOST[:PORT]` | Live verbinden met de W2K-2 over TCP i.p.v. bestanden verwerken (standaardpoort 60001) |
-| `--tee PAD` | Alleen bij `--live`: bewaar de ruwe inkomende ASCII-regels ook naar dit bestand |
-| `--duration SECONDEN` | Alleen bij `--live`: stop automatisch na dit aantal seconden |
-| `--speed-threshold-kn` | Vaart (kn) waaronder de boot als 'stilliggend' geldt (standaard 0.5) |
-| `--min-stop-minutes` | Minimale stilligduur om als havenbezoek te tellen (standaard 10) |
-| `--max-gap-minutes` | Vanaf hoeveel minuten zonder data een reis wordt afgekapt (standaard: zelfde als `--min-stop-minutes`) |
-| `--min-trip-distance-nm` | Reizen korter dan dit worden weggefilterd als ruis i.p.v. getoond (standaard 0.1 nm) |
-| `--no-geocode` | Geen internet nodig; toont coördinaten in plaats van havennamen |
-| `--cache-file` | Pad naar het cachebestand voor havennamen (standaard `.geocode_cache.json`) |
-| `--start-date` | Forceer de startdatum van het eerste logbestand (`YYYY-MM-DD`); niet van toepassing bij `--live` |
-| `--utc-offset UREN` | Vaste tijdzone-offset (bv. `2` voor CEST) voor de weergegeven tijden. Standaard: automatisch geschat per reis uit de vertreklengtegraad |
-| `--boat-name NAAM` | Bootnaam bovenin het HTML-logboek (standaard: geen, of de `boat_name`-instelling uit het configbestand) |
-| `--engine-count N` | Aantal fysieke motoren. Met `1` wordt een eventuele extra motor-instance in de data als ruis genegeerd (net als bij de GPS-brondominantie) |
+| `--live HOST[:PORT]` | Connect live to the W2K-2 over TCP instead of processing files (default port 60001) |
+| `--tee PATH` | Only with `--live`: also save the raw incoming ASCII lines to this file |
+| `--duration SECONDS` | Only with `--live`: stop automatically after this many seconds |
+| `--speed-threshold-kn` | Speed (kn) below which the boat counts as 'stationary' (default 0.5) |
+| `--min-stop-minutes` | Minimum stationary duration to count as a port visit (default 10) |
+| `--max-gap-minutes` | From how many minutes without data a trip gets cut short (default: same as `--min-stop-minutes`) |
+| `--min-trip-distance-nm` | Trips shorter than this are filtered out as noise instead of shown (default 0.1 nm) |
+| `--no-geocode` | No internet needed; shows coordinates instead of port names |
+| `--cache-file` | Path to the cache file for port names (default `.geocode_cache.json`) |
+| `--start-date` | Force the start date of the first log file (`YYYY-MM-DD`); not applicable with `--live` |
+| `--utc-offset HOURS` | Fixed timezone offset (e.g. `2` for CEST) for the displayed times. Default: automatically estimated per trip from the departure position |
+| `--boat-name NAME` | Boat name at the top of the HTML logbook (default: none, or the `boat_name` setting from the config file) |
+| `--engine-count N` | Number of physical engines. With `1`, any extra engine instance in the data is ignored as noise (same idea as the GPS source-dominance filtering) |
+| `--ebl-dir DIR` | Folder to search recursively for `.ebl` files when no logfiles are given and `--live` isn't used either. Default: not set, or the `ebl_dir` setting from the config file |
 
-Alle NMEA2000-tijden zijn UTC; in de CSV, het HTML-logboek en de GPX-tracknamen wordt dit
-omgerekend naar lokale tijd. Zonder `--utc-offset` wordt de offset per reis geschat uit de
-lengtegraad van het vertrekpunt (15° per uur), plus 1 uur als de vertrekdatum binnen de
-EU-zomertijd valt (laatste zondag van maart t/m laatste zondag van oktober, 01:00 UTC) — dat
-laatste is een vaste, jaarlijks terugkerende regel die zonder tijdzone-database te berekenen is,
-dus geen extra dependency nodig. Dit is nog steeds een schatting (kan vlak bij een
-tijdzone-grens tot ~1 uur afwijken) en gaat uit van Europese zomertijdregels — vaar je buiten
-Europa (bv. Caribisch gebied, VS), dan klopt de zomertijd-aanname niet en kun je met
-`--utc-offset` een vaste waarde afdwingen. `<trkpt><time>` in de GPX blijft altijd strikt UTC,
-conform de GPX-conventie. De "vaartijd"-kolom is offset-onafhankelijk (het is een duur, geen
-tijdstip).
+All NMEA2000 times are UTC; in the CSV, the HTML logbook, and the GPX track names this is
+converted to local time. Without `--utc-offset`, the offset is estimated per trip from the
+departure position: within Western Europe it recognizes the actual CET/CEST vs. WET/WEST civil
+timezones (France, for instance, is geographically in the same longitude band as the UK but
+observes Central European Time, a full hour off from what longitude alone would suggest),
+including EU summer time (last Sunday of March through last Sunday of October, 01:00 UTC — a
+fixed, recurring rule computable without a timezone database, so no extra dependency needed).
+Outside that region it falls back to a plain solar-longitude estimate. This is still just an
+estimate (can be off by up to ~1 hour near a timezone border, and the summer-time assumption
+doesn't hold outside Europe, e.g. the Caribbean or the US) — use `--utc-offset` to force a fixed
+value yourself if that matters to you. `<trkpt><time>` in the GPX always stays strictly UTC, per
+the GPX convention. The "duration" column is offset-independent (it's a span, not a point in
+time).
 
-### Configbestand voor standaardwaarden
+### Config file for defaults
 
-In plaats van bovenstaande opties elke keer op de command line mee te geven, kun je ze in de
-`[nmea2log]`-sectie van `nmea2log.ini` zetten (zie ook "Downloaden via de W2K-2 web-API" hierboven
-voor de `[w2k2]`-sectie in hetzelfde bestand). Command-line-argumenten overschrijven altijd wat in
-het configbestand staat. Voorbeeld:
+Instead of passing the options above on the command line every time, you can set them in the
+`[nmea2log]` section of `nmea2log.ini` (see also "Option A: stored log files" above for the
+`[w2k2]` section in the same file). Command-line arguments always override what's in the config
+file. Example:
 
 ```ini
 [nmea2log]
 boat_name = Zeevalk
+ebl_dir = Actisense
 min_trip_distance_nm = 0.3
 no_geocode = false
 ```
@@ -221,97 +238,95 @@ no_geocode = false
 pytest
 ```
 
-## Aannames & beperkingen
+## Assumptions & limitations
 
-- **`nmea2log-download`-API**: net als het EBL-bestandsformaat zelf is de web-API van de W2K-2
-  (`/api/data_logs`, `/api/download`, login/token) nooit officieel door Actisense gepubliceerd —
-  geobserveerd via browser-DevTools op de firmware-webapp en kan wijzigen bij firmware-updates.
-  Met name de veldnaam waarin het login-token terugkomt is niet 100% bevestigd (`w2k2_download.py`
-  probeert een aantal gangbare namen, zie `_TOKEN_KEYS`); mocht inloggen lukken maar geen token
-  gevonden worden, dan toont het commando de ruwe response zodat de juiste naam toegevoegd kan
-  worden.
-- **Regelformaat (N2K ASCII)**: de parser is gebouwd op basis van de officiële Actisense-
-  documentatie op de website — het kennisbank-artikel
+- **`nmea2log-download` API**: like the EBL file format itself, the W2K-2's web API
+  (`/api/data_logs`, `/api/download`, login/token) has never been officially published by
+  Actisense — observed via browser DevTools on the firmware web app, and may change with
+  firmware updates. In particular, the field name the login token comes back under isn't 100%
+  confirmed (`w2k2_download.py` tries a number of common names, see `_TOKEN_KEYS`); if login
+  succeeds but no token is found, the command shows the raw response so the right name can be
+  added.
+- **Line format (N2K ASCII)**: the parser is built from Actisense's official documentation on
+  their website — the knowledge-base article
   ["NMEA 2000 ASCII Output format"](https://actisense.com/knowledge-base/nmea-2000/w2k-1-nmea-2000-to-wifi-gateway/nmea-2000-ascii-output-format/)
-  en de [W2K-2 User Manual](https://actisense.com/products/w2k-2-nmea-2000-wifi-gateway/) (zie
-  productpagina, downloads-tab) — en het [canboat](https://github.com/canboat/canboat)-PGN-
-  woordenboek. Ik heb dit niet tegen een echte log van jouw W2K-2 kunnen testen — controleer de
-  eerste paar regels van een echt logbestand tegen de regex in `ascii_reader.py` (`_LINE_RE`) en
-  pas die aan als het afwijkt.
-- **EBL-formaat (SD-kaartlog)**: dit formaat is door Actisense nooit officieel gepubliceerd.
-  `ebl_reader.py` is gebaseerd op reverse-engineering door de open-source Go-bibliotheek
-  [aldas/go-nmea-client](https://github.com/aldas/go-nmea-client) (specifiek
+  and the [W2K-2 User Manual](https://actisense.com/products/w2k-2-nmea-2000-wifi-gateway/) (see
+  the product page, downloads tab) — and the [canboat](https://github.com/canboat/canboat) PGN
+  dictionary. I haven't been able to test this against a real log from your own W2K-2 — check
+  the first few lines of a real log file against the regex in `ascii_reader.py` (`_LINE_RE`) and
+  adjust it if it differs.
+- **EBL format (SD card log)**: this format has never been officially published by Actisense.
+  `ebl_reader.py` is based on reverse-engineering by the open-source Go library
+  [aldas/go-nmea-client](https://github.com/aldas/go-nmea-client) (Apache-2.0 license;
+  specifically
   [`actisense/eblreader.go`](https://github.com/aldas/go-nmea-client/blob/main/actisense/eblreader.go) —
-  framing, byte-stuffing, CAN-ID-decodering) — met de hand geverifieerd tegen de testvectoren
-  daarin, én inmiddels gevalideerd tegen ~800 MB echte SD-kaartlogs van een W2K-2 (Yanmar
-  4LV195Z-sterndrive): een complete koude motorstart kwam er fysiek plausibel en intern
-  consistent uit (brandstofdebiet, oliedruk-opbouw, spanningsverval tijdens het starten,
-  opwarming, draaiurenteller die precies bijhield, en zelfs een "Preheat Indicator"-waarschuwing
-  exact tijdens het voorgloeien). Bekende beperkingen/aannames:
-  - De eigen 2-byte tijdteller per record wordt genegeerd (de betekenis ervan is nergens
-    betrouwbaar gedocumenteerd — zelfs de referentie-implementatie gokt ernaar). In plaats
-    daarvan wordt de absolute tijd afgeleid uit PGN 126992 (System Time) elders in de stream.
-    **Gevolg**: als je NMEA2000-netwerk geen bron heeft die PGN 126992 verstuurt (meestal een
-    GPS/kaartplotter), levert een `.ebl`-bestand niets op — frames vóór de eerste 126992-
-    boodschap worden overgeslagen, en zonder 126992 helemaal geen frames.
-  - Fast-Packet-reassemblage (nodig voor PGN 127489 en 127497, die beide >8 bytes zijn) is
-    geïmplementeerd volgens de standaard NMEA2000-conventie en inmiddels ook tegen echte
-    fast-packet-data gevalideerd (zie hierboven).
-  - Geef bij onverwachte uitkomsten een klein `.ebl`-fragment door, dan wordt dit samen tegen
-    echte data gecontroleerd.
-- **Havenherkenning** is gebaseerd op stilligtijd + reverse geocoding, niet op een lijst van
-  bekende marina's. Nominatim geeft niet altijd de exacte marinanaam terug (soms de plaatsnaam
-  van de dichtstbijzijnde bebouwing). Wil je preciezere namen, dan is de volgende stap een
-  eigen havenlijst (naam + coördinaten + straal) toevoegen die eerst geraadpleegd wordt.
-  Nominatim's gebruiksbeleid staat maximaal 1 verzoek/seconde toe; dat wordt gerespecteerd,
-  maar bij zware/professionele inzet is een eigen Nominatim-instance of betaalde dienst beter.
-  Geeft die verkeerde namen dan controleer de rauwe cache in `.geocode_cache.json`.
-- **Meerdere motoren**: de code ondersteunt meerdere `instance`-nummers (brandstof wordt
-  gesommeerd, draaiuren per motor apart getoond), maar is niet getest met een echte
-  twin-engine-installatie.
-- **Meerdere bronnen voor dezelfde PGN**: sommige boten hebben meerdere apparaten die positie,
-  vaart-over-de-grond of diepte versturen (bv. twee GPS-antennes). Dit is met echte data
-  gemeten en bevestigd: op een boot met twee GPS-ontvangers gaven die op hetzelfde moment een
-  paar meter positieverschil (mediaan 3,2 m, max 7,0 m over ~6000 vergelijkingen) en een
-  fractie knoop snelheidsverschil (mediaan 0,2 kn, max 1,9 kn over drie bronnen). Op zichzelf
-  klein, maar zonder filtering worden die onafhankelijke metingen puur op tijd door elkaar
-  gesorteerd, wat voor duizenden valse kleine "sprongen" zorgt — in de praktijk viel de
-  afstand van een reis daardoor in eerste instantie 10x te hoog uit (153,7 i.p.v. 13,5 nm).
+  framing, byte-stuffing, CAN-ID decoding; see the attribution note at the top of this file) —
+  hand-verified against the test vectors in it, and since validated against ~800 MB of real SD
+  card logs from a W2K-2 (Yanmar 4LV195Z sterndrive): a complete cold engine start came out
+  physically plausible and internally consistent (fuel rate, oil pressure buildup, voltage sag
+  during cranking, warming up, an engine-hour meter that tracked exactly, and even a "Preheat
+  Indicator" warning exactly during glow-plug preheating). Known limitations/assumptions:
+  - The format's own 2-byte per-record time counter is ignored (its meaning isn't reliably
+    documented anywhere — even the reference implementation guesses at it). Instead, absolute
+    time is derived from PGN 126992 (System Time) found elsewhere in the stream. **Consequence**:
+    if your NMEA2000 network has no source that sends PGN 126992 (usually a GPS/chartplotter),
+    an `.ebl` file yields nothing — frames before the first 126992 message are skipped, and with
+    no 126992 at all, no frames come out.
+  - Fast Packet reassembly (needed for PGN 127489 and 127497, both >8 bytes) is implemented per
+    the standard NMEA2000 convention and has since also been validated against real fast-packet
+    data (see above).
+  - If you get unexpected results, share a small `.ebl` fragment and it can be checked against
+    real data together.
+- **Port recognition** is based on how long the boat stays stationary plus reverse geocoding, not
+  a list of known marinas. Nominatim doesn't always return the exact marina name (sometimes the
+  name of the nearest built-up area instead). For more precise names, the next step would be
+  adding your own port list (name + coordinates + radius) that gets checked first. Nominatim's
+  usage policy allows at most 1 request/second; that's respected, but for heavy/commercial use a
+  dedicated Nominatim instance or a paid service is better. If you get wrong names, check the raw
+  cache in `.geocode_cache.json`.
+- **Multiple engines**: the code supports multiple `instance` numbers (fuel is summed, engine
+  hours shown per engine separately), but hasn't been tested with a real twin-engine
+  installation.
+- **Multiple sources for the same PGN**: some boats have multiple devices sending position,
+  speed over ground, or depth (e.g. two GPS antennas). This has been measured and confirmed with
+  real data: on a boat with two GPS receivers, they gave a few meters of position difference at
+  the same moment (median 3.2 m, max 7.0 m over ~6000 comparisons) and a fraction of a knot of
+  speed difference (median 0.2 kn, max 1.9 kn over three sources). Small on its own, but without
+  filtering those independent readings get interleaved purely by time, causing thousands of
+  small false "jumps" — in practice this initially inflated a trip's distance 10x (153.7 instead
+  of 13.5 nm).
 
-  **Hoe de app dit oplost** (`_select_primary_gps_source` in `cli.py`): de bron met de meeste
-  positieberichten (PGN 129025) geldt als **primaire GPS**, en de snelheid (PGN 129026) van
-  **diezelfde fysieke bron** wordt gebruikt — bewust niet onafhankelijk de "beste" bron per PGN
-  gekozen, want dan zouden positie en snelheid uit twee verschillende apparaten kunnen komen en
-  een moeilijk te doorgronden inconsistentie tussen track en stilliggend/varend-classificatie
-  ontstaan. Alleen als de gekozen positiebron zelf geen snelheid stuurt, valt de code terug op
-  de snelheidsbron met de meeste berichten (dan dus wél een ander apparaat). Diepte wordt
-  onafhankelijk gekozen (geen GPS-gerelateerde PGN, dus geen reden om aan dezelfde bron te
-  koppelen). De CLI meldt op stderr welke bron als primair gekozen is zodra er meerdere zijn.
-  **Kanttekening**: "meeste berichten" is een proxy, geen kwaliteitsbeoordeling — er wordt niet
-  gekeken naar GPS-nauwkeurigheid (HDOP, aantal satellieten, fix-type).
-- **Datum**: het N2K ASCII-formaat bevat alleen een tijdstip, geen datum. Zorg dat elk
-  logbestand een datum in de naam heeft (`YYYY-MM-DD...`), anders wordt de
-  bestandswijzigingsdatum gebruikt.
-- **Waterdiepte**: de app gebruikt de rauwe "Depth"-waarde uit PGN 128267 (diepte onder de
-  transducer), zonder de transducer-offset erbij op te tellen — meestal is dat al de waarde
-  die instrumenten standaard tonen, maar controleer dit tegen je eigen dieptemeter-instelling.
-- **Motorwaarschuwingen**: de bitbetekenissen (bv. "Low Oil Pressure") komen uit de generieke
-  NMEA2000-standaardlijst (canboat's ENGINE_STATUS_1/2). Sommige fabrikanten gebruiken hiervan
-  afwijkende of extra proprietary statusbits — controleer dit tegen je eigen motor-documentatie
-  als een waarschuwing onverwacht verschijnt of ontbreekt.
-- **Live-modus (`--live`)** ondersteunt alleen **TCP** (de W2K-2-handleiding raadt dit ook aan
-  vanwege ingebouwde foutcorrectie; UDP-only is niet geïmplementeerd). Bij een verbroken
-  verbinding stopt de sessie en wordt het logboek geschreven met wat er tot dan toe is
-  binnengekomen — er wordt niet automatisch opnieuw verbonden. De standaardpoort (60001) komt
-  overeen met "Data Server 1" op de W2K-2; controleer in de webinterface van het apparaat welke
-  server op TCP + N2K ASCII staat en welke poort die gebruikt.
+  **How the app handles this** (`_select_primary_gps_source` in `cli.py`): the source with the
+  most position messages (PGN 129025) counts as the **primary GPS**, and the speed (PGN 129026)
+  from **that same physical source** is used — deliberately not choosing the "best" source
+  independently per PGN, since then position and speed could come from two different devices and
+  create a hard-to-diagnose inconsistency between the track and the stationary/underway
+  classification. Only if the chosen position source itself doesn't send speed does the code fall
+  back to the speed source with the most messages (so then a different device after all). Depth
+  is chosen independently (not a GPS-related PGN, so no reason to tie it to the same source). The
+  CLI reports on stderr which source was chosen as primary whenever there's more than one.
+  **Caveat**: "most messages" is a proxy, not a quality assessment — GPS accuracy (HDOP,
+  satellite count, fix type) isn't taken into account.
+- **Date**: the N2K ASCII format only contains a time of day, no date. Make sure every log file
+  has a date in its name (`YYYY-MM-DD...`), otherwise the file's modification date is used.
+- **Water depth**: the app uses the raw "Depth" value from PGN 128267 (depth under the
+  transducer), without adding the transducer offset — usually that's already the value
+  instruments show by default, but check this against your own depth-sounder settings.
+- **Engine warnings**: the bit meanings (e.g. "Low Oil Pressure") come from the generic NMEA2000
+  standard list (canboat's ENGINE_STATUS_1/2). Some manufacturers use deviating or additional
+  proprietary status bits for this — check this against your own engine documentation if a
+  warning shows up unexpectedly or is missing.
+- **Live mode (`--live`)** only supports **TCP** (the W2K-2 manual also recommends this because
+  of built-in error correction; UDP-only isn't implemented). On a dropped connection, the session
+  stops and the logbook is written with whatever came in up to that point — there's no automatic
+  reconnect. The default port (60001) corresponds to "Data Server 1" on the W2K-2; check the
+  device's web interface for which server is set to TCP + N2K ASCII and which port it uses.
 
-## Samenwerken met Claude Code aan dit project
+## Working with Claude Code on this project
 
-- Werk in kleine, verifieerbare stappen: laat na elke wijziging `pytest` draaien voordat je
-  verdergaat — de teststructuur hierboven (`tests/`) is er juist op gericht dat snel te kunnen.
-- Geef bij nieuwe features concrete voorbeelddata mee (een stukje echte of realistische
-  logregel), zeker voor alles wat met PGN-decodering te maken heeft — dat scheelt giswerk.
-- Zodra je een echt logbestand van de W2K-2 hebt: deel een klein fragment (een paar honderd
-  regels volstaat) zodat het parseerformaat en de PGN-aannames tegen echte data geverifieerd
-  kunnen worden.
+- Work in small, verifiable steps: run `pytest` after every change before moving on — the test
+  layout above (`tests/`) is specifically there to make that fast.
+- When adding new features, provide concrete example data (a snippet of real or realistic log
+  lines), especially for anything involving PGN decoding — that saves guesswork.
+- Once you have a real log file from the W2K-2: share a small fragment (a few hundred lines is
+  enough) so the parsing format and PGN assumptions can be verified against real data.
