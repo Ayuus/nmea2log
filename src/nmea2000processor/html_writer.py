@@ -127,7 +127,9 @@ def _totals_html(totals: _Totals) -> str:
     return f'<section class="totals">{cards}</section>'
 
 
-def _trip_row_html(trip: TripLeg, idx: int, utc_offset_hours: Optional[float]) -> str:
+def _trip_row_html(
+    trip: TripLeg, idx: int, utc_offset_hours: Optional[float], trip_uid: Optional[str] = None
+) -> str:
     offset = _trip_utc_offset_hours(trip, utc_offset_hours)
     depart_local = _to_local(trip.depart_time, offset)
     arrive_local = _to_local(trip.arrive_time, offset)
@@ -161,7 +163,8 @@ def _trip_row_html(trip: TripLeg, idx: int, utc_offset_hours: Optional[float]) -
             f'<td colspan="13"><div class="trip-map-title">{title}</div>'
             f'<div class="map" id="map-{idx}"></div></td></tr>'
         )
-    return f'<tr class="trip-row">{row}</tr>{map_row}'
+    uid_attr = f' data-uid="{escape(trip_uid)}"' if trip_uid else ""
+    return f'<tr class="trip-row"{uid_attr}>{row}</tr>{map_row}'
 
 
 _HEADERS = [
@@ -186,7 +189,18 @@ def write_html_logbook(
     path: Path,
     boat_name: Optional[str] = None,
     utc_offset_hours: Optional[float] = None,
+    trip_uids: Optional[List[str]] = None,
 ) -> None:
+    """``trip_uids``: one id per trip, in the same order as ``trips`` *before* sorting -- e.g.
+    from ``trip_ids.assign_trip_ids(trips)``. Embedded as an invisible ``data-uid`` attribute on
+    each trip row; not shown anywhere and not used by anything in this app yet, but there for a
+    future feature (e.g. per-trip remarks) to key off instead of a timestamp that could shift
+    with a future trip-recognition fix."""
+    if trip_uids is not None:
+        trips = list(trips)
+        uid_by_trip = {id(trip): uid for trip, uid in zip(trips, trip_uids)}
+    else:
+        uid_by_trip = {}
     trips = sorted(trips, key=lambda t: t.depart_time)
 
     by_week: Dict[Tuple[int, int], List[int]] = defaultdict(list)
@@ -204,7 +218,10 @@ def write_html_logbook(
         week_sections = []
         for iso_week in weeks_in_year:
             indices = by_week[(iso_year, iso_week)]
-            rows_html = "".join(_trip_row_html(trips[i], i, utc_offset_hours) for i in indices)
+            rows_html = "".join(
+                _trip_row_html(trips[i], i, utc_offset_hours, uid_by_trip.get(id(trips[i])))
+                for i in indices
+            )
             week_sections.append(
                 f'<section class="week"><h3>{escape(_week_label(iso_year, iso_week))}</h3>'
                 f'<table class="trips"><thead><tr>{header_html}</tr></thead>'

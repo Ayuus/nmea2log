@@ -28,6 +28,7 @@ from .pgn_decode import (
     decode_trip_fuel_engine,
     decode_water_depth,
 )
+from .trip_ids import assign_trip_ids
 from .tripbuilder import build_trips
 
 _T = TypeVar("_T")
@@ -393,11 +394,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         return 1
 
+    trip_uids = assign_trip_ids(trips, utc_offset_hours=args.utc_offset)
+
     write_csv(trips, args.output, utc_offset_hours=args.utc_offset)
     gpx_path = args.output.with_suffix(".gpx")
     write_gpx(trips, gpx_path, utc_offset_hours=args.utc_offset)
     html_path = args.output.with_suffix(".html")
-    write_html_logbook(trips, html_path, boat_name=args.boat_name, utc_offset_hours=args.utc_offset)
+    write_html_logbook(
+        trips, html_path, boat_name=args.boat_name, utc_offset_hours=args.utc_offset, trip_uids=trip_uids
+    )
     print(f"Logbook written: {args.output} ({len(trips)} trip(s))")
     print(f"Route written: {gpx_path}")
     print(f"HTML logbook written: {html_path}")

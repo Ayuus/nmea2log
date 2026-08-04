@@ -120,6 +120,27 @@ def test_write_html_logbook_map_button_only_with_track(tmp_path: Path):
     assert '"points": [[52.3, 4.9]]' in html.replace(" ", "").replace("\n", "") or "52.3" in html
 
 
+def test_write_html_logbook_embeds_trip_uid_as_data_attribute(tmp_path: Path):
+    trip_a = _trip(depart_time=datetime(2026, 7, 15, 9, 0), arrive_time=datetime(2026, 7, 15, 10, 0))
+    trip_b = _trip(depart_time=datetime(2026, 7, 16, 9, 0), arrive_time=datetime(2026, 7, 16, 10, 0))
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([trip_a, trip_b], out_path, trip_uids=["uid-a", "uid-b"])
+
+    html = out_path.read_text(encoding="utf-8")
+    assert 'data-uid="uid-a"' in html
+    assert 'data-uid="uid-b"' in html
+
+
+def test_write_html_logbook_without_trip_uids(tmp_path: Path):
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([_trip()], out_path)  # trip_uids omitted entirely
+
+    html = out_path.read_text(encoding="utf-8")
+    assert "data-uid" not in html
+
+
 def test_write_html_logbook_escapes_place_names(tmp_path: Path):
     trip = _trip(depart_place="Marina <A> & Co")
     out_path = tmp_path / "logbook.html"
