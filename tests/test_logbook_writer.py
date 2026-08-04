@@ -199,31 +199,6 @@ def test_is_eu_dst_boundaries_2026():
     assert _is_eu_dst(datetime(2026, 10, 25, 1, 0)) is False
 
 
-def test_write_csv_includes_remarks_matched_by_position(tmp_path: Path):
-    trip_a = _trip()
-    trip_b = _trip(depart_place="Marina C", arrive_place="Marina D")
-    out_path = tmp_path / "logbook.csv"
-
-    write_csv([trip_a, trip_b], out_path, remarks=["Nice sail", ""])
-
-    with out_path.open(encoding="utf-8-sig") as handle:
-        rows = list(csv.DictReader(handle, delimiter=";"))
-
-    assert rows[0]["remark"] == "Nice sail"
-    assert rows[1]["remark"] == ""
-
-
-def test_write_csv_remark_column_blank_without_remarks_argument(tmp_path: Path):
-    out_path = tmp_path / "logbook.csv"
-
-    write_csv([_trip()], out_path)
-
-    with out_path.open(encoding="utf-8-sig") as handle:
-        rows = list(csv.DictReader(handle, delimiter=";"))
-
-    assert rows[0]["remark"] == ""
-
-
 def test_write_csv_consumption_per_nm_blank_when_no_distance(tmp_path: Path):
     trip = _trip(distance_nm=0.0)
     out_path = tmp_path / "logbook.csv"

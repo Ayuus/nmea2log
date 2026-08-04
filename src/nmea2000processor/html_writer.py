@@ -128,11 +128,7 @@ def _totals_html(totals: _Totals) -> str:
 
 
 def _trip_row_html(
-    trip: TripLeg,
-    idx: int,
-    utc_offset_hours: Optional[float],
-    trip_uid: Optional[str] = None,
-    remark: Optional[str] = None,
+    trip: TripLeg, idx: int, utc_offset_hours: Optional[float], trip_uid: Optional[str] = None
 ) -> str:
     offset = _trip_utc_offset_hours(trip, utc_offset_hours)
     depart_local = _to_local(trip.depart_time, offset)
@@ -156,7 +152,6 @@ def _trip_row_html(
         f"{_nl_num(avg_consumption_nm, 2)} L/nm" if avg_consumption_nm is not None else "",
         escape(_engine_hours_text(trip)),
         escape(_format_warnings(trip.engine_health)),
-        escape(remark) if remark else "",
         map_cell,
     ]
     row = "".join(f"<td>{cell}</td>" for cell in cells)
@@ -165,7 +160,7 @@ def _trip_row_html(
         title = escape(f"{depart_local:%Y-%m-%d %H:%M} {trip.depart_place} -> {trip.arrive_place}")
         map_row = (
             f'<tr class="trip-map-row" data-trip="{idx}" style="display:none">'
-            f'<td colspan="14"><div class="trip-map-title">{title}</div>'
+            f'<td colspan="13"><div class="trip-map-title">{title}</div>'
             f'<div class="map" id="map-{idx}"></div></td></tr>'
         )
     uid_attr = f' data-uid="{escape(trip_uid)}"' if trip_uid else ""
@@ -185,7 +180,6 @@ _HEADERS = [
     "L/nm",
     "Engine hours",
     "Warnings",
-    "Remark",
     "Route",
 ]
 
@@ -196,18 +190,13 @@ def write_html_logbook(
     boat_name: Optional[str] = None,
     utc_offset_hours: Optional[float] = None,
     trip_uids: Optional[List[str]] = None,
-    remarks: Optional[List[str]] = None,
 ) -> None:
     """``trip_uids``: one id per trip, in the same order as ``trips`` *before* sorting -- e.g.
     from ``trip_ids.assign_trip_ids(trips)``. Embedded as an invisible ``data-uid`` attribute on
     each trip row so a future feature could key off it instead of a timestamp that could shift
-    with a trip-recognition fix.
-
-    ``remarks``: one free-text remark per trip, same order as ``trip_uids`` (e.g. looked up from
-    ``remarks.load_remarks`` by uid); empty string or omitted entirely means no remark."""
+    with a trip-recognition fix. Not used by anything else yet."""
     trips = list(trips)
     uid_by_trip = {id(trip): uid for trip, uid in zip(trips, trip_uids)} if trip_uids is not None else {}
-    remark_by_trip = {id(trip): remark for trip, remark in zip(trips, remarks)} if remarks is not None else {}
     trips = sorted(trips, key=lambda t: t.depart_time)
 
     by_week: Dict[Tuple[int, int], List[int]] = defaultdict(list)
@@ -226,13 +215,7 @@ def write_html_logbook(
         for iso_week in weeks_in_year:
             indices = by_week[(iso_year, iso_week)]
             rows_html = "".join(
-                _trip_row_html(
-                    trips[i],
-                    i,
-                    utc_offset_hours,
-                    uid_by_trip.get(id(trips[i])),
-                    remark_by_trip.get(id(trips[i])),
-                )
+                _trip_row_html(trips[i], i, utc_offset_hours, uid_by_trip.get(id(trips[i])))
                 for i in indices
             )
             week_sections.append(
