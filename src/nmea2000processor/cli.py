@@ -28,6 +28,7 @@ from .pgn_decode import (
     decode_trip_fuel_engine,
     decode_water_depth,
 )
+from .remarks import DEFAULT_REMARKS_PATH, load_remarks
 from .trip_ids import assign_trip_ids
 from .tripbuilder import build_trips
 
@@ -161,6 +162,13 @@ def _iter_frames_for_path(
     return iter_frames(path, start_date=start_date)
 
 
+def _discover_ebl_files(ebl_dir: Path) -> List[Path]:
+    """Every .ebl file found recursively under ``ebl_dir``, sorted -- used when nmea2log is
+    called without any logfiles/--live (see --ebl-dir), so you don't have to select or drag
+    files by hand after downloading them."""
+    return sorted(ebl_dir.rglob("*.ebl"))
+
+
 def _parse_host_port(value: str, default_port: int) -> Tuple[str, int]:
     if ":" in value:
         host, _, port_str = value.rpartition(":")
@@ -179,7 +187,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         nargs="*",
         type=Path,
         help="One or more log files: .ebl (SD card log from the W2K-2) or .raw/.n2k (N2K ASCII, "
-        "e.g. captured via --live --tee). Do not combine with --live.",
+        "e.g. captured via --live --tee). Do not combine with --live. If omitted (and --live "
+        "isn't used either), falls back to every .ebl file found under --ebl-dir.",
     )
     parser.add_argument(
         "--live",
@@ -274,6 +283,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "engine instance found in the data is kept and labeled (already unlabeled "
         "automatically if only one instance ever shows up).",
     )
+    parser.add_argument(
+        "--ebl-dir",
+        type=Path,
+        default=None,
+        help="Folder to search recursively for .ebl files when no logfiles are given on the "
+        "command line and --live isn't used either (e.g. the same folder nmea2log-download "
+        "downloads into). Default: not set, or the 'ebl_dir' setting from the config file.",
+    )
     _apply_config_defaults(parser)
     return parser
 
@@ -302,6 +319,7 @@ def _apply_config_defaults(parser: argparse.ArgumentParser) -> None:
         ("utc_offset", float),
         ("boat_name", str),
         ("engine_count", int),
+        ("ebl_dir", Path),
     ):
         if key in section:
             defaults[key] = caster(section[key])
@@ -315,8 +333,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
 
+    if not args.logfiles and not args.live and args.ebl_dir:
+        if not args.ebl_dir.is_dir():
+            parser.error(f"--ebl-dir {args.ebl_dir} is not a directory")
+        args.logfiles = _discover_ebl_files(args.ebl_dir)
+        if not args.logfiles:
+            parser.error(f"no .ebl files found under {args.ebl_dir}")
+        print(f"Found {len(args.logfiles)} .ebl file(s) under {args.ebl_dir}.", file=sys.stderr)
+
     if bool(args.logfiles) == bool(args.live):
-        parser.error("provide either one or more logfiles or --live HOST[:PORT] (not both, not neither)")
+        parser.error(
+            "provide either one or more logfiles, --live HOST[:PORT], or set ebl_dir in the "
+            "config file (not more than one of these)"
+        )
     if args.duration is not None and not args.live:
         parser.error("--duration only applies together with --live")
     if args.tee is not None and not args.live:
@@ -395,13 +424,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1
 
     trip_uids = assign_trip_ids(trips, utc_offset_hours=args.utc_offset)
+    remarks_by_uid = load_remarks(DEFAULT_REMARKS_PATH)
+    trip_remarks = [remarks_by_uid.get(uid, "") for uid in trip_uids]
 
-    write_csv(trips, args.output, utc_offset_hours=args.utc_offset)
+    write_csv(trips, args.output, utc_offset_hours=args.utc_offset, remarks=trip_remarks)
     gpx_path = args.output.with_suffix(".gpx")
     write_gpx(trips, gpx_path, utc_offset_hours=args.utc_offset)
     html_path = args.output.with_suffix(".html")
     write_html_logbook(
-        trips, html_path, boat_name=args.boat_name, utc_offset_hours=args.utc_offset, trip_uids=trip_uids
+        trips,
+        html_path,
+        boat_name=args.boat_name,
+        utc_offset_hours=args.utc_offset,
+        trip_uids=trip_uids,
+        remarks=trip_remarks,
     )
     print(f"Logbook written: {args.output} ({len(trips)} trip(s))")
     print(f"Route written: {gpx_path}")

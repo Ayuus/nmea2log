@@ -8,6 +8,7 @@ build/
 dist/
 .geocode_cache.json
 trip_ids.json
+remarks.csv
 logbook.csv
 logbook.gpx
 logbook.html

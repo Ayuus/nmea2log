@@ -7,7 +7,7 @@ from __future__ import annotations
 import csv
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Dict, Iterable, Optional
+from typing import Dict, Iterable, List, Optional
 
 from .tripbuilder import EngineHealth, TripLeg
 
@@ -30,6 +30,7 @@ _FIELDNAMES = [
     "warnings",
     "min_depth_m",
     "min_depth_position",
+    "remark",
 ]
 
 
@@ -169,13 +170,22 @@ def _min_depth_position_text(trip: TripLeg) -> str:
     return f"{trip.min_depth_lat:.4f}, {trip.min_depth_lon:.4f}"
 
 
-def write_csv(trips: Iterable[TripLeg], path: Path, utc_offset_hours: Optional[float] = None) -> None:
+def write_csv(
+    trips: Iterable[TripLeg],
+    path: Path,
+    utc_offset_hours: Optional[float] = None,
+    remarks: Optional[List[str]] = None,
+) -> None:
     """``utc_offset_hours``: fixed timezone offset (e.g. 2 for CEST) to apply to all trips.
-    Default (None) estimates the offset per trip from the departure longitude."""
+    Default (None) estimates the offset per trip from the departure longitude.
+
+    ``remarks``: one free-text remark per trip, same order as ``trips`` (e.g. from
+    ``remarks.load_remarks`` matched via ``trip_ids.assign_trip_ids``); empty string or omitted
+    entirely means no remark."""
     with path.open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.DictWriter(handle, fieldnames=_FIELDNAMES, delimiter=";")
         writer.writeheader()
-        for trip in trips:
+        for index, trip in enumerate(trips):
             offset = _trip_utc_offset_hours(trip, utc_offset_hours)
             depart_local = _to_local(trip.depart_time, offset)
             arrive_local = _to_local(trip.arrive_time, offset)
@@ -208,5 +218,6 @@ def write_csv(trips: Iterable[TripLeg], path: Path, utc_offset_hours: Optional[f
                     "warnings": _format_warnings(trip.engine_health),
                     "min_depth_m": _nl_num(trip.min_depth_m) if trip.min_depth_m is not None else "",
                     "min_depth_position": _min_depth_position_text(trip),
+                    "remark": remarks[index] if remarks is not None else "",
                 }
             )

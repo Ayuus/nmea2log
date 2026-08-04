@@ -1,11 +1,14 @@
 from datetime import datetime
+from pathlib import Path
 
 from nmea2000processor.cli import (
+    _discover_ebl_files,
     _dominant_source_only,
     _filter_to_dominant_engine,
     _merge_by_source,
     _select_primary_gps_source,
     build_arg_parser,
+    main,
 )
 from nmea2000processor.model import EngineSample, PositionFix, SogSample, TripFuelSample
 
@@ -139,3 +142,45 @@ def test_filter_to_dominant_engine_passthrough_when_already_single_instance():
 
     assert filtered_engine == engine_samples
     assert filtered_fuel == trip_fuel_samples
+
+
+def test_discover_ebl_files_finds_files_recursively(tmp_path: Path):
+    (tmp_path / "EBL000000").mkdir()
+    (tmp_path / "EBL000001").mkdir()
+    (tmp_path / "EBL000000" / "000000_000.ebl").write_bytes(b"")
+    (tmp_path / "EBL000001" / "000001_000.ebl").write_bytes(b"")
+    (tmp_path / "EBL000000" / "readme.txt").write_text("not an ebl file")
+
+    found = _discover_ebl_files(tmp_path)
+
+    assert found == sorted(
+        [tmp_path / "EBL000000" / "000000_000.ebl", tmp_path / "EBL000001" / "000001_000.ebl"]
+    )
+
+
+def test_discover_ebl_files_empty_dir(tmp_path: Path):
+    assert _discover_ebl_files(tmp_path) == []
+
+
+def test_ebl_dir_config_default_applies_when_no_logfiles_given(tmp_path, monkeypatch):
+    config_path = tmp_path / "nmea2log.ini"
+    config_path.write_text(f"[nmea2log]\nebl_dir = {tmp_path}\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    args = build_arg_parser().parse_args([])
+
+    assert args.ebl_dir == tmp_path
+
+
+def test_main_reports_a_clear_error_when_ebl_dir_has_no_ebl_files(tmp_path, capsys):
+    empty_dir = tmp_path / "empty"
+    empty_dir.mkdir()
+
+    exit_code = None
+    try:
+        main(["--ebl-dir", str(empty_dir)])
+    except SystemExit as exc:
+        exit_code = exc.code
+
+    assert exit_code == 2
+    assert "no .ebl files found" in capsys.readouterr().err

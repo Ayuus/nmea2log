@@ -141,6 +141,17 @@ def test_write_html_logbook_without_trip_uids(tmp_path: Path):
     assert "data-uid" not in html
 
 
+def test_write_html_logbook_shows_remarks(tmp_path: Path):
+    trip_a = _trip(depart_time=datetime(2026, 7, 15, 9, 0), arrive_time=datetime(2026, 7, 15, 10, 0))
+    trip_b = _trip(depart_time=datetime(2026, 7, 16, 9, 0), arrive_time=datetime(2026, 7, 16, 10, 0))
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([trip_a, trip_b], out_path, remarks=["Nice broad reach", ""])
+
+    html = out_path.read_text(encoding="utf-8")
+    assert "Nice broad reach" in html
+
+
 def test_write_html_logbook_escapes_place_names(tmp_path: Path):
     trip = _trip(depart_place="Marina <A> & Co")
     out_path = tmp_path / "logbook.html"
