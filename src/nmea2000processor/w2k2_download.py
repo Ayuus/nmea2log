@@ -214,8 +214,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = build_arg_parser().parse_args(argv)
     config = load_config(args.config)
 
-    session = make_session(config)
     try:
+        session = make_session(config)
         for folder in get_folders(session):
             for info in get_files(session, folder["name"]):
                 download_file(session, config.download_dir, folder["name"], info)
