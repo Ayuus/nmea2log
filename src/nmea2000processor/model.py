@@ -55,3 +55,9 @@ class TripFuelSample:
 class DepthSample:
     time: datetime
     depth_m: Optional[float]  # water depth under the transducer (PGN 128267), in meters
+
+
+@dataclass(frozen=True)
+class WaterTempSample:
+    time: datetime
+    temp_c: Optional[float]  # sea/outside water temperature (PGN 130312), in degrees Celsius

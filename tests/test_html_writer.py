@@ -23,6 +23,9 @@ def _trip(**overrides) -> TripLeg:
         min_depth_m=None,
         min_depth_lat=None,
         min_depth_lon=None,
+        avg_water_temp_c=None,
+        min_water_temp_c=None,
+        max_water_temp_c=None,
         track=[],
     )
     defaults.update(overrides)
@@ -139,6 +142,37 @@ def test_write_html_logbook_without_trip_uids(tmp_path: Path):
 
     html = out_path.read_text(encoding="utf-8")
     assert "data-uid" not in html
+
+
+def test_write_html_logbook_shows_water_temp_badge(tmp_path: Path):
+    trip = _trip(avg_water_temp_c=21.8, min_water_temp_c=21.7, max_water_temp_c=21.9)
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([trip], out_path)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert "temp-badge" in html
+    assert "21,8°C" in html
+    assert "#EAF3DE" in html  # green bucket for 18-22°C
+
+
+def test_write_html_logbook_water_temp_badge_shows_range_when_notable(tmp_path: Path):
+    trip = _trip(avg_water_temp_c=17.0, min_water_temp_c=15.0, max_water_temp_c=19.0)
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([trip], out_path)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert "15,0" in html and "19,0" in html
+
+
+def test_write_html_logbook_no_water_temp_badge_without_data(tmp_path: Path):
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([_trip()], out_path)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert 'class="temp-badge"' not in html
 
 
 def test_write_html_logbook_escapes_place_names(tmp_path: Path):

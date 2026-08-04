@@ -17,8 +17,14 @@ PGN_ENGINE_DYNAMIC = 127489  # Engine Parameters, Dynamic
 PGN_TRIP_FUEL_ENGINE = 127497  # Trip Parameters, Engine
 PGN_WATER_DEPTH = 128267  # Water Depth
 PGN_SYSTEM_TIME = 126992  # System Time
+PGN_TEMPERATURE = 130312  # Temperature
 
 _EPOCH = date(1970, 1, 1)
+_KELVIN_TO_CELSIUS = 273.15
+
+# canboat's TEMPERATURE_SOURCE lookup enumeration for PGN 130312's "Source" field; 0 is the one
+# we want (sea/outside water temperature, as opposed to e.g. cabin or exhaust gas temperature).
+_TEMPERATURE_SOURCE_SEA = 0
 
 # Bit meanings of the two "Discrete Status" fields in PGN 127489, taken from canboat's
 # ENGINE_STATUS_1 / ENGINE_STATUS_2 lookup enumerations.
@@ -143,6 +149,19 @@ def decode_water_depth(data: bytes) -> Optional[float]:
     if depth_raw is None:
         return None
     return depth_raw * 0.01
+
+
+def decode_sea_temperature(data: bytes) -> Optional[float]:
+    """PGN 130312: water temperature under the hull, in degrees Celsius. Several sources can be
+    reported under this PGN (cabin, exhaust gas, ...); returns None unless the "Source" field is
+    specifically sea/outside water temperature (see ``_TEMPERATURE_SOURCE_SEA``)."""
+    source = _extract(data, 16, 8, signed=False)
+    if source != _TEMPERATURE_SOURCE_SEA:
+        return None
+    temp_raw = _extract(data, 24, 16, signed=False)
+    if temp_raw is None:
+        return None
+    return temp_raw * 0.01 - _KELVIN_TO_CELSIUS
 
 
 def decode_trip_fuel_engine(data: bytes) -> Optional[Tuple[int, Optional[float]]]:

@@ -14,16 +14,18 @@ from .geocode import Geocoder, NoGeocoder
 from .gpx_writer import write_gpx
 from .html_writer import write_html_logbook
 from .logbook_writer import write_csv
-from .model import DepthSample, EngineSample, Frame, PositionFix, SogSample, TripFuelSample
+from .model import DepthSample, EngineSample, Frame, PositionFix, SogSample, TripFuelSample, WaterTempSample
 from .network_reader import DEFAULT_PORT, iter_frames_tcp
 from .pgn_decode import (
     PGN_COG_SOG_RAPID,
     PGN_ENGINE_DYNAMIC,
     PGN_POSITION_RAPID,
+    PGN_TEMPERATURE,
     PGN_TRIP_FUEL_ENGINE,
     PGN_WATER_DEPTH,
     decode_engine_dynamic,
     decode_position_rapid,
+    decode_sea_temperature,
     decode_sog,
     decode_trip_fuel_engine,
     decode_water_depth,
@@ -105,6 +107,7 @@ def _collect_samples(
     List[EngineSample],
     List[TripFuelSample],
     Dict[int, List[DepthSample]],
+    Dict[int, List[WaterTempSample]],
 ]:
     """Processes frames into samples, grouped by source address for PGNs that can come from
     multiple devices at once. Stops cleanly on Ctrl+C or once the deadline passes, so a live
@@ -112,6 +115,7 @@ def _collect_samples(
     fixes_by_source: Dict[int, List[PositionFix]] = {}
     sogs_by_source: Dict[int, List[SogSample]] = {}
     depth_by_source: Dict[int, List[DepthSample]] = {}
+    water_temp_by_source: Dict[int, List[WaterTempSample]] = {}
     engine_samples: List[EngineSample] = []
     trip_fuel_samples: List[TripFuelSample] = []
     try:
@@ -141,9 +145,13 @@ def _collect_samples(
                 depth_m = decode_water_depth(frame.data)
                 if depth_m is not None:
                     depth_by_source.setdefault(frame.source, []).append(DepthSample(frame.time, depth_m))
+            elif frame.pgn == PGN_TEMPERATURE:
+                temp_c = decode_sea_temperature(frame.data)
+                if temp_c is not None:
+                    water_temp_by_source.setdefault(frame.source, []).append(WaterTempSample(frame.time, temp_c))
     except KeyboardInterrupt:
         print("\nInterrupted by user; writing the logbook with the data collected so far...", file=sys.stderr)
-    return fixes_by_source, sogs_by_source, engine_samples, trip_fuel_samples, depth_by_source
+    return fixes_by_source, sogs_by_source, engine_samples, trip_fuel_samples, depth_by_source, water_temp_by_source
 
 
 def _iter_frames_for_path(
@@ -353,6 +361,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     fixes_by_source: Dict[int, List[PositionFix]] = {}
     sogs_by_source: Dict[int, List[SogSample]] = {}
     depth_by_source: Dict[int, List[DepthSample]] = {}
+    water_temp_by_source: Dict[int, List[WaterTempSample]] = {}
     all_engine: List[EngineSample] = []
     all_trip_fuel: List[TripFuelSample] = []
 
@@ -365,8 +374,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"Could not connect to {host}:{port}: {exc}", file=sys.stderr)
             return 1
         deadline = time.monotonic() + args.duration if args.duration else None
-        fixes_by_source, sogs_by_source, all_engine, all_trip_fuel, depth_by_source = _collect_samples(
-            frames, deadline=deadline
+        fixes_by_source, sogs_by_source, all_engine, all_trip_fuel, depth_by_source, water_temp_by_source = (
+            _collect_samples(frames, deadline=deadline)
         )
     else:
         start_date = date.fromisoformat(args.start_date) if args.start_date else None
@@ -376,15 +385,17 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(f"Log file not found: {path}", file=sys.stderr)
                 return 1
             frames = _iter_frames_for_path(path, start_date if index == 0 else None, ebl_time_state)
-            fixes, sogs, engine, trip_fuel, depth = _collect_samples(frames)
+            fixes, sogs, engine, trip_fuel, depth, water_temp = _collect_samples(frames)
             _merge_by_source(fixes_by_source, fixes)
             _merge_by_source(sogs_by_source, sogs)
             all_engine += engine
             all_trip_fuel += trip_fuel
             _merge_by_source(depth_by_source, depth)
+            _merge_by_source(water_temp_by_source, water_temp)
 
     all_fixes, all_sogs, primary_gps_source = _select_primary_gps_source(fixes_by_source, sogs_by_source)
     all_depth = _dominant_source_only(depth_by_source)
+    all_water_temp = _dominant_source_only(water_temp_by_source)
 
     if len(fixes_by_source) > 1:
         print(
@@ -408,6 +419,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         all_engine,
         all_trip_fuel,
         all_depth,
+        all_water_temp,
         geocoder=geocoder,
         speed_threshold_kn=args.speed_threshold_kn,
         min_stop_minutes=args.min_stop_minutes,

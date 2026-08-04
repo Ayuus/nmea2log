@@ -86,6 +86,36 @@ def _decimated_points(trip: TripLeg) -> List[Tuple[float, float]]:
     return [(round(s.lat, 6), round(s.lon, 6)) for s in decimated]
 
 
+# (background, text) hex pairs for the water-temp badge, cold to warm.
+_TEMP_COLORS = (
+    (14, "#E6F1FB", "#0C447C"),
+    (18, "#E1F5EE", "#085041"),
+    (22, "#EAF3DE", "#27500A"),
+    (26, "#FAEEDA", "#633806"),
+)
+_TEMP_COLOR_HOT = ("#FCEBEB", "#791F1F")
+
+
+def _water_temp_badge_html(trip: TripLeg) -> str:
+    if trip.avg_water_temp_c is None:
+        return ""
+    for threshold, bg, text in _TEMP_COLORS:
+        if trip.avg_water_temp_c < threshold:
+            break
+    else:
+        bg, text = _TEMP_COLOR_HOT
+    range_text = ""
+    if trip.max_water_temp_c - trip.min_water_temp_c > 0.5:
+        range_text = (
+            f' <span style="opacity:0.75;">({_nl_num(trip.min_water_temp_c)}'
+            f"–{_nl_num(trip.max_water_temp_c)}°)</span>"
+        )
+    return (
+        f'<span class="temp-badge" style="background:{bg};color:{text};">'
+        f"🌡️ {_nl_num(trip.avg_water_temp_c)}°C{range_text}</span>"
+    )
+
+
 def _totals_html(totals: _Totals) -> str:
     avg_l_per_nm = totals.fuel_liters / totals.distance_nm if totals.distance_nm > 0 else None
     avg_l_per_hour = totals.fuel_liters / totals.moving_hours if totals.moving_hours > 0 else None
@@ -152,6 +182,7 @@ def _trip_row_html(
         f"{_nl_num(avg_consumption_nm, 2)} L/nm" if avg_consumption_nm is not None else "",
         escape(_engine_hours_text(trip)),
         escape(_format_warnings(trip.engine_health)),
+        _water_temp_badge_html(trip),
         map_cell,
     ]
     row = "".join(f"<td>{cell}</td>" for cell in cells)
@@ -160,7 +191,7 @@ def _trip_row_html(
         title = escape(f"{depart_local:%Y-%m-%d %H:%M} {trip.depart_place} -> {trip.arrive_place}")
         map_row = (
             f'<tr class="trip-map-row" data-trip="{idx}" style="display:none">'
-            f'<td colspan="13"><div class="trip-map-title">{title}</div>'
+            f'<td colspan="14"><div class="trip-map-title">{title}</div>'
             f'<div class="map" id="map-{idx}"></div></td></tr>'
         )
     uid_attr = f' data-uid="{escape(trip_uid)}"' if trip_uid else ""
@@ -180,6 +211,7 @@ _HEADERS = [
     "L/nm",
     "Engine hours",
     "Warnings",
+    "Water temp",
     "Route",
 ]
 
@@ -257,6 +289,7 @@ def write_html_logbook(
   .show-map {{ cursor: pointer; border: 1px solid #1a6ecc; background: white; color: #1a6ecc; border-radius: 4px; padding: 0.2em 0.6em; }}
   .show-map:hover {{ background: #1a6ecc; color: white; }}
   .trip-map-title {{ font-weight: 600; margin-bottom: 0.4em; }}
+  .temp-badge {{ display: inline-block; border-radius: 12px; padding: 0.15em 0.6em; font-size: 0.85em; white-space: nowrap; }}
   .map {{ height: 350px; }}
 </style>
 </head>

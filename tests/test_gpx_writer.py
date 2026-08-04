@@ -30,6 +30,9 @@ def _trip(**overrides) -> TripLeg:
         min_depth_m=None,
         min_depth_lat=None,
         min_depth_lon=None,
+        avg_water_temp_c=None,
+        min_water_temp_c=None,
+        max_water_temp_c=None,
         track=[],
     )
     defaults.update(overrides)

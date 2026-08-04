@@ -49,6 +49,13 @@ def _trip_description(trip: TripLeg) -> str:
         parts.append(f"Warnings: {warnings}")
     if trip.min_depth_m is not None:
         parts.append(f"Min. depth: {_nl_num(trip.min_depth_m)} m")
+    if trip.avg_water_temp_c is not None:
+        range_text = (
+            f" ({_nl_num(trip.min_water_temp_c)}-{_nl_num(trip.max_water_temp_c)})"
+            if trip.max_water_temp_c - trip.min_water_temp_c > 0.5
+            else ""
+        )
+        parts.append(f"Water temp: {_nl_num(trip.avg_water_temp_c)}°C{range_text}")
     return ", ".join(parts)
 
 

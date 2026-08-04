@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from nmea2000processor.model import DepthSample, EngineSample, PositionFix, SogSample, TripFuelSample
+from nmea2000processor.model import DepthSample, EngineSample, PositionFix, SogSample, TripFuelSample, WaterTempSample
 from nmea2000processor.tripbuilder import build_trips
 
 
@@ -121,6 +121,47 @@ def test_min_depth_with_position():
     # the shallowest position belongs to fix m=25, somewhere on the straight line between the ports
     assert trip.min_depth_lat is not None
     assert trip.min_depth_lon is not None
+
+
+def test_water_temp_stats_with_position():
+    fixes, sogs, engine_samples = _build_scenario()
+    geocoder = _StubGeocoder()
+
+    # water temp varies while underway (m 12..41), rising steadily
+    water_temp_samples = []
+    for m in range(0, 54):
+        if 12 <= m < 42:
+            temp_c = 18.0 + (m - 12) * 0.1
+        else:
+            temp_c = 12.0  # in the port, not relevant to this trip
+        water_temp_samples.append(WaterTempSample(_dt(m), temp_c))
+
+    trips = build_trips(
+        fixes, sogs, engine_samples, None, None, water_temp_samples,
+        geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+    )
+
+    assert len(trips) == 1
+    trip = trips[0]
+    assert trip.min_water_temp_c == pytest.approx(18.0)
+    assert trip.max_water_temp_c == pytest.approx(18.0 + 29 * 0.1)
+    assert trip.avg_water_temp_c == pytest.approx((trip.min_water_temp_c + trip.max_water_temp_c) / 2, abs=0.2)
+
+
+def test_water_temp_stats_absent_without_samples():
+    fixes, sogs, engine_samples = _build_scenario()
+    geocoder = _StubGeocoder()
+
+    trips = build_trips(
+        fixes, sogs, engine_samples,
+        geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+    )
+
+    assert len(trips) == 1
+    trip = trips[0]
+    assert trip.avg_water_temp_c is None
+    assert trip.min_water_temp_c is None
+    assert trip.max_water_temp_c is None
 
 
 def test_engine_health_and_warnings():

@@ -17,7 +17,7 @@ from itertools import groupby
 from typing import Dict, FrozenSet, List, Optional, Tuple
 
 from .geocode import Geocoder, NoGeocoder
-from .model import DepthSample, EngineSample, PositionFix, SogSample, TripFuelSample
+from .model import DepthSample, EngineSample, PositionFix, SogSample, TripFuelSample, WaterTempSample
 
 _KNOT_IN_MS = 0.514444
 _EARTH_RADIUS_NM = 3440.065
@@ -33,6 +33,7 @@ class NavSample:
     lon: float
     sog_ms: float
     depth_m: Optional[float] = None
+    water_temp_c: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -72,6 +73,9 @@ class TripLeg:
     min_depth_m: Optional[float]  # shallowest water depth measured during this trip
     min_depth_lat: Optional[float]
     min_depth_lon: Optional[float]
+    avg_water_temp_c: Optional[float]
+    min_water_temp_c: Optional[float]
+    max_water_temp_c: Optional[float]
     track: List[NavSample]  # GPS points of this trip, e.g. for GPX export
 
 
@@ -84,16 +88,23 @@ def _haversine_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 
 def _merge_nav_samples(
-    fixes: List[PositionFix], sogs: List[SogSample], depths: Optional[List[DepthSample]] = None
+    fixes: List[PositionFix],
+    sogs: List[SogSample],
+    depths: Optional[List[DepthSample]] = None,
+    water_temps: Optional[List[WaterTempSample]] = None,
 ) -> List[NavSample]:
-    """Combines position, speed, and depth readings chronologically; both are forward-filled."""
+    """Combines position, speed, depth, and water temperature readings chronologically; all are
+    forward-filled."""
     sogs_sorted = sorted(sogs, key=lambda s: s.time)
     depths_sorted = sorted(depths, key=lambda s: s.time) if depths else []
+    water_temps_sorted = sorted(water_temps, key=lambda s: s.time) if water_temps else []
     samples: List[NavSample] = []
     sog_idx = 0
     depth_idx = 0
+    water_temp_idx = 0
     last_sog = 0.0
     last_depth: Optional[float] = None
+    last_water_temp: Optional[float] = None
     for fix in sorted(fixes, key=lambda f: f.time):
         while sog_idx < len(sogs_sorted) and sogs_sorted[sog_idx].time <= fix.time:
             last_sog = sogs_sorted[sog_idx].sog_ms
@@ -101,7 +112,10 @@ def _merge_nav_samples(
         while depth_idx < len(depths_sorted) and depths_sorted[depth_idx].time <= fix.time:
             last_depth = depths_sorted[depth_idx].depth_m
             depth_idx += 1
-        samples.append(NavSample(fix.time, fix.lat, fix.lon, last_sog, last_depth))
+        while water_temp_idx < len(water_temps_sorted) and water_temps_sorted[water_temp_idx].time <= fix.time:
+            last_water_temp = water_temps_sorted[water_temp_idx].temp_c
+            water_temp_idx += 1
+        samples.append(NavSample(fix.time, fix.lat, fix.lon, last_sog, last_depth, last_water_temp))
     return samples
 
 
@@ -287,6 +301,14 @@ def _min_depth(track: List[NavSample]) -> Tuple[Optional[float], Optional[float]
     return shallowest.depth_m, shallowest.lat, shallowest.lon
 
 
+def _water_temp_stats(track: List[NavSample]) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+    """Returns (avg, min, max) water temperature in degrees Celsius, or (None, None, None)."""
+    values = [s.water_temp_c for s in track if s.water_temp_c is not None]
+    if not values:
+        return None, None, None
+    return sum(values) / len(values), min(values), max(values)
+
+
 def _engine_health(
     samples: List[EngineSample], start: datetime, end: datetime
 ) -> Dict[int, EngineHealth]:
@@ -332,6 +354,7 @@ def build_trips(
     engine_samples: List[EngineSample],
     trip_fuel_samples: Optional[List[TripFuelSample]] = None,
     depth_samples: Optional[List[DepthSample]] = None,
+    water_temp_samples: Optional[List[WaterTempSample]] = None,
     *,
     geocoder: Optional[object] = None,
     speed_threshold_kn: float = 0.5,
@@ -356,7 +379,7 @@ def build_trips(
     if max_gap_minutes is None:
         max_gap_minutes = min_stop_minutes
 
-    samples = _merge_nav_samples(fixes, sogs, depth_samples)
+    samples = _merge_nav_samples(fixes, sogs, depth_samples, water_temp_samples)
     if len(samples) < 2:
         return []
 
@@ -395,6 +418,7 @@ def build_trips(
         )
         avg_speed_kn, max_speed_kn = _speed_stats_kn(group)
         min_depth_m, min_depth_lat, min_depth_lon = _min_depth(group)
+        avg_water_temp_c, min_water_temp_c, max_water_temp_c = _water_temp_stats(group)
 
         trips.append(
             TripLeg(
@@ -414,6 +438,9 @@ def build_trips(
                 min_depth_m=min_depth_m,
                 min_depth_lat=min_depth_lat,
                 min_depth_lon=min_depth_lon,
+                avg_water_temp_c=avg_water_temp_c,
+                min_water_temp_c=min_water_temp_c,
+                max_water_temp_c=max_water_temp_c,
                 track=group,
             )
         )

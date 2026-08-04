@@ -30,6 +30,9 @@ _FIELDNAMES = [
     "warnings",
     "min_depth_m",
     "min_depth_position",
+    "avg_water_temp_c",
+    "min_water_temp_c",
+    "max_water_temp_c",
 ]
 
 
@@ -208,5 +211,8 @@ def write_csv(trips: Iterable[TripLeg], path: Path, utc_offset_hours: Optional[f
                     "warnings": _format_warnings(trip.engine_health),
                     "min_depth_m": _nl_num(trip.min_depth_m) if trip.min_depth_m is not None else "",
                     "min_depth_position": _min_depth_position_text(trip),
+                    "avg_water_temp_c": _nl_num(trip.avg_water_temp_c) if trip.avg_water_temp_c is not None else "",
+                    "min_water_temp_c": _nl_num(trip.min_water_temp_c) if trip.min_water_temp_c is not None else "",
+                    "max_water_temp_c": _nl_num(trip.max_water_temp_c) if trip.max_water_temp_c is not None else "",
                 }
             )

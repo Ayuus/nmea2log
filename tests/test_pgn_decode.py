@@ -6,6 +6,7 @@ import pytest
 from nmea2000processor.pgn_decode import (
     decode_engine_dynamic,
     decode_position_rapid,
+    decode_sea_temperature,
     decode_sog,
     decode_system_time,
     decode_trip_fuel_engine,
@@ -133,3 +134,25 @@ def test_decode_system_time_not_available():
     data = struct.pack("<BBH", 0, 0, 0xFFFF) + struct.pack("<I", 0)
 
     assert decode_system_time(data) is None
+
+
+def test_decode_sea_temperature():
+    # sid(1B) + instance(1B) + source(1B, 0 = sea temperature) + actualTemp(2B, res 0.01K) + setTemp(2B)
+    temp_raw = round((21.82 + 273.15) / 0.01)
+    data = struct.pack("<BBBHH", 0, 0, 0, temp_raw, 0xFFFF)
+
+    assert decode_sea_temperature(data) == pytest.approx(21.82, abs=1e-6)
+
+
+def test_decode_sea_temperature_ignores_other_sources():
+    # source 1 = outside (air) temperature, not sea -- should be filtered out, not returned
+    temp_raw = round((21.82 + 273.15) / 0.01)
+    data = struct.pack("<BBBHH", 0, 0, 1, temp_raw, 0xFFFF)
+
+    assert decode_sea_temperature(data) is None
+
+
+def test_decode_sea_temperature_not_available():
+    data = struct.pack("<BBBHH", 0, 0, 0, 0xFFFF, 0xFFFF)
+
+    assert decode_sea_temperature(data) is None
