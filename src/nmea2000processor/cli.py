@@ -283,6 +283,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "shown as a (meaningless) logbook row (default 0.1 nm)",
     )
     parser.add_argument(
+        "--lock-radius-m",
+        type=float,
+        default=10.0,
+        help="A stop is treated as a lock/opening bridge (folded back into the trip instead of "
+        "splitting it in two) if the engine was off no longer than --lock-max-duration-minutes "
+        "and the boat stayed within this radius (meters) of its own position the whole time "
+        "(default 10 m). Set to a negative value to disable this entirely.",
+    )
+    parser.add_argument(
+        "--lock-max-duration-minutes",
+        type=float,
+        default=120.0,
+        help="See --lock-radius-m: a confined stop where the engine was off longer than this "
+        "counts as a real port visit regardless of how little it moved (default 120 minutes, "
+        "i.e. 2 hours)",
+    )
+    parser.add_argument(
         "--no-geocode",
         action="store_true",
         help="Skip the online port-name lookup; shows coordinates instead of names",
@@ -365,6 +382,8 @@ def _apply_config_defaults(parser: argparse.ArgumentParser) -> None:
         ("engine_count", int),
         ("battery_warning_voltage", float),
         ("ebl_dir", Path),
+        ("lock_radius_m", float),
+        ("lock_max_duration_minutes", float),
     ):
         if key in section:
             defaults[key] = caster(section[key])
@@ -473,6 +492,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         min_stop_minutes=args.min_stop_minutes,
         max_gap_minutes=args.max_gap_minutes,
         min_trip_distance_nm=args.min_trip_distance_nm,
+        lock_radius_m=args.lock_radius_m if args.lock_radius_m >= 0 else None,
+        lock_max_duration_minutes=args.lock_max_duration_minutes,
     )
 
     if not trips:

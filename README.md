@@ -62,7 +62,22 @@ the tests.
    3:21 instead of the real ~0:45, while the engine-hour meter — which doesn't depend on GPS
    classification — had it right). Trips shorter than 0.1 nm (adjustable via
    `--min-trip-distance-nm`) are filtered out: that's almost always GPS/speed noise right at such
-   a segment boundary, not a real trip. Per trip, the app calculates:
+   a segment boundary, not a real trip.
+
+   A stop is treated as a lock, opening bridge, or similarly brief operational pause — folded
+   back into the trip instead of showing up as a separate port visit — if the engine was off no
+   longer than `--lock-max-duration-minutes` (default 120) and the boat stayed within
+   `--lock-radius-m` (default 10) of its own position for the *entire* time the engine was off,
+   not just however much of that time GPS/speed noise happened to leave classified as
+   "stationary". This only ever applies to a stop that comes after an actual trip (never the very
+   first thing in the log) and only if the engine is confirmed running again afterwards — an
+   engine that never restarts is either a genuine arrival or simply where the log ends, never a
+   lock. There's no reliable way to know an exact position is a lock (reverse geocoding and the
+   Overpass API both proved too unreliable for this), so this is a deliberately simple heuristic:
+   it also folds away any other brief, tightly-confined pause where the engine happens to cycle
+   off and on again the same day (e.g. a quick stop at a quay) — pass a negative
+   `--lock-radius-m` to disable it entirely and always show every stop ≥ `--min-stop-minutes` as
+   a port visit. Per trip, the app calculates:
    - **Fuel consumption**, two ways: **calculated** by integrating the fuel-rate reading
      (PGN 127489) over time, and — if available — the difference between the start and end
      reading of the **engine's own trip meter** (PGN 127497). Note: that trip meter is a counter
@@ -258,6 +273,8 @@ nmea2log --live 192.168.4.1:60001 --tee 2026-07-16.raw -o logbook.csv
 | `--min-stop-minutes` | Minimum stationary duration to count as a port visit (default 10) |
 | `--max-gap-minutes` | From how many minutes without data a trip gets cut short (default: same as `--min-stop-minutes`) |
 | `--min-trip-distance-nm` | Trips shorter than this are filtered out as noise instead of shown (default 0.1 nm) |
+| `--lock-radius-m` | Max drift (meters) during an engine-off stop for it to count as a lock/bridge instead of a port visit (default 10; negative disables it) |
+| `--lock-max-duration-minutes` | Max engine-off duration for a confined stop to still count as a lock/bridge (default 120, i.e. 2 hours) |
 | `--no-geocode` | No internet needed; shows coordinates instead of port names |
 | `--cache-file` | Path to the cache file for port names (default `.geocode_cache.json`) |
 | `--start-date` | Force the start date of the first log file (`YYYY-MM-DD`); not applicable with `--live` |

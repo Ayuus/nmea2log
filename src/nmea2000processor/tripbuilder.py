@@ -32,6 +32,9 @@ _EARTH_RADIUS_NM = 3440.065
 _MAX_INTEGRATION_GAP_H = 1.0  # larger gaps between engine samples indicate a log interruption
 _KELVIN_TO_CELSIUS = 273.15
 _PA_TO_BAR = 1e-5
+_ENGINE_IDLE_FUEL_LPH = 0.3  # below this, the engine counts as switched off rather than idling
+_ENGINE_OFF_GAP_S = 60.0  # a gap this long between "on" readings means the engine was actually
+# switched off in between, not just a brief hiccup in PGN reporting
 
 
 @dataclass(frozen=True)
@@ -161,13 +164,104 @@ def _merge_short_stops(
                 label = "moving"
         relabelled.append((label, group))
 
+    return _merge_adjacent(relabelled)
+
+
+def _merge_adjacent(runs: List[Tuple[str, List[NavSample]]]) -> List[Tuple[str, List[NavSample]]]:
+    """Joins consecutive runs that ended up with the same label after relabelling (e.g. a
+    "stationary" run just turned back into "moving") into a single run."""
     merged: List[Tuple[str, List[NavSample]]] = []
-    for label, group in relabelled:
+    for label, group in runs:
         if merged and merged[-1][0] == label:
             merged[-1] = (label, merged[-1][1] + group)
         else:
             merged.append((label, group))
     return merged
+
+
+def _spatial_spread_m(group: List[NavSample]) -> float:
+    """Max distance (meters) from the group's centroid to any point in it."""
+    lat = sum(s.lat for s in group) / len(group)
+    lon = sum(s.lon for s in group) / len(group)
+    return max(_haversine_nm(lat, lon, s.lat, s.lon) * 1852.0 for s in group)
+
+
+def _engine_on_intervals(engine_samples: List[EngineSample]) -> List[Tuple[datetime, datetime]]:
+    """Merged time ranges (across all engine instances) during which an engine was actually
+    running, based on fuel consumption -- a much more direct "is it running" signal than merely
+    receiving PGN 127489, since some devices keep sending near-zero readings for a while after
+    shutdown. Consecutive "on" readings less than ``_ENGINE_OFF_GAP_S`` apart are treated as one
+    continuous interval, bridging normal reporting jitter without bridging a real shutdown."""
+    on_times = sorted(
+        s.time for s in engine_samples if s.fuel_rate_lph is not None and s.fuel_rate_lph > _ENGINE_IDLE_FUEL_LPH
+    )
+    if not on_times:
+        return []
+    gap = timedelta(seconds=_ENGINE_OFF_GAP_S)
+    intervals = [[on_times[0], on_times[0]]]
+    for t in on_times[1:]:
+        if t - intervals[-1][1] <= gap:
+            intervals[-1][1] = t
+        else:
+            intervals.append([t, t])
+    return [(start, end) for start, end in intervals]
+
+
+def _engine_off_span(
+    on_intervals: List[Tuple[datetime, datetime]], run_start: datetime, run_end: datetime
+) -> Optional[Tuple[datetime, datetime]]:
+    """Expands a stationary run to the full time the engine was actually off around it -- from
+    when it was last confirmed running just before, to when it's next confirmed running again
+    just after. Without this, a long, genuinely stopped period whose *tail end* happens to look
+    short and tight to noisy low-speed GPS data (found in practice: an overnight stop of 23+
+    hours whose last 44 minutes, right before the engine restarted, moved less than 5 meters)
+    would be mistaken for a brief lock/bridge stop, when it's really just the last fragment of a
+    much longer real stay.
+
+    Returns ``None`` if the engine isn't confirmed running again after this point, at least
+    within the available data -- that can never be a lock (a lock implies the engine coming back
+    on once you're through it); it's either a genuine arrival or simply where the log ends."""
+    prior_ends = [end for _, end in on_intervals if end <= run_start]
+    off_start = max(prior_ends) if prior_ends else run_start
+    later_starts = [start for start, _ in on_intervals if start >= run_end]
+    if not later_starts:
+        return None
+    return off_start, min(later_starts)
+
+
+def _reclassify_locks(
+    runs: List[Tuple[str, List[NavSample]]],
+    samples: List[NavSample],
+    on_intervals: List[Tuple[datetime, datetime]],
+    lock_radius_m: float,
+    lock_max_duration: timedelta,
+) -> List[Tuple[str, List[NavSample]]]:
+    """A stop is treated as a lock, opening bridge, or similarly brief operational pause -- folded
+    back into the trip instead of splitting it into two -- if the engine was off no longer than
+    ``lock_max_duration`` and the boat barely moved (within ``lock_radius_m`` of its own
+    centroid) during the full time the engine was off (see ``_engine_off_span``, which expands
+    the check beyond the stop's own, possibly SOG-noise-shortened, boundaries).
+
+    Only applies to a stop that comes after an actual trip (i.e. not the very first run in the
+    data) -- a lock is by definition something you pass through mid-voyage, never the very first
+    thing recorded.
+
+    This is a deliberately simple heuristic and knowingly conflates a lock with any other brief,
+    tightly-confined pause where the engine happens to be cycled off and on again the same day
+    (e.g. a quick stop at a quay) -- telling those apart would require knowing where the lock
+    actually is, which is not available without unreliable external geocoding."""
+    relabelled = []
+    for idx, (label, group) in enumerate(runs):
+        if label == "stationary" and idx > 0:
+            span = _engine_off_span(on_intervals, group[0].time, group[-1].time)
+            if span is not None:
+                off_start, off_end = span
+                if off_end - off_start <= lock_max_duration:
+                    span_samples = [s for s in samples if off_start <= s.time <= off_end] or group
+                    if _spatial_spread_m(span_samples) <= lock_radius_m:
+                        label = "moving"
+        relabelled.append((label, group))
+    return relabelled
 
 
 def _split_moving_runs_on_gaps(
@@ -393,6 +487,8 @@ def build_trips(
     min_stop_minutes: float = 10.0,
     max_gap_minutes: Optional[float] = None,
     min_trip_distance_nm: float = 0.1,
+    lock_radius_m: Optional[float] = None,
+    lock_max_duration_minutes: Optional[float] = None,
 ) -> List[TripLeg]:
     """``max_gap_minutes``: how long there can be no data at most before a trip's reported
     duration gets cut off (see ``_moving_duration``). Defaults to the same value as
@@ -403,7 +499,14 @@ def build_trips(
 
     ``min_trip_distance_nm``: trips covering less than this are filtered out. This is
     GPS/speed noise (a few seconds just above ``speed_threshold_kn``), not a real trip (found
-    in practice: 0.0 nm, lasting a few seconds to minutes, engine off)."""
+    in practice: 0.0 nm, lasting a few seconds to minutes, engine off).
+
+    ``lock_radius_m`` / ``lock_max_duration_minutes``: a stop is treated as a lock/bridge rather
+    than a port visit if the engine was off no longer than ``lock_max_duration_minutes`` and the
+    boat stayed within ``lock_radius_m`` of its own position the whole time (see
+    ``_reclassify_locks``). Both default to ``None`` (disabled) at this level -- the CLI turns
+    this on with sensible defaults; left off here so callers/tests that don't care about it get
+    the plain speed-based behavior."""
     if geocoder is None:
         geocoder = NoGeocoder()
     if trip_fuel_samples is None:
@@ -423,6 +526,11 @@ def build_trips(
 
     runs = _classify_runs(samples, speed_threshold_ms)
     runs = _merge_short_stops(runs, min_stop, max_gap)
+    if lock_radius_m is not None and lock_max_duration_minutes is not None:
+        on_intervals = _engine_on_intervals(engine_samples)
+        lock_max_duration = timedelta(minutes=lock_max_duration_minutes)
+        runs = _reclassify_locks(runs, samples, on_intervals, lock_radius_m, lock_max_duration)
+        runs = _merge_adjacent(runs)
     runs = _split_moving_runs_on_gaps(runs, max_gap)
 
     stays: List[Optional[Stay]] = []

@@ -414,6 +414,178 @@ def test_gap_masked_by_moving_noise_on_both_sides_still_splits_the_trip():
     assert trip.duration < timedelta(minutes=20)  # doesn't bridge the ~15 minute gap
 
 
+def _lock_scenario(anchor_drift: bool = False):
+    """Port A -> underway -> a stop mid-trip (engine off, minimal drift unless ``anchor_drift``)
+    -> underway again -> Port B."""
+    fixes = []
+    sogs = []
+    engine_samples = []
+
+    def add(m, lat, lon, sog, fuel):
+        fixes.append(PositionFix(_dt(m), lat, lon))
+        sogs.append(SogSample(_dt(m), sog))
+        engine_samples.append(EngineSample(_dt(m), 0, fuel, 3600 * 100 + m * 60))
+
+    for m in range(0, 12):
+        add(m, 52.30, 4.90, 0.0, 0.0)  # port A, 11 min
+    for i, m in enumerate(range(12, 22)):
+        add(m, 52.30 + 0.05 * (i / 9), 4.90, 3.0, 8.0)  # underway to the stop, arrives at 52.35
+    for i, m in enumerate(range(22, 42)):
+        lat = 52.35 + (0.0006 * (i / 19) if anchor_drift else 0.0)
+        add(m, lat, 4.90, 0.0, 0.0)  # engine off for 20 min; ~66 m drift if anchor_drift
+    end_lat = 52.35 + (0.0006 if anchor_drift else 0.0)
+    for i, m in enumerate(range(42, 57)):
+        add(m, end_lat + 0.10 * (i / 14), 4.90, 3.0, 8.0)  # underway again, same trip
+    for m in range(57, 68):
+        add(m, end_lat + 0.10, 4.90, 0.0, 0.0)  # port B, 11 min
+
+    return fixes, sogs, engine_samples
+
+
+def test_lock_pause_is_folded_into_trip():
+    """Engine off, minimal drift (well under --lock-radius-m), and it comes back on later the
+    same trip -- treated as a lock/opening bridge, not a port visit."""
+    fixes, sogs, engine_samples = _lock_scenario(anchor_drift=False)
+    geocoder = _StubGeocoder()
+
+    trips = build_trips(
+        fixes, sogs, engine_samples, geocoder=geocoder,
+        speed_threshold_kn=0.5, min_stop_minutes=10,
+        lock_radius_m=10.0, lock_max_duration_minutes=120.0,
+    )
+
+    assert len(trips) == 1  # the lock pause doesn't show up as a separate port visit
+    assert trips[0].depart_place.startswith("Port@52.30")
+    assert trips[0].arrive_place.startswith("Port@52.45")
+
+
+def test_lock_detection_disabled_by_default():
+    """The same scenario as above, but without opting in: build_trips() keeps the old, purely
+    speed-based behavior -- a 20-minute stop is a real port visit."""
+    fixes, sogs, engine_samples = _lock_scenario(anchor_drift=False)
+    geocoder = _StubGeocoder()
+
+    trips = build_trips(
+        fixes, sogs, engine_samples, geocoder=geocoder,
+        speed_threshold_kn=0.5, min_stop_minutes=10,
+    )
+
+    assert len(trips) == 2
+
+
+def test_anchor_stop_with_drift_is_not_folded_as_a_lock():
+    """Engine off and on again, same as a lock, but the boat drifted well beyond
+    --lock-radius-m (e.g. swinging at anchor) -- still counts as a real stop."""
+    fixes, sogs, engine_samples = _lock_scenario(anchor_drift=True)
+    geocoder = _StubGeocoder()
+
+    trips = build_trips(
+        fixes, sogs, engine_samples, geocoder=geocoder,
+        speed_threshold_kn=0.5, min_stop_minutes=10,
+        lock_radius_m=10.0, lock_max_duration_minutes=120.0,
+    )
+
+    assert len(trips) == 2  # the drift disqualifies it as a lock
+
+
+def test_lock_check_does_not_apply_to_the_first_stop_in_the_data():
+    """A lock only ever happens mid-voyage -- the very first stop in the log (nothing sailed
+    before it) must never be folded away, however short and tight it looks."""
+    fixes = []
+    sogs = []
+    engine_samples = []
+
+    def add(m, lat, lon, sog, fuel):
+        fixes.append(PositionFix(_dt(m), lat, lon))
+        sogs.append(SogSample(_dt(m), sog))
+        engine_samples.append(EngineSample(_dt(m), 0, fuel, 3600 * 100 + m * 60))
+
+    for m in range(0, 20):
+        add(m, 52.30, 4.90, 0.0, 0.0)  # the log starts already sitting at a berth, engine off
+    for i, m in enumerate(range(20, 35)):
+        add(m, 52.30 + 0.05 * (i / 14), 4.90, 3.0, 8.0)  # then a real trip departs
+    for m in range(35, 46):
+        add(m, 52.35, 4.90, 0.0, 0.0)  # port B
+
+    geocoder = _StubGeocoder()
+    trips = build_trips(
+        fixes, sogs, engine_samples, geocoder=geocoder,
+        speed_threshold_kn=0.5, min_stop_minutes=10,
+        lock_radius_m=10.0, lock_max_duration_minutes=120.0,
+    )
+
+    assert len(trips) == 1
+    assert trips[0].depart_place.startswith("Port@52.30")  # not "Unknown (start outside log file)"
+
+
+def test_lock_check_never_applies_to_a_stop_the_engine_never_restarts_from():
+    """Regression guard: a stop with no confirmed engine restart afterwards (at least within the
+    available data) must never be folded away, no matter how short and tight it looks -- a lock
+    implies the engine comes back on once through it; without that, it's either a genuine
+    arrival or simply where the log ends."""
+    fixes, sogs, engine_samples = _lock_scenario(anchor_drift=False)
+    # truncate right after the lock-like pause ends, before the boat gets underway again --
+    # from the engine's perspective this looks identical to a real, final arrival
+    cutoff = _dt(42)
+    fixes = [f for f in fixes if f.time < cutoff]
+    sogs = [s for s in sogs if s.time < cutoff]
+    engine_samples = [e for e in engine_samples if e.time < cutoff]
+
+    geocoder = _StubGeocoder()
+    trips = build_trips(
+        fixes, sogs, engine_samples, geocoder=geocoder,
+        speed_threshold_kn=0.5, min_stop_minutes=10,
+        lock_radius_m=10.0, lock_max_duration_minutes=120.0,
+    )
+
+    assert len(trips) == 1
+    assert trips[0].arrive_place.startswith("Port@52.35")  # kept as a real arrival, not folded away
+
+
+def test_long_stop_fragmented_by_sog_noise_still_recognized():
+    """Regression test for a real bug found with real data: a long real stop (engine off the
+    whole time) whose *tail end* happens to look short and tight to noisy SOG data -- a single
+    spurious "moving" reading (GPS/SOG noise while moored) splits it into fragments -- must still
+    be recognized as a real port visit, not folded in as a lock. The lock check has to look at
+    the full time the engine was off (_engine_off_span), not just the final SOG-based fragment.
+    Found in practice: an overnight stop of 23+ hours whose last 44 minutes, right before the
+    engine restarted, moved less than 5 meters and were briefly mistaken for a lock."""
+    fixes = []
+    sogs = []
+    engine_samples = []
+
+    def add(m, lat, lon, sog, fuel):
+        fixes.append(PositionFix(_dt(m), lat, lon))
+        sogs.append(SogSample(_dt(m), sog))
+        engine_samples.append(EngineSample(_dt(m), 0, fuel, 3600 * 100 + m * 60))
+
+    for m in range(0, 12):
+        add(m, 52.30, 4.90, 0.0, 0.0)  # port A, 11 min
+    for i, m in enumerate(range(12, 22)):
+        add(m, 52.30 + 0.05 * (i / 9), 4.90, 3.0, 8.0)  # underway to port X
+    for m in range(22, 112):
+        add(m, 52.35, 4.90, 0.0, 0.0)  # port X, engine off, part 1 (90 min)
+    add(112, 52.35, 4.90, 1.0, 0.0)  # spurious SOG blip; engine still off
+    for m in range(113, 172):
+        add(m, 52.35, 4.90, 0.0, 0.0)  # port X, engine still off, part 2 (59 min) -- this
+        # fragment alone looks lock-like (well under 120 min, no drift)
+    for i, m in enumerate(range(172, 187)):
+        add(m, 52.35 + 0.10 * (i / 14), 4.90, 3.0, 8.0)  # underway to port Y
+    for m in range(187, 198):
+        add(m, 52.45, 4.90, 0.0, 0.0)  # port Y
+
+    geocoder = _StubGeocoder()
+    trips = build_trips(
+        fixes, sogs, engine_samples, geocoder=geocoder,
+        speed_threshold_kn=0.5, min_stop_minutes=10,
+        lock_radius_m=10.0, lock_max_duration_minutes=120.0,
+    )
+
+    assert len(trips) == 2  # port X stays a real port visit, despite the noisy tail fragment
+    assert trips[0].arrive_place.startswith("Port@52.35")
+    assert trips[1].depart_place.startswith("Port@52.35")
+
+
 def test_small_data_gap_does_not_split_trip():
     """A small gap (e.g. a few seconds between two log files) shouldn't unnecessarily split a
     trip -- only gaps of at least max_gap_minutes do that."""
