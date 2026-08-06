@@ -123,6 +123,15 @@ def _water_temp_badge_html(trip: TripLeg) -> str:
     )
 
 
+def _motion_variation_text(trip: TripLeg) -> str:
+    parts = []
+    if trip.roll_variation_deg is not None:
+        parts.append(f"roll ±{_nl_num(trip.roll_variation_deg)}°")
+    if trip.pitch_variation_deg is not None:
+        parts.append(f"pitch ±{_nl_num(trip.pitch_variation_deg)}°")
+    return ", ".join(parts)
+
+
 def _totals_html(totals: _Totals) -> str:
     avg_l_per_nm = totals.fuel_liters / totals.distance_nm if totals.distance_nm > 0 else None
     avg_l_per_hour = totals.fuel_liters / totals.moving_hours if totals.moving_hours > 0 else None
@@ -198,6 +207,7 @@ def _trip_row_html(
         escape(_typical_rpm_text(trip)),
         escape(_all_warnings_text(trip, battery_warning_voltage)),
         _water_temp_badge_html(trip),
+        escape(_motion_variation_text(trip)),
         map_cell,
     ]
     row = "".join(f"<td>{cell}</td>" for cell in cells)
@@ -229,6 +239,7 @@ _HEADERS = [
     "RPM",
     "Warnings",
     "Water temp",
+    "Motion",
     "Route",
 ]
 
