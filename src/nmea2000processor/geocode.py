@@ -23,12 +23,12 @@ _PREFERRED_ADDRESS_KEYS = (
     "leisure",
     "marina",
     "harbour",
-    "quarter",
-    "suburb",
     "town",
     "village",
     "city",
     "municipality",
+    "suburb",
+    "quarter",
 )
 
 
