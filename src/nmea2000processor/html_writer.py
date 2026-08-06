@@ -307,9 +307,31 @@ def write_html_logbook(
   .stat {{ background: white; border-radius: 8px; padding: 0.8em 1.2em; box-shadow: 0 1px 3px rgba(0,0,0,0.1); min-width: 140px; }}
   .stat-label {{ font-size: 0.8em; color: #666; }}
   .stat-value {{ font-size: 1.3em; font-weight: 600; }}
-  table.trips {{ border-collapse: collapse; width: 100%; background: white; margin-bottom: 1em; }}
-  table.trips th, table.trips td {{ padding: 0.4em 0.6em; border-bottom: 1px solid #eee; text-align: left; font-size: 0.9em; }}
+  /* table-layout: fixed + explicit per-column widths so every week's table lines up the same
+     way, instead of each table auto-sizing its columns from its own content. Column order must
+     match _HEADERS in html_writer.py. */
+  table.trips {{ border-collapse: collapse; table-layout: fixed; width: 100%; background: white; margin-bottom: 1em; }}
+  table.trips th, table.trips td {{
+    padding: 0.4em 0.6em; border-bottom: 1px solid #eee; text-align: left; font-size: 0.9em;
+    overflow-wrap: break-word;
+  }}
   table.trips th {{ background: #f0f0f0; }}
+  table.trips th:nth-child(1), table.trips td:nth-child(1) {{ width: 7%; }}   /* Date */
+  table.trips th:nth-child(2), table.trips td:nth-child(2) {{ width: 5%; }}   /* Dep. */
+  table.trips th:nth-child(3), table.trips td:nth-child(3) {{ width: 10%; }}  /* From */
+  table.trips th:nth-child(4), table.trips td:nth-child(4) {{ width: 5%; }}   /* Arr. */
+  table.trips th:nth-child(5), table.trips td:nth-child(5) {{ width: 10%; }}  /* To */
+  table.trips th:nth-child(6), table.trips td:nth-child(6) {{ width: 5%; }}   /* Duration */
+  table.trips th:nth-child(7), table.trips td:nth-child(7) {{ width: 6%; }}   /* Distance */
+  table.trips th:nth-child(8), table.trips td:nth-child(8) {{ width: 6%; }}   /* Avg speed */
+  table.trips th:nth-child(9), table.trips td:nth-child(9) {{ width: 6%; }}   /* Max speed */
+  table.trips th:nth-child(10), table.trips td:nth-child(10) {{ width: 5%; }} /* Fuel */
+  table.trips th:nth-child(11), table.trips td:nth-child(11) {{ width: 5%; }} /* L/nm */
+  table.trips th:nth-child(12), table.trips td:nth-child(12) {{ width: 6%; }} /* Engine hours */
+  table.trips th:nth-child(13), table.trips td:nth-child(13) {{ width: 5%; }} /* RPM */
+  table.trips th:nth-child(14), table.trips td:nth-child(14) {{ width: 10%; }} /* Warnings */
+  table.trips th:nth-child(15), table.trips td:nth-child(15) {{ width: 5%; }} /* Water temp */
+  table.trips th:nth-child(16), table.trips td:nth-child(16) {{ width: 4%; }}  /* Route */
   .show-map {{ cursor: pointer; border: 1px solid #1a6ecc; background: white; color: #1a6ecc; border-radius: 4px; padding: 0.2em 0.6em; }}
   .show-map:hover {{ background: #1a6ecc; color: white; }}
   .trip-map-title {{ font-weight: 600; margin-bottom: 0.4em; }}
