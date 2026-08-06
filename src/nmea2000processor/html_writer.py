@@ -103,6 +103,9 @@ _TEMP_COLOR_HOT = ("#FCEBEB", "#791F1F")
 
 
 def _water_temp_badge_html(trip: TripLeg) -> str:
+    """Plain text in the table cell (so it doesn't blow up the column width); hovering over it
+    shows the colored thermometer badge (with the min-max range, if notable) as a CSS-only
+    tooltip -- a native title="" tooltip can't be styled/colored."""
     if trip.avg_water_temp_c is None:
         return ""
     for threshold, bg, text in _TEMP_COLORS:
@@ -112,13 +115,11 @@ def _water_temp_badge_html(trip: TripLeg) -> str:
         bg, text = _TEMP_COLOR_HOT
     range_text = ""
     if trip.max_water_temp_c - trip.min_water_temp_c > 0.5:
-        range_text = (
-            f' <span style="opacity:0.75;">({_nl_num(trip.min_water_temp_c)}'
-            f"–{_nl_num(trip.max_water_temp_c)}°)</span>"
-        )
+        range_text = f" ({_nl_num(trip.min_water_temp_c)}–{_nl_num(trip.max_water_temp_c)}°C)"
     return (
-        f'<span class="temp-badge" style="background:{bg};color:{text};">'
-        f"🌡️ {_nl_num(trip.avg_water_temp_c)}°C{range_text}</span>"
+        f'<span class="temp-hover">{_nl_num(trip.avg_water_temp_c)}°C'
+        f'<span class="temp-tooltip" style="background:{bg};color:{text};">'
+        f"🌡️ {_nl_num(trip.avg_water_temp_c)}°C{range_text}</span></span>"
     )
 
 
@@ -205,7 +206,7 @@ def _trip_row_html(
         title = escape(f"{depart_local:%Y-%m-%d %H:%M} {trip.depart_place} -> {trip.arrive_place}")
         map_row = (
             f'<tr class="trip-map-row" data-trip="{idx}" style="display:none">'
-            f'<td colspan="16"><div class="trip-map-title">{title}</div>'
+            f'<td colspan="{len(_HEADERS)}"><div class="trip-map-title">{title}</div>'
             f'<div class="map" id="map-{idx}"></div></td></tr>'
         )
     uid_attr = f' data-uid="{escape(trip_uid)}"' if trip_uid else ""
@@ -261,24 +262,28 @@ def write_html_logbook(
     for iso_year in sorted({y for y, _ in by_week}, reverse=True):
         weeks_in_year = sorted((w for y, w in by_week if y == iso_year), reverse=True)
         year_trips = [trips[i] for w in weeks_in_year for i in by_week[(iso_year, w)]]
-        week_sections = []
+        # One continuous <table> for the whole year (not one per week): a single table lets the
+        # browser compute column widths from *all* the year's rows together, so every week lines
+        # up automatically and no column ever ends up narrower than its widest content -- which
+        # a separate table per week, or hand-picked fixed column widths, can't guarantee.
+        body_rows: List[str] = []
         for iso_week in weeks_in_year:
             indices = by_week[(iso_year, iso_week)]
-            rows_html = "".join(
+            body_rows.append(
+                f'<tr class="week-row"><td colspan="{len(_HEADERS)}">'
+                f"{escape(_week_label(iso_year, iso_week))}</td></tr>"
+            )
+            body_rows.extend(
                 _trip_row_html(
                     trips[i], i, utc_offset_hours, uid_by_trip.get(id(trips[i])), battery_warning_voltage
                 )
                 for i in indices
             )
-            week_sections.append(
-                f'<section class="week"><h3>{escape(_week_label(iso_year, iso_week))}</h3>'
-                f'<table class="trips"><thead><tr>{header_html}</tr></thead>'
-                f"<tbody>{rows_html}</tbody></table></section>"
-            )
         sections.append(
             f'<section class="year"><h2>{iso_year}</h2>'
             f"{_totals_html(_compute_totals(year_trips))}"
-            f'{"".join(week_sections)}</section>'
+            f'<div class="table-scroll"><table class="trips"><thead><tr>{header_html}</tr></thead>'
+            f'<tbody>{"".join(body_rows)}</tbody></table></div></section>'
         )
 
     trip_data = {
@@ -302,40 +307,32 @@ def write_html_logbook(
   body {{ font-family: sans-serif; margin: 0; padding: 1.5em; background: #f7f7f8; color: #1a1a1a; }}
   h1 {{ margin-bottom: 0.2em; }}
   h2 {{ margin-top: 2em; border-bottom: 2px solid #1a6ecc; padding-bottom: 0.2em; }}
-  h3 {{ margin-top: 1.5em; color: #333; }}
   .totals {{ display: flex; flex-wrap: wrap; gap: 1em; margin: 1em 0 2em; }}
   .stat {{ background: white; border-radius: 8px; padding: 0.8em 1.2em; box-shadow: 0 1px 3px rgba(0,0,0,0.1); min-width: 140px; }}
   .stat-label {{ font-size: 0.8em; color: #666; }}
   .stat-value {{ font-size: 1.3em; font-weight: 600; }}
-  /* table-layout: fixed + explicit per-column widths so every week's table lines up the same
-     way, instead of each table auto-sizing its columns from its own content. Column order must
-     match _HEADERS in html_writer.py. */
-  table.trips {{ border-collapse: collapse; table-layout: fixed; width: 100%; background: white; margin-bottom: 1em; }}
+  /* One continuous table per year (see write_html_logbook) with natural (auto) column sizing --
+     every week's rows share the same table, so columns line up automatically and none of them
+     can end up narrower than its widest content. table-scroll adds a horizontal scrollbar
+     instead of ever squeezing/wrapping a column when the table doesn't fit the viewport. */
+  .table-scroll {{ overflow-x: auto; margin-bottom: 1em; }}
+  table.trips {{ border-collapse: collapse; width: 100%; background: white; }}
   table.trips th, table.trips td {{
     padding: 0.4em 0.6em; border-bottom: 1px solid #eee; text-align: left; font-size: 0.9em;
-    overflow-wrap: break-word;
+    white-space: nowrap;
   }}
   table.trips th {{ background: #f0f0f0; }}
-  table.trips th:nth-child(1), table.trips td:nth-child(1) {{ width: 7%; }}   /* Date */
-  table.trips th:nth-child(2), table.trips td:nth-child(2) {{ width: 5%; }}   /* Dep. */
-  table.trips th:nth-child(3), table.trips td:nth-child(3) {{ width: 10%; }}  /* From */
-  table.trips th:nth-child(4), table.trips td:nth-child(4) {{ width: 5%; }}   /* Arr. */
-  table.trips th:nth-child(5), table.trips td:nth-child(5) {{ width: 10%; }}  /* To */
-  table.trips th:nth-child(6), table.trips td:nth-child(6) {{ width: 5%; }}   /* Duration */
-  table.trips th:nth-child(7), table.trips td:nth-child(7) {{ width: 6%; }}   /* Distance */
-  table.trips th:nth-child(8), table.trips td:nth-child(8) {{ width: 6%; }}   /* Avg speed */
-  table.trips th:nth-child(9), table.trips td:nth-child(9) {{ width: 6%; }}   /* Max speed */
-  table.trips th:nth-child(10), table.trips td:nth-child(10) {{ width: 5%; }} /* Fuel */
-  table.trips th:nth-child(11), table.trips td:nth-child(11) {{ width: 5%; }} /* L/nm */
-  table.trips th:nth-child(12), table.trips td:nth-child(12) {{ width: 6%; }} /* Engine hours */
-  table.trips th:nth-child(13), table.trips td:nth-child(13) {{ width: 5%; }} /* RPM */
-  table.trips th:nth-child(14), table.trips td:nth-child(14) {{ width: 10%; }} /* Warnings */
-  table.trips th:nth-child(15), table.trips td:nth-child(15) {{ width: 5%; }} /* Water temp */
-  table.trips th:nth-child(16), table.trips td:nth-child(16) {{ width: 4%; }}  /* Route */
+  tr.week-row td {{ background: #eef4fb; font-weight: 600; color: #1a4a7a; padding-top: 0.6em; padding-bottom: 0.6em; }}
   .show-map {{ cursor: pointer; border: 1px solid #1a6ecc; background: white; color: #1a6ecc; border-radius: 4px; padding: 0.2em 0.6em; }}
   .show-map:hover {{ background: #1a6ecc; color: white; }}
   .trip-map-title {{ font-weight: 600; margin-bottom: 0.4em; }}
-  .temp-badge {{ display: inline-block; border-radius: 12px; padding: 0.15em 0.6em; font-size: 0.85em; white-space: nowrap; }}
+  .temp-hover {{ position: relative; cursor: default; border-bottom: 1px dotted #999; }}
+  .temp-tooltip {{
+    display: none; position: absolute; left: 0; top: 100%; margin-top: 0.3em; z-index: 10;
+    border-radius: 12px; padding: 0.15em 0.6em; font-size: 0.85em; white-space: nowrap;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.25);
+  }}
+  .temp-hover:hover .temp-tooltip {{ display: block; }}
   .map {{ height: 350px; }}
 </style>
 </head>

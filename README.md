@@ -33,7 +33,7 @@ the tests.
    - everything else, e.g. `.raw`/`.n2k` (`ascii_reader.py`): an *N2K ASCII* log file, such as
      you can capture with `--live --tee`. Each line has already been reassembled by the Actisense
      hardware (fast-packet/multi-packet), so no reassembly is needed there.
-2. **Decoding** (`pgn_decode.py`): picks nine PGNs out of the stream:
+2. **Decoding** (`pgn_decode.py`): picks ten PGNs out of the stream:
    - **127489** (*Engine Parameters, Dynamic*) → fuel rate, engine-hour meter, and health
      indicators (oil pressure/temperature, coolant temperature, alternator voltage, engine load)
      plus the two "Discrete Status" warning fields. This is engine data, so explicitly not the
@@ -55,6 +55,8 @@ the tests.
    - **127508** (*Battery Status*) → a dedicated battery monitor's own voltage reading, distinct
      from PGN 127489's alternator voltage (that's the engine's charging output, only present
      while the engine is running; this keeps reporting at anchor with the engine off too).
+   - **127257** (*Attitude*) → pitch and roll, from whatever motion sensor (autopilot, gyro
+     compass) is already on the network.
 3. **Recognizing trips** (`tripbuilder.py`): periods where the boat is stationary for long
    enough (default ≥ 10 minutes, adjustable via `--min-stop-minutes`) count as a port visit; the
    periods in between are the trips. A large gap in the data itself (default also 10 minutes,
@@ -102,7 +104,14 @@ the tests.
      the minimum drops below `--battery-warning-voltage` (default 12.2 V) at any point, that
      also shows up in the same **warnings** column (e.g. "low battery 11.8 V").
    - **Speed**: average and maximum speed over ground.
-   - **Water temperature**: average, minimum, and maximum sea temperature during the trip.
+   - **Water temperature**: average, minimum, and maximum sea temperature during the trip. Shown
+     in the HTML logbook as a plain number, with the color-coded thermometer badge (and the
+     min-max range, if notable) as a hover tooltip rather than always inline.
+   - **Roll/pitch variation**: standard deviation of roll and pitch (PGN 127257) during the trip
+     — a rougher sea or more wave action shows up as more variation in how the boat's attitude
+     moves around, even if the average heel/trim stays level. Not an established metric like
+     significant wave height (which needs an actual wave sensor this app doesn't have) — just a
+     relative indicator from whatever motion sensor is already on the network.
    - **Minimum water depth**, including the position where it was measured.
 4. **Port names** (`geocode.py`): the GPS position of each port visit is turned into a place
    name via OpenStreetMap/Nominatim (reverse geocoding), with local caching so the same position

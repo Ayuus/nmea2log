@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 import pytest
 
 from nmea2000processor.model import (
+    AttitudeSample,
     BatterySample,
     DepthSample,
     EngineRpmSample,
@@ -246,6 +247,45 @@ def test_typical_rpm_absent_without_samples():
 
     assert len(trips) == 1
     assert trips[0].typical_rpm == {}
+
+
+def test_motion_variation_reflects_roll_and_pitch_spread():
+    fixes, sogs, engine_samples = _build_scenario()
+    geocoder = _StubGeocoder()
+
+    attitude_samples = []
+    for m in range(0, 54):
+        if 12 <= m < 42:
+            # oscillating roll/pitch while underway (choppy conditions)
+            roll = 8.0 if m % 2 == 0 else -8.0
+            pitch = 3.0 if m % 2 == 0 else -3.0
+        else:
+            roll, pitch = 0.0, 0.0  # dead calm in port
+        attitude_samples.append(AttitudeSample(_dt(m), pitch, roll))
+
+    trips = build_trips(
+        fixes, sogs, engine_samples, attitude_samples=attitude_samples,
+        geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+    )
+
+    assert len(trips) == 1
+    trip = trips[0]
+    assert trip.roll_variation_deg == pytest.approx(8.0, abs=0.2)
+    assert trip.pitch_variation_deg == pytest.approx(3.0, abs=0.2)
+
+
+def test_motion_variation_absent_without_samples():
+    fixes, sogs, engine_samples = _build_scenario()
+    geocoder = _StubGeocoder()
+
+    trips = build_trips(
+        fixes, sogs, engine_samples,
+        geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+    )
+
+    assert len(trips) == 1
+    assert trips[0].roll_variation_deg is None
+    assert trips[0].pitch_variation_deg is None
 
 
 def test_engine_health_and_warnings():

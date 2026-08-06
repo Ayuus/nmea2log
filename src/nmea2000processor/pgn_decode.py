@@ -8,6 +8,7 @@ customary in NMEA2000/J1939.
 
 from __future__ import annotations
 
+import math
 from datetime import date, datetime, timedelta
 from typing import Dict, FrozenSet, Optional, Tuple
 
@@ -20,6 +21,7 @@ PGN_WATER_DEPTH = 128267  # Water Depth
 PGN_SYSTEM_TIME = 126992  # System Time
 PGN_TEMPERATURE = 130312  # Temperature
 PGN_BATTERY_STATUS = 127508  # Battery Status
+PGN_ATTITUDE = 127257  # Attitude (pitch/roll/yaw)
 
 _EPOCH = date(1970, 1, 1)
 _KELVIN_TO_CELSIUS = 273.15
@@ -188,6 +190,18 @@ def decode_battery_status(data: bytes) -> Optional[Tuple[int, Optional[float]]]:
     voltage_raw = _extract(data, 8, 16, signed=True)
     voltage_v = voltage_raw * 0.01 if voltage_raw is not None else None
     return instance, voltage_v
+
+
+def decode_attitude(data: bytes) -> Optional[Tuple[Optional[float], Optional[float]]]:
+    """PGN 127257: pitch and roll, in degrees (yaw is decoded by nothing here, not needed).
+    Returns None only if neither is available."""
+    pitch_raw = _extract(data, 24, 16, signed=True)
+    roll_raw = _extract(data, 40, 16, signed=True)
+    if pitch_raw is None and roll_raw is None:
+        return None
+    pitch_deg = math.degrees(pitch_raw * 0.0001) if pitch_raw is not None else None
+    roll_deg = math.degrees(roll_raw * 0.0001) if roll_raw is not None else None
+    return pitch_deg, roll_deg
 
 
 def decode_trip_fuel_engine(data: bytes) -> Optional[Tuple[int, Optional[float]]]:

@@ -11,6 +11,7 @@ time -- so explicitly not via a tank sensor.
 from __future__ import annotations
 
 import math
+import statistics
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -19,6 +20,7 @@ from typing import Dict, FrozenSet, List, Optional, Tuple
 
 from .geocode import Geocoder, NoGeocoder
 from .model import (
+    AttitudeSample,
     BatterySample,
     DepthSample,
     EngineRpmSample,
@@ -98,6 +100,8 @@ class TripLeg:
     avg_water_temp_c: Optional[float]
     min_water_temp_c: Optional[float]
     max_water_temp_c: Optional[float]
+    roll_variation_deg: Optional[float]  # standard deviation of roll (PGN 127257) during the trip
+    pitch_variation_deg: Optional[float]  # standard deviation of pitch (PGN 127257) during the trip
     track: List[NavSample]  # GPS points of this trip, e.g. for GPX export
 
 
@@ -498,6 +502,21 @@ def _typical_rpm(samples: List[EngineRpmSample], start: datetime, end: datetime)
     return result
 
 
+def _motion_variation(
+    samples: List[AttitudeSample], start: datetime, end: datetime
+) -> Tuple[Optional[float], Optional[float]]:
+    """Standard deviation of roll and pitch (PGN 127257) during the trip -- a rougher sea or
+    more wave action shows up as more variation in how the boat's attitude moves around, even on
+    a boat holding a level average heel/trim. Not an established metric (unlike e.g. significant
+    wave height, which needs a wave sensor this app doesn't have); just a relative indicator
+    based on whatever motion sensor is already on the network."""
+    rolls = [s.roll_deg for s in samples if s.roll_deg is not None and start <= s.time <= end]
+    pitches = [s.pitch_deg for s in samples if s.pitch_deg is not None and start <= s.time <= end]
+    roll_variation = statistics.stdev(rolls) if len(rolls) >= 2 else None
+    pitch_variation = statistics.stdev(pitches) if len(pitches) >= 2 else None
+    return roll_variation, pitch_variation
+
+
 def build_trips(
     fixes: List[PositionFix],
     sogs: List[SogSample],
@@ -507,6 +526,7 @@ def build_trips(
     water_temp_samples: Optional[List[WaterTempSample]] = None,
     battery_samples: Optional[List[BatterySample]] = None,
     rpm_samples: Optional[List[EngineRpmSample]] = None,
+    attitude_samples: Optional[List[AttitudeSample]] = None,
     *,
     geocoder: Optional[object] = None,
     speed_threshold_kn: float = 0.5,
@@ -541,6 +561,8 @@ def build_trips(
         battery_samples = []
     if rpm_samples is None:
         rpm_samples = []
+    if attitude_samples is None:
+        attitude_samples = []
     if max_gap_minutes is None:
         max_gap_minutes = min_stop_minutes
 
@@ -589,6 +611,7 @@ def build_trips(
         avg_speed_kn, max_speed_kn = _speed_stats_kn(group)
         min_depth_m, min_depth_lat, min_depth_lon = _min_depth(group)
         avg_water_temp_c, min_water_temp_c, max_water_temp_c = _water_temp_stats(group)
+        roll_variation_deg, pitch_variation_deg = _motion_variation(attitude_samples, depart_time, arrive_time)
 
         trips.append(
             TripLeg(
@@ -613,6 +636,8 @@ def build_trips(
                 avg_water_temp_c=avg_water_temp_c,
                 min_water_temp_c=min_water_temp_c,
                 max_water_temp_c=max_water_temp_c,
+                roll_variation_deg=roll_variation_deg,
+                pitch_variation_deg=pitch_variation_deg,
                 track=group,
             )
         )

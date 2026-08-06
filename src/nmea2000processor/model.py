@@ -75,3 +75,10 @@ class BatterySample:
     time: datetime
     instance: int
     voltage_v: Optional[float]  # battery monitor's own voltage reading (PGN 127508), in volts
+
+
+@dataclass(frozen=True)
+class AttitudeSample:
+    time: datetime
+    pitch_deg: Optional[float]  # PGN 127257, degrees
+    roll_deg: Optional[float]  # PGN 127257, degrees

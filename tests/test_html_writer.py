@@ -28,6 +28,8 @@ def _trip(**overrides) -> TripLeg:
         avg_water_temp_c=None,
         min_water_temp_c=None,
         max_water_temp_c=None,
+        roll_variation_deg=None,
+        pitch_variation_deg=None,
         track=[],
     )
     defaults.update(overrides)
@@ -110,6 +112,23 @@ def test_write_html_logbook_groups_by_year_and_week(tmp_path: Path):
     assert "<h2>2026</h2>" in html
     # 2026 is a more recent year and must appear before 2025 in the document
     assert html.index("<h2>2026</h2>") < html.index("<h2>2025</h2>")
+
+
+def test_write_html_logbook_one_table_per_year_with_week_divider_rows(tmp_path: Path):
+    """Regression test: weeks used to each get their own <table>, so columns from different
+    weeks could end up different widths and not line up. All of a year's trips must now share a
+    single table (so column widths are computed together), with a divider row between weeks
+    instead of a separate table."""
+    week_a = _trip(depart_time=datetime(2026, 7, 6, 9, 0), arrive_time=datetime(2026, 7, 6, 10, 0))
+    week_b = _trip(depart_time=datetime(2026, 7, 15, 9, 0), arrive_time=datetime(2026, 7, 15, 10, 0))
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([week_a, week_b], out_path)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert html.count('<table class="trips">') == 1
+    assert html.count('class="week-row"') == 2
+    assert "Week 28" in html and "Week 29" in html
 
 
 def test_write_html_logbook_shows_per_year_totals(tmp_path: Path):
@@ -204,7 +223,7 @@ def test_write_html_logbook_shows_water_temp_badge(tmp_path: Path):
     write_html_logbook([trip], out_path)
 
     html = out_path.read_text(encoding="utf-8")
-    assert "temp-badge" in html
+    assert "temp-hover" in html
     assert "21,8°C" in html
     assert "#EAF3DE" in html  # green bucket for 18-22°C
 
@@ -225,7 +244,7 @@ def test_write_html_logbook_no_water_temp_badge_without_data(tmp_path: Path):
     write_html_logbook([_trip()], out_path)
 
     html = out_path.read_text(encoding="utf-8")
-    assert 'class="temp-badge"' not in html
+    assert 'class="temp-hover"' not in html
 
 
 def test_write_html_logbook_escapes_place_names(tmp_path: Path):
