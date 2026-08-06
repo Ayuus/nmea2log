@@ -11,6 +11,7 @@ time -- so explicitly not via a tank sensor.
 from __future__ import annotations
 
 import math
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from itertools import groupby
@@ -20,6 +21,7 @@ from .geocode import Geocoder, NoGeocoder
 from .model import (
     BatterySample,
     DepthSample,
+    EngineRpmSample,
     EngineSample,
     PositionFix,
     SogSample,
@@ -35,6 +37,7 @@ _PA_TO_BAR = 1e-5
 _ENGINE_IDLE_FUEL_LPH = 0.3  # below this, the engine counts as switched off rather than idling
 _ENGINE_OFF_GAP_S = 60.0  # a gap this long between "on" readings means the engine was actually
 # switched off in between, not just a brief hiccup in PGN reporting
+_RPM_BUCKET = 50  # round RPM to the nearest multiple of this before taking the mode
 
 
 @dataclass(frozen=True)
@@ -87,6 +90,7 @@ class TripLeg:
     engine_hours: Dict[int, float]  # engine instance -> hours run during this trip
     engine_hours_total: Dict[int, float]  # engine instance -> absolute hour-meter reading at arrival
     engine_health: Dict[int, EngineHealth]  # engine instance -> health indicators + warnings
+    typical_rpm: Dict[int, float]  # engine instance -> most commonly occurring RPM during the trip
     battery_health: Dict[int, BatteryHealth]  # battery instance -> voltage stats during this trip
     min_depth_m: Optional[float]  # shallowest water depth measured during this trip
     min_depth_lat: Optional[float]
@@ -473,6 +477,27 @@ def _battery_health(samples: List[BatterySample], start: datetime, end: datetime
     return result
 
 
+def _typical_rpm(samples: List[EngineRpmSample], start: datetime, end: datetime) -> Dict[int, float]:
+    """The most commonly occurring engine speed (RPM) during the trip, per engine instance --
+    rounded to the nearest ``_RPM_BUCKET`` before counting, so normal small load fluctuations at
+    a steady cruising speed don't get spread across too many distinct exact values to ever "win".
+    This is a more representative "cruising RPM" than an average (skewed by idle/neutral periods
+    and maneuvering) or a maximum (skewed by brief revs)."""
+    by_instance: Dict[int, List[float]] = {}
+    for sample in samples:
+        if sample.rpm is None or not (start <= sample.time <= end):
+            continue
+        by_instance.setdefault(sample.instance, []).append(sample.rpm)
+
+    result: Dict[int, float] = {}
+    for instance, values in by_instance.items():
+        if not values:
+            continue
+        buckets = Counter(round(v / _RPM_BUCKET) * _RPM_BUCKET for v in values)
+        result[instance] = float(buckets.most_common(1)[0][0])
+    return result
+
+
 def build_trips(
     fixes: List[PositionFix],
     sogs: List[SogSample],
@@ -481,6 +506,7 @@ def build_trips(
     depth_samples: Optional[List[DepthSample]] = None,
     water_temp_samples: Optional[List[WaterTempSample]] = None,
     battery_samples: Optional[List[BatterySample]] = None,
+    rpm_samples: Optional[List[EngineRpmSample]] = None,
     *,
     geocoder: Optional[object] = None,
     speed_threshold_kn: float = 0.5,
@@ -513,6 +539,8 @@ def build_trips(
         trip_fuel_samples = []
     if battery_samples is None:
         battery_samples = []
+    if rpm_samples is None:
+        rpm_samples = []
     if max_gap_minutes is None:
         max_gap_minutes = min_stop_minutes
 
@@ -577,6 +605,7 @@ def build_trips(
                 engine_hours=_engine_hours_delta(engine_samples, depart_time, arrive_time),
                 engine_hours_total=_engine_hours_total(engine_samples, depart_time, arrive_time),
                 engine_health=_engine_health(engine_samples, depart_time, arrive_time),
+                typical_rpm=_typical_rpm(rpm_samples, depart_time, arrive_time),
                 battery_health=_battery_health(battery_samples, depart_time, arrive_time),
                 min_depth_m=min_depth_m,
                 min_depth_lat=min_depth_lat,

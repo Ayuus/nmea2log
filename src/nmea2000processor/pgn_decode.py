@@ -14,6 +14,7 @@ from typing import Dict, FrozenSet, Optional, Tuple
 PGN_POSITION_RAPID = 129025  # Position, Rapid Update
 PGN_COG_SOG_RAPID = 129026  # COG & SOG, Rapid Update
 PGN_ENGINE_DYNAMIC = 127489  # Engine Parameters, Dynamic
+PGN_ENGINE_RAPID = 127488  # Engine Parameters, Rapid Update
 PGN_TRIP_FUEL_ENGINE = 127497  # Trip Parameters, Engine
 PGN_WATER_DEPTH = 128267  # Water Depth
 PGN_SYSTEM_TIME = 126992  # System Time
@@ -106,6 +107,17 @@ def _decode_bit_warnings(raw: Optional[int], bit_names: Dict[int, str]) -> Froze
     if raw is None:
         return frozenset()
     return frozenset(name for bit, name in bit_names.items() if raw & (1 << bit))
+
+
+def decode_engine_rapid(data: bytes) -> Optional[Tuple[int, Optional[float]]]:
+    """PGN 127488: engine instance and engine speed (RPM). Sent much more frequently than PGN
+    127489's other engine fields, so it's decoded as its own sample stream."""
+    instance = _extract(data, 0, 8, signed=False)
+    if instance is None:
+        return None
+    rpm_raw = _extract(data, 8, 16, signed=False)
+    rpm = rpm_raw * 0.25 if rpm_raw is not None else None
+    return instance, rpm
 
 
 def decode_engine_dynamic(data: bytes) -> Optional[dict]:

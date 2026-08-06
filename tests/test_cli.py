@@ -127,7 +127,9 @@ def test_filter_to_dominant_engine_keeps_only_largest_instance():
         TripFuelSample(datetime(2026, 7, 15, 9, 0), 1, 50.0),
     ]
 
-    filtered_engine, filtered_fuel = _filter_to_dominant_engine(engine_samples, trip_fuel_samples)
+    filtered_engine, filtered_fuel, _filtered_rpm = _filter_to_dominant_engine(
+        engine_samples, trip_fuel_samples, []
+    )
 
     assert all(sample.instance == 0 for sample in filtered_engine)
     assert len(filtered_engine) == 10
@@ -138,7 +140,9 @@ def test_filter_to_dominant_engine_passthrough_when_already_single_instance():
     engine_samples = [EngineSample(datetime(2026, 7, 15, 9, 0), 0, 8.0, 3600)]
     trip_fuel_samples = [TripFuelSample(datetime(2026, 7, 15, 9, 0), 0, 100.0)]
 
-    filtered_engine, filtered_fuel = _filter_to_dominant_engine(engine_samples, trip_fuel_samples)
+    filtered_engine, filtered_fuel, _filtered_rpm = _filter_to_dominant_engine(
+        engine_samples, trip_fuel_samples, []
+    )
 
     assert filtered_engine == engine_samples
     assert filtered_fuel == trip_fuel_samples

@@ -26,6 +26,7 @@ from .logbook_writer import (
     _nl_num,
     _to_local,
     _trip_utc_offset_hours,
+    _typical_rpm_text,
 )
 from .tripbuilder import TripLeg
 
@@ -193,6 +194,7 @@ def _trip_row_html(
         _nl_num(trip.fuel_liters) + " L",
         f"{_nl_num(avg_consumption_nm, 2)} L/nm" if avg_consumption_nm is not None else "",
         escape(_engine_hours_text(trip)),
+        escape(_typical_rpm_text(trip)),
         escape(_all_warnings_text(trip, battery_warning_voltage)),
         _water_temp_badge_html(trip),
         map_cell,
@@ -203,7 +205,7 @@ def _trip_row_html(
         title = escape(f"{depart_local:%Y-%m-%d %H:%M} {trip.depart_place} -> {trip.arrive_place}")
         map_row = (
             f'<tr class="trip-map-row" data-trip="{idx}" style="display:none">'
-            f'<td colspan="15"><div class="trip-map-title">{title}</div>'
+            f'<td colspan="16"><div class="trip-map-title">{title}</div>'
             f'<div class="map" id="map-{idx}"></div></td></tr>'
         )
     uid_attr = f' data-uid="{escape(trip_uid)}"' if trip_uid else ""
@@ -223,6 +225,7 @@ _HEADERS = [
     "Fuel",
     "L/nm",
     "Engine hours",
+    "RPM",
     "Warnings",
     "Water temp",
     "Route",

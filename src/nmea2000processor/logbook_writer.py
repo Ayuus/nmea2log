@@ -26,6 +26,7 @@ _FIELDNAMES = [
     "avg_consumption_L_per_hour",
     "avg_consumption_L_per_nm",
     "engine_hours",
+    "typical_rpm",
     "engine_health",
     "warnings",
     "min_depth_m",
@@ -193,6 +194,16 @@ def _engine_hours_text(trip: TripLeg) -> str:
     )
 
 
+def _typical_rpm_text(trip: TripLeg) -> str:
+    if not trip.typical_rpm:
+        return ""
+    if len(trip.typical_rpm) == 1:
+        return f"{next(iter(trip.typical_rpm.values())):.0f}"
+    return ", ".join(
+        f"engine {instance}: {rpm:.0f}" for instance, rpm in sorted(trip.typical_rpm.items())
+    )
+
+
 def _min_depth_position_text(trip: TripLeg) -> str:
     if trip.min_depth_lat is None or trip.min_depth_lon is None:
         return ""
@@ -242,6 +253,7 @@ def write_csv(
                     if avg_consumption_per_nm is not None
                     else "",
                     "engine_hours": _engine_hours_text(trip),
+                    "typical_rpm": _typical_rpm_text(trip),
                     "engine_health": _format_engine_health(trip.engine_health),
                     "warnings": _all_warnings_text(trip, battery_warning_voltage),
                     "min_depth_m": _nl_num(trip.min_depth_m) if trip.min_depth_m is not None else "",

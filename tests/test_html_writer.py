@@ -21,6 +21,7 @@ def _trip(**overrides) -> TripLeg:
         engine_hours_total={0: 123.4},
         engine_health={},
         battery_health={},
+        typical_rpm={},
         min_depth_m=None,
         min_depth_lat=None,
         min_depth_lon=None,

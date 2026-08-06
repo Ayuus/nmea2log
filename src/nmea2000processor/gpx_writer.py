@@ -18,6 +18,7 @@ from .logbook_writer import (
     _nl_num,
     _to_local,
     _trip_utc_offset_hours,
+    _typical_rpm_text,
 )
 from .tripbuilder import TripLeg
 
@@ -44,6 +45,9 @@ def _trip_description(trip: TripLeg, battery_warning_voltage: Optional[float] = 
     engine_hours = _engine_hours_text(trip)
     if engine_hours:
         parts.append(f"Engine hours: {engine_hours}")
+    typical_rpm = _typical_rpm_text(trip)
+    if typical_rpm:
+        parts.append(f"Typical RPM: {typical_rpm}")
     warnings = _all_warnings_text(trip, battery_warning_voltage)
     if warnings:
         parts.append(f"Warnings: {warnings}")

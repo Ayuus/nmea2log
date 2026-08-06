@@ -17,6 +17,7 @@ from .logbook_writer import write_csv
 from .model import (
     BatterySample,
     DepthSample,
+    EngineRpmSample,
     EngineSample,
     Frame,
     PositionFix,
@@ -29,12 +30,14 @@ from .pgn_decode import (
     PGN_BATTERY_STATUS,
     PGN_COG_SOG_RAPID,
     PGN_ENGINE_DYNAMIC,
+    PGN_ENGINE_RAPID,
     PGN_POSITION_RAPID,
     PGN_TEMPERATURE,
     PGN_TRIP_FUEL_ENGINE,
     PGN_WATER_DEPTH,
     decode_battery_status,
     decode_engine_dynamic,
+    decode_engine_rapid,
     decode_position_rapid,
     decode_sea_temperature,
     decode_sog,
@@ -67,8 +70,10 @@ def _merge_by_source(target: Dict[int, List[_T]], addition: Dict[int, List[_T]])
 
 
 def _filter_to_dominant_engine(
-    engine_samples: List[EngineSample], trip_fuel_samples: List[TripFuelSample]
-) -> Tuple[List[EngineSample], List[TripFuelSample]]:
+    engine_samples: List[EngineSample],
+    trip_fuel_samples: List[TripFuelSample],
+    rpm_samples: List[EngineRpmSample],
+) -> Tuple[List[EngineSample], List[TripFuelSample], List[EngineRpmSample]]:
     """Keeps only the engine instance with the most samples, discarding any other instance
     entirely. Used when ``--engine-count 1`` tells us there's really just one physical engine,
     so any additional instance that shows up in the data is noise (a duplicate/ghost source),
@@ -77,11 +82,12 @@ def _filter_to_dominant_engine(
     for sample in engine_samples:
         by_instance.setdefault(sample.instance, []).append(sample)
     if len(by_instance) <= 1:
-        return engine_samples, trip_fuel_samples
+        return engine_samples, trip_fuel_samples, rpm_samples
 
     dominant = max(by_instance, key=lambda instance: len(by_instance[instance]))
     filtered_fuel = [sample for sample in trip_fuel_samples if sample.instance == dominant]
-    return by_instance[dominant], filtered_fuel
+    filtered_rpm = [sample for sample in rpm_samples if sample.instance == dominant]
+    return by_instance[dominant], filtered_fuel, filtered_rpm
 
 
 def _select_primary_gps_source(
@@ -120,6 +126,7 @@ def _collect_samples(
     Dict[int, List[DepthSample]],
     Dict[int, List[WaterTempSample]],
     Dict[int, List[BatterySample]],
+    List[EngineRpmSample],
 ]:
     """Processes frames into samples, grouped by source address for PGNs that can come from
     multiple devices at once. Stops cleanly on Ctrl+C or once the deadline passes, so a live
@@ -131,6 +138,7 @@ def _collect_samples(
     battery_by_source: Dict[int, List[BatterySample]] = {}
     engine_samples: List[EngineSample] = []
     trip_fuel_samples: List[TripFuelSample] = []
+    rpm_samples: List[EngineRpmSample] = []
     try:
         for frame in frames:
             if deadline is not None and time.monotonic() >= deadline:
@@ -149,6 +157,11 @@ def _collect_samples(
                 decoded = decode_engine_dynamic(frame.data)
                 if decoded is not None:
                     engine_samples.append(EngineSample(time=frame.time, **decoded))
+            elif frame.pgn == PGN_ENGINE_RAPID:
+                decoded = decode_engine_rapid(frame.data)
+                if decoded is not None:
+                    instance, rpm = decoded
+                    rpm_samples.append(EngineRpmSample(frame.time, instance, rpm))
             elif frame.pgn == PGN_TRIP_FUEL_ENGINE:
                 decoded = decode_trip_fuel_engine(frame.data)
                 if decoded is not None:
@@ -179,6 +192,7 @@ def _collect_samples(
         depth_by_source,
         water_temp_by_source,
         battery_by_source,
+        rpm_samples,
     )
 
 
@@ -422,6 +436,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     battery_by_source: Dict[int, List[BatterySample]] = {}
     all_engine: List[EngineSample] = []
     all_trip_fuel: List[TripFuelSample] = []
+    all_rpm: List[EngineRpmSample] = []
 
     if args.live:
         host, port = _parse_host_port(args.live, DEFAULT_PORT)
@@ -440,6 +455,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             depth_by_source,
             water_temp_by_source,
             battery_by_source,
+            all_rpm,
         ) = _collect_samples(frames, deadline=deadline)
     else:
         start_date = date.fromisoformat(args.start_date) if args.start_date else None
@@ -449,7 +465,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(f"Log file not found: {path}", file=sys.stderr)
                 return 1
             frames = _iter_frames_for_path(path, start_date if index == 0 else None, ebl_time_state)
-            fixes, sogs, engine, trip_fuel, depth, water_temp, battery = _collect_samples(frames)
+            fixes, sogs, engine, trip_fuel, depth, water_temp, battery, rpm = _collect_samples(frames)
             _merge_by_source(fixes_by_source, fixes)
             _merge_by_source(sogs_by_source, sogs)
             all_engine += engine
@@ -457,6 +473,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             _merge_by_source(depth_by_source, depth)
             _merge_by_source(water_temp_by_source, water_temp)
             _merge_by_source(battery_by_source, battery)
+            all_rpm += rpm
 
     all_fixes, all_sogs, primary_gps_source = _select_primary_gps_source(fixes_by_source, sogs_by_source)
     all_depth = _dominant_source_only(depth_by_source)
@@ -475,7 +492,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1
 
     if args.engine_count == 1:
-        all_engine, all_trip_fuel = _filter_to_dominant_engine(all_engine, all_trip_fuel)
+        all_engine, all_trip_fuel, all_rpm = _filter_to_dominant_engine(all_engine, all_trip_fuel, all_rpm)
 
     geocoder = NoGeocoder() if args.no_geocode else Geocoder(cache_file=args.cache_file, language=args.language)
 
@@ -487,6 +504,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         all_depth,
         all_water_temp,
         all_battery,
+        all_rpm,
         geocoder=geocoder,
         speed_threshold_kn=args.speed_threshold_kn,
         min_stop_minutes=args.min_stop_minutes,

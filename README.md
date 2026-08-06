@@ -33,11 +33,13 @@ the tests.
    - everything else, e.g. `.raw`/`.n2k` (`ascii_reader.py`): an *N2K ASCII* log file, such as
      you can capture with `--live --tee`. Each line has already been reassembled by the Actisense
      hardware (fast-packet/multi-packet), so no reassembly is needed there.
-2. **Decoding** (`pgn_decode.py`): picks eight PGNs out of the stream:
+2. **Decoding** (`pgn_decode.py`): picks nine PGNs out of the stream:
    - **127489** (*Engine Parameters, Dynamic*) → fuel rate, engine-hour meter, and health
      indicators (oil pressure/temperature, coolant temperature, alternator voltage, engine load)
      plus the two "Discrete Status" warning fields. This is engine data, so explicitly not the
      tank-level sensor.
+   - **127488** (*Engine Parameters, Rapid Update*) → engine speed (RPM), sent much more
+     frequently than PGN 127489's other fields, so decoded as its own sample stream.
    - **127497** (*Trip Parameters, Engine*) → optional: the trip-meter fuel reading the
      engine/ECU keeps itself (in liters), if the device sends this PGN.
    - **128267** (*Water Depth*) → water depth under the transducer.
@@ -84,11 +86,14 @@ the tests.
      the engine manages itself and may have been reset by the user on the display, so it doesn't
      necessarily match our own departure/arrival split exactly.
    - **Engine hours**: the difference between the engine-hour meter at departure and arrival.
-     Engine hours, engine health, and warnings are shown per engine instance ("engine 0: ...",
-     "engine 1: ...") as soon as more than one instance shows up in the data; with exactly one
-     engine that label is dropped automatically. If a second instance shows up anyway even
-     though you only have one engine (a duplicate/ghost source), set `--engine-count 1` to
-     ignore it.
+     Engine hours, typical RPM, engine health, and warnings are shown per engine instance
+     ("engine 0: ...", "engine 1: ...") as soon as more than one instance shows up in the data;
+     with exactly one engine that label is dropped automatically. If a second instance shows up
+     anyway even though you only have one engine (a duplicate/ghost source), set
+     `--engine-count 1` to ignore it.
+   - **Typical RPM**: the most commonly occurring engine speed during the trip (rounded to the
+     nearest 50 RPM before counting) -- a more representative "cruising RPM" than an average
+     (skewed by idle/neutral periods and maneuvering) or a maximum (skewed by brief revs).
    - **Engine health**: average oil pressure/temperature, coolant temperature, alternator
      voltage, and maximum engine load during the trip, plus a separate **warnings** column with
      all active status flags (e.g. "Low Oil Pressure") that occurred at any point during the

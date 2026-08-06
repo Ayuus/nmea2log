@@ -45,6 +45,13 @@ class EngineSample:
 
 
 @dataclass(frozen=True)
+class EngineRpmSample:
+    time: datetime
+    instance: int
+    rpm: Optional[float]  # engine speed in RPM (PGN 127488), None = not available
+
+
+@dataclass(frozen=True)
 class TripFuelSample:
     time: datetime
     instance: int

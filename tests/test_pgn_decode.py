@@ -6,6 +6,7 @@ import pytest
 from nmea2000processor.pgn_decode import (
     decode_battery_status,
     decode_engine_dynamic,
+    decode_engine_rapid,
     decode_position_rapid,
     decode_sea_temperature,
     decode_sog,
@@ -84,6 +85,26 @@ def test_decode_engine_dynamic_not_available():
     assert result["total_hours_s"] == 500
     assert result["oil_pressure_pa"] is None
     assert result["warnings"] == frozenset()
+
+
+def test_decode_engine_rapid():
+    # instance(1B) + engineSpeed(2B, 0.25 rpm/bit) + boostPressure(2B) + tiltTrim(1B signed)
+    rpm_raw = round(2400.0 / 0.25)
+    data = struct.pack("<BHHb", 1, rpm_raw, 0xFFFF, 0x7F)
+
+    instance, rpm = decode_engine_rapid(data)
+
+    assert instance == 1
+    assert rpm == pytest.approx(2400.0)
+
+
+def test_decode_engine_rapid_not_available():
+    data = struct.pack("<BHHb", 0, 0xFFFF, 0xFFFF, 0x7F)
+
+    instance, rpm = decode_engine_rapid(data)
+
+    assert instance == 0
+    assert rpm is None
 
 
 def test_decode_trip_fuel_engine():

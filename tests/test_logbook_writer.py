@@ -22,6 +22,7 @@ def _trip(**overrides) -> TripLeg:
         engine_hours_total={0: 123.4},
         engine_health={},
         battery_health={},
+        typical_rpm={},
         min_depth_m=None,
         min_depth_lat=None,
         min_depth_lon=None,
@@ -99,6 +100,42 @@ def test_write_csv_labels_engines_when_there_are_more_than_one(tmp_path: Path):
     row = rows[0]
     assert row["engine_hours"] == "engine 0: 1,5 h, engine 1: 1,4 h"
     assert row["warnings"] == "engine 0: Low Oil Pressure"
+
+
+def test_write_csv_typical_rpm_single_engine(tmp_path: Path):
+    trip = _trip(typical_rpm={0: 2200.0})
+    out_path = tmp_path / "logbook.csv"
+
+    write_csv([trip], out_path)
+
+    with out_path.open(encoding="utf-8-sig") as handle:
+        rows = list(csv.DictReader(handle, delimiter=";"))
+
+    assert rows[0]["typical_rpm"] == "2200"
+
+
+def test_write_csv_typical_rpm_labels_engines_when_there_are_more_than_one(tmp_path: Path):
+    trip = _trip(typical_rpm={0: 2200.0, 1: 1800.0})
+    out_path = tmp_path / "logbook.csv"
+
+    write_csv([trip], out_path)
+
+    with out_path.open(encoding="utf-8-sig") as handle:
+        rows = list(csv.DictReader(handle, delimiter=";"))
+
+    assert rows[0]["typical_rpm"] == "engine 0: 2200, engine 1: 1800"
+
+
+def test_write_csv_typical_rpm_blank_without_data(tmp_path: Path):
+    trip = _trip()
+    out_path = tmp_path / "logbook.csv"
+
+    write_csv([trip], out_path)
+
+    with out_path.open(encoding="utf-8-sig") as handle:
+        rows = list(csv.DictReader(handle, delimiter=";"))
+
+    assert rows[0]["typical_rpm"] == ""
 
 
 def test_write_csv_low_battery_warning(tmp_path: Path):

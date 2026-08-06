@@ -5,6 +5,7 @@ import pytest
 from nmea2000processor.model import (
     BatterySample,
     DepthSample,
+    EngineRpmSample,
     EngineSample,
     PositionFix,
     SogSample,
@@ -207,6 +208,44 @@ def test_battery_health_absent_without_samples():
 
     assert len(trips) == 1
     assert trips[0].battery_health == {}
+
+
+def test_typical_rpm_is_the_most_common_bucketed_value():
+    """The typical RPM is the mode of the (bucketed) readings, not the average or maximum -- so
+    it reflects the steady cruising speed rather than being skewed by idle/neutral periods or
+    brief revs."""
+    fixes, sogs, engine_samples = _build_scenario()
+    geocoder = _StubGeocoder()
+
+    rpm_samples = []
+    for m in range(0, 54):
+        if 12 <= m < 42:
+            # mostly steady cruising rpm, with a couple of brief revs up while maneuvering
+            rpm = 3200.0 if m in (13, 14) else 2200.0
+        else:
+            rpm = 800.0  # idling in port, not relevant to this trip
+        rpm_samples.append(EngineRpmSample(_dt(m), 0, rpm))
+
+    trips = build_trips(
+        fixes, sogs, engine_samples, rpm_samples=rpm_samples,
+        geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+    )
+
+    assert len(trips) == 1
+    assert trips[0].typical_rpm[0] == pytest.approx(2200.0)
+
+
+def test_typical_rpm_absent_without_samples():
+    fixes, sogs, engine_samples = _build_scenario()
+    geocoder = _StubGeocoder()
+
+    trips = build_trips(
+        fixes, sogs, engine_samples,
+        geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+    )
+
+    assert len(trips) == 1
+    assert trips[0].typical_rpm == {}
 
 
 def test_engine_health_and_warnings():
