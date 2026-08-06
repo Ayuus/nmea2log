@@ -38,7 +38,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Iterator, Optional, Tuple, Union
+from typing import Dict, FrozenSet, Iterator, Optional, Tuple, Union
 
 from .model import Frame
 from .pgn_decode import PGN_ENGINE_DYNAMIC, PGN_SYSTEM_TIME, PGN_TRIP_FUEL_ENGINE, decode_system_time
@@ -51,40 +51,49 @@ _CMD_RAW_ACTISENSE_MESSAGE_RECEIVED = 0x95
 # PGNs that are larger than 8 bytes for us and thus go over the bus as NMEA2000 "Fast Packet".
 _FAST_PACKET_PGNS = {PGN_ENGINE_DYNAMIC, PGN_TRIP_FUEL_ENGINE}
 
-_STATE_WAITING = 0
-_STATE_READING = 1
-_STATE_ESCAPING = 2
+
+_ESC_SOH = bytes([_ESC, _SOH])
+_ESC_BYTE = bytes([_ESC])
 
 
 def _iter_raw_records(data: bytes) -> Iterator[bytes]:
-    """Extracts ESC/SOH/NL-wrapped records from the raw file bytes (with byte stuffing)."""
-    state = _STATE_WAITING
-    message = bytearray()
-    previous_byte: Optional[int] = None
+    """Extracts ESC/SOH/NL-wrapped records from the raw file bytes (with byte stuffing).
 
-    for current_byte in data:
-        if state == _STATE_WAITING:
-            if previous_byte == _ESC and current_byte == _SOH:
-                state = _STATE_READING
-                message = bytearray()
-        elif state == _STATE_READING:
-            if current_byte == _ESC:
-                state = _STATE_ESCAPING
-            else:
-                message.append(current_byte)
-        elif state == _STATE_ESCAPING:
-            if current_byte == _ESC:  # double ESC = literal 0x1B data byte
-                message.append(current_byte)
-                state = _STATE_READING
-            elif current_byte == _NL:  # ESC+NL = end of record
+    Same state machine as a byte-by-byte loop would implement, but scans for the next ESC byte
+    with ``bytes.find`` (a C-level memory scan) and bulk-copies whole runs of non-ESC bytes via
+    slicing, instead of a Python-level loop appending one byte at a time -- real logs run into
+    the hundreds of millions of bytes, where the per-byte version dominates total runtime."""
+    pos = 0
+    n = len(data)
+    message = bytearray()
+
+    while pos < n:
+        # STATE_WAITING: look for the next ESC+SOH marker (start of a record).
+        start = data.find(_ESC_SOH, pos)
+        if start == -1:
+            return
+        pos = start + 2
+        message = bytearray()
+
+        # STATE_READING / STATE_ESCAPING: copy bytes up to the next ESC in bulk, then handle
+        # the byte right after it (literal ESC, end-of-record, or an unknown/malformed escape).
+        while True:
+            esc = data.find(_ESC_BYTE, pos)
+            if esc == -1:
+                return  # ESC (or the whole record) never closes -- nothing left to yield
+            message.extend(data[pos:esc])
+            if esc + 1 >= n:
+                return  # trailing ESC with nothing after it at EOF
+            following = data[esc + 1]
+            pos = esc + 2
+            if following == _ESC:  # double ESC = literal 0x1B data byte
+                message.append(_ESC)
+                continue
+            if following == _NL:  # ESC+NL = end of record
                 if len(message) > 4:
                     yield bytes(message)
-                message = bytearray()
-                state = _STATE_WAITING
-            else:  # unknown ESC+???  sequence: discard this record, wait for a new start
-                message = bytearray()
-                state = _STATE_WAITING
-        previous_byte = current_byte
+                break
+            break  # unknown ESC+??? sequence: discard this record, wait for a new start
 
 
 def _parse_can_id(can_id: int) -> Tuple[int, int, int, int]:
@@ -151,7 +160,9 @@ def _reassemble_fast_packet(
 
 
 def iter_frames(
-    path: Union[str, Path], time_state: Optional[Dict[str, Optional[datetime]]] = None
+    path: Union[str, Path],
+    time_state: Optional[Dict[str, Optional[datetime]]] = None,
+    wanted_pgns: Optional[FrozenSet[int]] = None,
 ) -> Iterator[Frame]:
     """Reads an EBL log file and yields decoded Frames from it, in file order.
 
@@ -160,6 +171,13 @@ def iter_frames(
     the last known time; pass the same dict to consecutive files from the same session so the
     time reference is preserved across file boundaries (see the module docstring above).
     Default (``None``) starts each file with a clean slate, as before.
+
+    ``wanted_pgns``: if given, frames whose PGN isn't in this set are dropped right after
+    decoding the CAN ID, before the (comparatively expensive) Fast Packet reassembly and Frame
+    construction -- PGN 126992 always passes through regardless, since it's needed internally
+    for the time reference above. Real NMEA2000 buses carry a lot of chatter this app has no use
+    for (autopilot/heading/attitude PGNs can easily outnumber the ones it decodes 100:1); most
+    real logs are effectively this filter's cost, not the file-reading cost.
     """
     if time_state is None:
         time_state = {}
@@ -173,6 +191,9 @@ def iter_frames(
         if decoded is None:
             continue
         priority, pgn, source, destination, payload = decoded
+
+        if wanted_pgns is not None and pgn not in wanted_pgns and pgn != PGN_SYSTEM_TIME:
+            continue
 
         if pgn in _FAST_PACKET_PGNS:
             payload = _reassemble_fast_packet((source, pgn), payload, fast_packet_state)

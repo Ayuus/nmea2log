@@ -49,6 +49,23 @@ from .tripbuilder import build_trips
 
 _T = TypeVar("_T")
 
+# The only PGNs this app decodes anything from (see _collect_samples below). Real NMEA2000
+# buses carry a lot of other chatter (autopilot/heading/attitude PGNs can easily outnumber these
+# 100:1) that would otherwise get fully decoded and turned into Frame objects for nothing --
+# passed to ebl_reader.iter_frames so it can drop everything else right after reading the CAN ID.
+_WANTED_PGNS = frozenset(
+    {
+        PGN_POSITION_RAPID,
+        PGN_COG_SOG_RAPID,
+        PGN_ENGINE_DYNAMIC,
+        PGN_ENGINE_RAPID,
+        PGN_TRIP_FUEL_ENGINE,
+        PGN_WATER_DEPTH,
+        PGN_TEMPERATURE,
+        PGN_BATTERY_STATUS,
+    }
+)
+
 
 def _dominant_source_only(by_source: Dict[int, List[_T]]) -> List[_T]:
     """Some boats have multiple devices sending the same PGN (e.g. two GPS antennas that both
@@ -207,7 +224,7 @@ def _iter_frames_for_path(
     (e.g. anchored for a long time, GPS/plotter idle) gets discarded entirely, even though the
     time is already known from the previous file (see ebl_reader.py)."""
     if path.suffix.lower() == ".ebl":
-        return iter_frames_ebl(path, time_state=ebl_time_state)
+        return iter_frames_ebl(path, time_state=ebl_time_state, wanted_pgns=_WANTED_PGNS)
     return iter_frames(path, start_date=start_date)
 
 

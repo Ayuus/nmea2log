@@ -91,6 +91,36 @@ def test_iter_frames_before_system_time_are_dropped(tmp_path: Path):
     assert list(iter_frames(path)) == []
 
 
+def test_iter_frames_wanted_pgns_filters_out_unrequested_pgns(tmp_path: Path):
+    when = datetime(2026, 7, 15, 9, 0, 0)
+    position_record = bytes.fromhex("07950e289a0001f8093d0db3224832590d")  # pgn 129025
+    depth_record = _bst95_record(
+        _encode_can_id(priority=3, pgn=128267, source=1), bytes([0, 0, 0, 100, 0, 0, 0, 0])
+    )
+    data = _frame_bytes(_system_time_record(when)) + _frame_bytes(position_record) + _frame_bytes(depth_record)
+    path = tmp_path / "test.ebl"
+    path.write_bytes(data)
+
+    frames = list(iter_frames(path, wanted_pgns=frozenset({128267})))
+
+    assert [f.pgn for f in frames] == [128267]  # 129025 dropped, not requested
+
+
+def test_iter_frames_wanted_pgns_always_keeps_system_time_working(tmp_path: Path):
+    """PGN 126992 must keep updating the internal time reference even when it's not itself in
+    wanted_pgns -- otherwise every later frame would silently have no timestamp to attach to."""
+    when = datetime(2026, 7, 15, 9, 0, 0)
+    position_record = bytes.fromhex("07950e289a0001f8093d0db3224832590d")
+    data = _frame_bytes(_system_time_record(when)) + _frame_bytes(position_record)
+    path = tmp_path / "test.ebl"
+    path.write_bytes(data)
+
+    frames = list(iter_frames(path, wanted_pgns=frozenset({129025})))
+
+    assert len(frames) == 1
+    assert frames[0].time == when
+
+
 def test_iter_frames_byte_stuffing(tmp_path: Path):
     # the data deliberately contains a 0x1B byte, which must appear doubled in the file
     payload_with_esc = bytes([0x00, 0x1B, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07])
@@ -105,6 +135,39 @@ def test_iter_frames_byte_stuffing(tmp_path: Path):
 
     assert len(frames) == 1
     assert frames[0].data == payload_with_esc
+
+
+def test_iter_frames_recovers_after_unknown_escape_sequence(tmp_path: Path):
+    """An ESC followed by anything other than another ESC (byte stuffing) or NL (end of record)
+    is a malformed escape; that one record is discarded, but parsing must recover and pick up
+    the next valid record normally."""
+    when = datetime(2026, 7, 15, 10, 0, 0)
+    position_record = bytes.fromhex("07950e289a0001f8093d0db3224832590d")
+    good = _frame_bytes(position_record)
+    # a "record" containing ESC followed by a byte that's neither ESC nor NL
+    garbage = bytes([_ESC, _SOH]) + bytes([0x01, 0x02, _ESC, 0x99]) + bytes([_ESC, _NL])
+
+    data = _frame_bytes(_system_time_record(when)) + garbage + good
+    path = tmp_path / "test.ebl"
+    path.write_bytes(data)
+
+    frames = list(iter_frames(path))
+
+    assert len(frames) == 1
+    assert frames[0].pgn == 129025
+
+
+def test_iter_frames_drops_truncated_record_at_eof(tmp_path: Path):
+    """A record that never reaches its closing ESC+NL (e.g. the file was cut off mid-write)
+    yields nothing for that fragment, instead of crashing or hanging."""
+    when = datetime(2026, 7, 15, 10, 0, 0)
+    position_record = bytes.fromhex("07950e289a0001f8093d0db3224832590d")
+
+    data = _frame_bytes(_system_time_record(when)) + bytes([_ESC, _SOH]) + position_record
+    path = tmp_path / "test.ebl"
+    path.write_bytes(data)
+
+    assert list(iter_frames(path)) == []
 
 
 def test_iter_frames_fast_packet_reassembly(tmp_path: Path):
