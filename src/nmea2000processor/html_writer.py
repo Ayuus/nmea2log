@@ -223,6 +223,18 @@ def _trip_row_html(
     return f'<tr class="trip-row"{uid_attr}>{row}</tr>{map_row}'
 
 
+_HEADER_FULL_NAMES = {"Dep.": "Departure", "Arr.": "Arrival"}
+
+
+def _header_cell_html(label: str) -> str:
+    full = _HEADER_FULL_NAMES.get(label)
+    if full is None:
+        return escape(label)
+    # Shows the abbreviation by default; a wide-enough viewport swaps to the full word (see the
+    # .hdr-full / .hdr-abbr media query in write_html_logbook's <style>).
+    return f'<span class="hdr-full">{escape(full)}</span><span class="hdr-abbr">{escape(label)}</span>'
+
+
 _HEADERS = [
     "Date",
     "Dep.",
@@ -267,7 +279,7 @@ def write_html_logbook(
         iso_year, iso_week, _ = local_date.isocalendar()
         by_week[(iso_year, iso_week)].append(idx)
 
-    header_html = "".join(f"<th>{escape(h)}</th>" for h in _HEADERS)
+    header_html = "".join(f"<th>{_header_cell_html(h)}</th>" for h in _HEADERS)
 
     sections: List[str] = []
     for iso_year in sorted({y for y, _ in by_week}, reverse=True):
@@ -333,7 +345,15 @@ def write_html_logbook(
     white-space: nowrap;
   }}
   table.trips th {{ background: #f0f0f0; }}
-  tr.week-row td {{ background: #eef4fb; font-weight: 600; color: #1a4a7a; padding-top: 0.6em; padding-bottom: 0.6em; }}
+  .hdr-full {{ display: none; }}
+  @media (min-width: 1000px) {{
+    .hdr-full {{ display: inline; }}
+    .hdr-abbr {{ display: none; }}
+  }}
+  tr.week-row td {{
+    background: #eef4fb; font-weight: 700; color: #1a4a7a; font-size: 0.95em;
+    padding: 1em 0.6em 0.5em; border-top: 2px solid #1a6ecc; border-bottom: none;
+  }}
   .show-map {{ cursor: pointer; border: 1px solid #1a6ecc; background: white; color: #1a6ecc; border-radius: 4px; padding: 0.2em 0.6em; }}
   .show-map:hover {{ background: #1a6ecc; color: white; }}
   .trip-map-title {{ font-weight: 600; margin-bottom: 0.4em; }}
