@@ -162,7 +162,7 @@ def _totals_html(totals: _Totals) -> str:
     items = [
         ("Trips", str(totals.trip_count)),
         ("Total distance", f"{_nl_num(totals.distance_nm)} nm"),
-        ("Hours underway", f"{_nl_num(totals.moving_hours)} h"),
+        ("Total hours", f"{_nl_num(totals.moving_hours)} h"),
         ("Total fuel (calculated)", f"{_nl_num(totals.fuel_liters)} L"),
     ]
     if totals.fuel_liters_device is not None:

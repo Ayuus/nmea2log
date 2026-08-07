@@ -79,7 +79,7 @@ def test_write_html_logbook_shows_hours_underway_and_avg_speed(tmp_path: Path):
     write_html_logbook([trip_a, trip_b], out_path)
 
     html = out_path.read_text(encoding="utf-8")
-    assert "Hours underway" in html
+    assert "Total hours" in html
     assert "4,0 h" in html  # 2h + 2h
     assert "Avg speed" in html
     assert "4,0 kn" in html  # 16 nm / 4 h, distance-weighted
