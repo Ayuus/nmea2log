@@ -272,6 +272,34 @@ def test_motion_variation_reflects_roll_and_pitch_spread():
     trip = trips[0]
     assert trip.roll_variation_deg == pytest.approx(8.0, abs=0.2)
     assert trip.pitch_variation_deg == pytest.approx(3.0, abs=0.2)
+    # peak-to-peak (max - min): oscillates between +8/-8 and +3/-3
+    assert trip.roll_range_deg == pytest.approx(16.0, abs=0.01)
+    assert trip.pitch_range_deg == pytest.approx(6.0, abs=0.01)
+
+
+def test_motion_variation_range_survives_a_single_rough_patch():
+    """A trip that's calm except for one short rough patch should still show the full
+    peak-to-peak swing, even though the standard deviation gets diluted by the calm majority."""
+    fixes, sogs, engine_samples = _build_scenario()
+    geocoder = _StubGeocoder()
+
+    attitude_samples = []
+    for m in range(0, 54):
+        if 20 <= m < 22:
+            roll = 15.0 if m == 20 else -8.0  # one brief rough patch mid-trip
+        else:
+            roll = 0.0
+        attitude_samples.append(AttitudeSample(_dt(m), None, roll))
+
+    trips = build_trips(
+        fixes, sogs, engine_samples, attitude_samples=attitude_samples,
+        geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+    )
+
+    assert len(trips) == 1
+    trip = trips[0]
+    assert trip.roll_range_deg == pytest.approx(23.0, abs=0.01)  # 15 - (-8)
+    assert trip.roll_variation_deg < 5.0  # diluted by the mostly-calm rest of the trip
 
 
 def test_motion_variation_absent_without_samples():
@@ -286,6 +314,8 @@ def test_motion_variation_absent_without_samples():
     assert len(trips) == 1
     assert trips[0].roll_variation_deg is None
     assert trips[0].pitch_variation_deg is None
+    assert trips[0].roll_range_deg is None
+    assert trips[0].pitch_range_deg is None
 
 
 def test_engine_health_and_warnings():

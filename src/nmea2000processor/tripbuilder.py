@@ -102,6 +102,8 @@ class TripLeg:
     max_water_temp_c: Optional[float]
     roll_variation_deg: Optional[float]  # standard deviation of roll (PGN 127257) during the trip
     pitch_variation_deg: Optional[float]  # standard deviation of pitch (PGN 127257) during the trip
+    roll_range_deg: Optional[float]  # peak-to-peak (max - min) roll during the trip
+    pitch_range_deg: Optional[float]  # peak-to-peak (max - min) pitch during the trip
     track: List[NavSample]  # GPS points of this trip, e.g. for GPX export
 
 
@@ -504,17 +506,24 @@ def _typical_rpm(samples: List[EngineRpmSample], start: datetime, end: datetime)
 
 def _motion_variation(
     samples: List[AttitudeSample], start: datetime, end: datetime
-) -> Tuple[Optional[float], Optional[float]]:
-    """Standard deviation of roll and pitch (PGN 127257) during the trip -- a rougher sea or
-    more wave action shows up as more variation in how the boat's attitude moves around, even on
-    a boat holding a level average heel/trim. Not an established metric (unlike e.g. significant
-    wave height, which needs a wave sensor this app doesn't have); just a relative indicator
-    based on whatever motion sensor is already on the network."""
+) -> Tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
+    """Returns (roll_stdev, pitch_stdev, roll_range, pitch_range) from roll/pitch (PGN 127257)
+    during the trip -- a rougher sea or more wave action shows up as more variation in how the
+    boat's attitude moves around, even on a boat holding a level average heel/trim. The standard
+    deviation reflects the *typical* motion across the whole trip, but a trip that's mostly calm
+    with one rough patch will still average out to a small number there; the peak-to-peak range
+    (max - min) instead captures the single worst swing, which is closer to what you'd remember
+    feeling (found in practice: a trip with stdev 2.5 deg still had a roll range of ~23 deg).
+    Neither is an established metric (unlike e.g. significant wave height, which needs a wave
+    sensor this app doesn't have); just relative indicators from whatever motion sensor is
+    already on the network."""
     rolls = [s.roll_deg for s in samples if s.roll_deg is not None and start <= s.time <= end]
     pitches = [s.pitch_deg for s in samples if s.pitch_deg is not None and start <= s.time <= end]
-    roll_variation = statistics.stdev(rolls) if len(rolls) >= 2 else None
-    pitch_variation = statistics.stdev(pitches) if len(pitches) >= 2 else None
-    return roll_variation, pitch_variation
+    roll_stdev = statistics.stdev(rolls) if len(rolls) >= 2 else None
+    pitch_stdev = statistics.stdev(pitches) if len(pitches) >= 2 else None
+    roll_range = max(rolls) - min(rolls) if rolls else None
+    pitch_range = max(pitches) - min(pitches) if pitches else None
+    return roll_stdev, pitch_stdev, roll_range, pitch_range
 
 
 def build_trips(
@@ -611,7 +620,9 @@ def build_trips(
         avg_speed_kn, max_speed_kn = _speed_stats_kn(group)
         min_depth_m, min_depth_lat, min_depth_lon = _min_depth(group)
         avg_water_temp_c, min_water_temp_c, max_water_temp_c = _water_temp_stats(group)
-        roll_variation_deg, pitch_variation_deg = _motion_variation(attitude_samples, depart_time, arrive_time)
+        roll_variation_deg, pitch_variation_deg, roll_range_deg, pitch_range_deg = _motion_variation(
+            attitude_samples, depart_time, arrive_time
+        )
 
         trips.append(
             TripLeg(
@@ -638,6 +649,8 @@ def build_trips(
                 max_water_temp_c=max_water_temp_c,
                 roll_variation_deg=roll_variation_deg,
                 pitch_variation_deg=pitch_variation_deg,
+                roll_range_deg=roll_range_deg,
+                pitch_range_deg=pitch_range_deg,
                 track=group,
             )
         )

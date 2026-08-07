@@ -61,9 +61,11 @@ def _trip_description(trip: TripLeg, battery_warning_voltage: Optional[float] = 
         )
         parts.append(f"Water temp: {_nl_num(trip.avg_water_temp_c)}°C{range_text}")
     if trip.roll_variation_deg is not None:
-        parts.append(f"Roll variation: {_nl_num(trip.roll_variation_deg)}°")
+        peak_text = f", peak {_nl_num(trip.roll_range_deg)}°" if trip.roll_range_deg is not None else ""
+        parts.append(f"Roll variation: ±{_nl_num(trip.roll_variation_deg)}°{peak_text}")
     if trip.pitch_variation_deg is not None:
-        parts.append(f"Pitch variation: {_nl_num(trip.pitch_variation_deg)}°")
+        peak_text = f", peak {_nl_num(trip.pitch_range_deg)}°" if trip.pitch_range_deg is not None else ""
+        parts.append(f"Pitch variation: ±{_nl_num(trip.pitch_variation_deg)}°{peak_text}")
     return ", ".join(parts)
 
 

@@ -31,6 +31,8 @@ def _trip(**overrides) -> TripLeg:
         max_water_temp_c=None,
         roll_variation_deg=None,
         pitch_variation_deg=None,
+        roll_range_deg=None,
+        pitch_range_deg=None,
         track=[],
     )
     defaults.update(overrides)
@@ -82,6 +84,21 @@ def test_write_csv_water_temp_columns(tmp_path: Path):
     assert rows[0]["avg_water_temp_c"] == "18,4"  # float formatting rounds .45 down here
     assert rows[0]["min_water_temp_c"] == "17,1"
     assert rows[0]["max_water_temp_c"] == "19,8"
+
+
+def test_write_csv_roll_pitch_variation_and_range_columns(tmp_path: Path):
+    trip = _trip(roll_variation_deg=2.4, pitch_variation_deg=0.9, roll_range_deg=23.0, pitch_range_deg=5.3)
+    out_path = tmp_path / "logbook.csv"
+
+    write_csv([trip], out_path)
+
+    with out_path.open(encoding="utf-8-sig") as handle:
+        rows = list(csv.DictReader(handle, delimiter=";"))
+
+    assert rows[0]["roll_variation_deg"] == "2,4"
+    assert rows[0]["pitch_variation_deg"] == "0,9"
+    assert rows[0]["roll_range_deg"] == "23,0"
+    assert rows[0]["pitch_range_deg"] == "5,3"
 
 
 def test_write_csv_labels_engines_when_there_are_more_than_one(tmp_path: Path):

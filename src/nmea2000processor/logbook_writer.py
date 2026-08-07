@@ -36,6 +36,8 @@ _FIELDNAMES = [
     "max_water_temp_c",
     "roll_variation_deg",
     "pitch_variation_deg",
+    "roll_range_deg",
+    "pitch_range_deg",
 ]
 
 
@@ -269,5 +271,7 @@ def write_csv(
                     "pitch_variation_deg": _nl_num(trip.pitch_variation_deg)
                     if trip.pitch_variation_deg is not None
                     else "",
+                    "roll_range_deg": _nl_num(trip.roll_range_deg) if trip.roll_range_deg is not None else "",
+                    "pitch_range_deg": _nl_num(trip.pitch_range_deg) if trip.pitch_range_deg is not None else "",
                 }
             )

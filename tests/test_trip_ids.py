@@ -30,6 +30,8 @@ def _trip(**overrides) -> TripLeg:
         max_water_temp_c=None,
         roll_variation_deg=None,
         pitch_variation_deg=None,
+        roll_range_deg=None,
+        pitch_range_deg=None,
         track=[],
     )
     defaults.update(overrides)

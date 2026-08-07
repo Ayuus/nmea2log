@@ -123,13 +123,33 @@ def _water_temp_badge_html(trip: TripLeg) -> str:
     )
 
 
-def _motion_variation_text(trip: TripLeg) -> str:
-    parts = []
+def _motion_variation_html(trip: TripLeg) -> str:
+    """Plain text in the table cell (standard deviation, the "typical" motion); hovering shows
+    the peak-to-peak roll/pitch range too -- a trip that's mostly calm with one rough patch
+    still averages out to a small standard deviation, so the single worst swing is worth
+    surfacing separately rather than only showing the diluted average."""
+    visible_parts = []
     if trip.roll_variation_deg is not None:
-        parts.append(f"roll ±{_nl_num(trip.roll_variation_deg)}°")
+        visible_parts.append(f"roll ±{_nl_num(trip.roll_variation_deg)}°")
     if trip.pitch_variation_deg is not None:
-        parts.append(f"pitch ±{_nl_num(trip.pitch_variation_deg)}°")
-    return ", ".join(parts)
+        visible_parts.append(f"pitch ±{_nl_num(trip.pitch_variation_deg)}°")
+    if not visible_parts:
+        return ""
+    visible = escape(", ".join(visible_parts))
+
+    peak_parts = []
+    if trip.roll_range_deg is not None:
+        peak_parts.append(f"roll peak {_nl_num(trip.roll_range_deg)}°")
+    if trip.pitch_range_deg is not None:
+        peak_parts.append(f"pitch peak {_nl_num(trip.pitch_range_deg)}°")
+    if not peak_parts:
+        return visible
+    peak = escape(", ".join(peak_parts))
+    return (
+        f'<span class="temp-hover">{visible}'
+        f'<span class="temp-tooltip" style="background:#eef4fb;color:#1a4a7a;">'
+        f"〰️ {peak}</span></span>"
+    )
 
 
 def _totals_html(totals: _Totals) -> str:
@@ -207,7 +227,7 @@ def _trip_row_html(
         escape(_typical_rpm_text(trip)),
         escape(_all_warnings_text(trip, battery_warning_voltage)),
         _water_temp_badge_html(trip),
-        escape(_motion_variation_text(trip)),
+        _motion_variation_html(trip),
         map_cell,
     ]
     row = "".join(f"<td>{cell}</td>" for cell in cells)

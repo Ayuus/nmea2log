@@ -109,9 +109,14 @@ the tests.
      min-max range, if notable) as a hover tooltip rather than always inline.
    - **Roll/pitch variation**: standard deviation of roll and pitch (PGN 127257) during the trip
      — a rougher sea or more wave action shows up as more variation in how the boat's attitude
-     moves around, even if the average heel/trim stays level. Not an established metric like
-     significant wave height (which needs an actual wave sensor this app doesn't have) — just a
-     relative indicator from whatever motion sensor is already on the network.
+     moves around, even if the average heel/trim stays level. Also reports the peak-to-peak
+     range (max - min) alongside it: a trip that's mostly calm with one rough patch still
+     averages out to a small standard deviation, so the range captures the single worst swing
+     instead (found in practice: a trip with a 2.5° standard deviation still had a 23° roll
+     range). Shown in the HTML logbook as the standard deviation, with the peak range as a hover
+     tooltip. Neither is an established metric like significant wave height (which needs an
+     actual wave sensor this app doesn't have) — just relative indicators from whatever motion
+     sensor is already on the network.
    - **Minimum water depth**, including the position where it was measured.
 4. **Port names** (`geocode.py`): the GPS position of each port visit is turned into a place
    name via OpenStreetMap/Nominatim (reverse geocoding), with local caching so the same position

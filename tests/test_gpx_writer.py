@@ -37,6 +37,8 @@ def _trip(**overrides) -> TripLeg:
         max_water_temp_c=None,
         roll_variation_deg=None,
         pitch_variation_deg=None,
+        roll_range_deg=None,
+        pitch_range_deg=None,
         track=[],
     )
     defaults.update(overrides)
@@ -87,7 +89,10 @@ def test_write_gpx_basic(tmp_path: Path):
 
 def test_write_gpx_includes_roll_pitch_variation(tmp_path: Path):
     track = [_sample(11, 52.30, 4.90)]
-    trip = _trip(roll_variation_deg=2.4, pitch_variation_deg=0.9, track=track)
+    trip = _trip(
+        roll_variation_deg=2.4, pitch_variation_deg=0.9,
+        roll_range_deg=23.0, pitch_range_deg=5.3, track=track,
+    )
     out_path = tmp_path / "logboek.gpx"
 
     write_gpx([trip], out_path)
@@ -95,8 +100,8 @@ def test_write_gpx_includes_roll_pitch_variation(tmp_path: Path):
     tree = ET.parse(out_path)
     desc = tree.getroot().find("gpx:trk/gpx:desc", _NS).text
 
-    assert "Roll variation: 2,4°" in desc
-    assert "Pitch variation: 0,9°" in desc
+    assert "Roll variation: ±2,4°, peak 23,0°" in desc
+    assert "Pitch variation: ±0,9°, peak 5,3°" in desc
 
 
 def test_write_gpx_name_uses_local_time(tmp_path: Path):

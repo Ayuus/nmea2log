@@ -30,6 +30,8 @@ def _trip(**overrides) -> TripLeg:
         max_water_temp_c=None,
         roll_variation_deg=None,
         pitch_variation_deg=None,
+        roll_range_deg=None,
+        pitch_range_deg=None,
         track=[],
     )
     defaults.update(overrides)
@@ -237,6 +239,21 @@ def test_write_html_logbook_shows_motion_variation(tmp_path: Path):
     html = out_path.read_text(encoding="utf-8")
     assert "roll ±2,5°" in html
     assert "pitch ±0,7°" in html
+
+
+def test_write_html_logbook_shows_motion_peak_in_tooltip(tmp_path: Path):
+    """The standard deviation alone can look deceptively small for a trip that's mostly calm
+    with one rough patch, so the peak-to-peak range shows up too (in a hover tooltip, same
+    pattern as the water-temp badge, to keep the visible cell compact)."""
+    trip = _trip(roll_variation_deg=2.5, pitch_variation_deg=0.7, roll_range_deg=23.0, pitch_range_deg=5.3)
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([trip], out_path)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert "roll ±2,5°" in html
+    assert "roll peak 23,0°" in html
+    assert "pitch peak 5,3°" in html
 
 
 def test_write_html_logbook_water_temp_badge_shows_range_when_notable(tmp_path: Path):
