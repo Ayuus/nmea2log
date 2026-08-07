@@ -155,10 +155,14 @@ def _motion_variation_html(trip: TripLeg) -> str:
 def _totals_html(totals: _Totals) -> str:
     avg_l_per_nm = totals.fuel_liters / totals.distance_nm if totals.distance_nm > 0 else None
     avg_l_per_hour = totals.fuel_liters / totals.moving_hours if totals.moving_hours > 0 else None
+    # Distance-weighted, not a plain average of each trip's avg_speed_kn -- that would give a
+    # short trip the same weight as a long one, which isn't representative of the whole period.
+    avg_speed_kn = totals.distance_nm / totals.moving_hours if totals.moving_hours > 0 else None
 
     items = [
         ("Trips", str(totals.trip_count)),
         ("Total distance", f"{_nl_num(totals.distance_nm)} nm"),
+        ("Hours underway", f"{_nl_num(totals.moving_hours)} h"),
         ("Total fuel (calculated)", f"{_nl_num(totals.fuel_liters)} L"),
     ]
     if totals.fuel_liters_device is not None:
@@ -167,6 +171,8 @@ def _totals_html(totals: _Totals) -> str:
         items.append(("Avg. consumption", f"{_nl_num(avg_l_per_nm, 2)} L/nm"))
     if avg_l_per_hour is not None:
         items.append(("Avg. consumption", f"{_nl_num(avg_l_per_hour)} L/h"))
+    if avg_speed_kn is not None:
+        items.append(("Avg speed", f"{_nl_num(avg_speed_kn)} kn"))
     if totals.max_speed_kn is not None:
         items.append(("Top speed", f"{_nl_num(totals.max_speed_kn)} kn"))
 

@@ -71,6 +71,20 @@ def test_write_html_logbook_shows_totals(tmp_path: Path):
     assert "Hours logged, engine 1" in html
 
 
+def test_write_html_logbook_shows_hours_underway_and_avg_speed(tmp_path: Path):
+    trip_a = _trip(distance_nm=10.0, duration=timedelta(hours=2))
+    trip_b = _trip(distance_nm=6.0, duration=timedelta(hours=2))
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([trip_a, trip_b], out_path)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert "Hours underway" in html
+    assert "4,0 h" in html  # 2h + 2h
+    assert "Avg speed" in html
+    assert "4,0 kn" in html  # 16 nm / 4 h, distance-weighted
+
+
 def test_write_html_logbook_totals_omit_engine_label_with_one_engine(tmp_path: Path):
     trip = _trip(engine_hours={0: 1.5})
     out_path = tmp_path / "logbook.html"
