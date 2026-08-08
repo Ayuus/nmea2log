@@ -14,7 +14,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 _NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
 _MIN_INTERVAL_S = 1.0
@@ -57,12 +57,19 @@ class Geocoder:
         key = self._key(lat, lon)
         if key in self._cache:
             return self._cache[key]
-        name = self._lookup(lat, lon)
-        self._cache[key] = name
-        self._save_cache()
+        name, cacheable = self._lookup(lat, lon)
+        if cacheable:
+            self._cache[key] = name
+            self._save_cache()
         return name
 
-    def _lookup(self, lat: float, lon: float) -> str:
+    def _lookup(self, lat: float, lon: float) -> Tuple[str, bool]:
+        """Returns (name, cacheable). A failed request (no internet, DNS down, Nominatim
+        unreachable, ...) is not cacheable -- it's a transient environmental problem, not a fact
+        about that position, so it must not be written to the cache file: otherwise a single
+        offline run permanently poisons that position with "geocoding failed", and even a later
+        run with a working connection would just keep returning the same stale failure forever
+        instead of retrying (found in practice: ran once without internet on the boat)."""
         wait = _MIN_INTERVAL_S - (time.monotonic() - self._last_request)
         if wait > 0:
             time.sleep(wait)
@@ -85,10 +92,10 @@ class Geocoder:
                 payload = json.loads(response.read().decode("utf-8"))
         except (urllib.error.URLError, TimeoutError, ValueError) as exc:
             self._last_request = time.monotonic()
-            return f"Unknown ({lat:.4f}, {lon:.4f}) [geocoding failed: {exc}]"
+            return f"Unknown ({lat:.4f}, {lon:.4f}) [geocoding failed: {exc}]", False
 
         self._last_request = time.monotonic()
-        return _pick_place_name(payload, lat, lon)
+        return _pick_place_name(payload, lat, lon), True
 
     def _save_cache(self) -> None:
         if self.cache_file is None:
