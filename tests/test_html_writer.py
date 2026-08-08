@@ -253,7 +253,7 @@ def test_write_html_logbook_shows_speed_at_typical_rpm_tooltip(tmp_path: Path):
 
     html = out_path.read_text(encoding="utf-8")
     assert "2250" in html
-    assert "12,6-13,4 kn at that RPM (avg 13,0 kn)" in html
+    assert "avg 13,0 kn at that RPM (12,6-13,4 kn)" in html
 
 
 def test_write_html_logbook_shows_motion_variation(tmp_path: Path):

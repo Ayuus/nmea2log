@@ -167,10 +167,10 @@ def _typical_rpm_html(trip: TripLeg) -> str:
 
     if len(trip.typical_rpm_speed_kn) == 1:
         min_kn, max_kn, avg_kn = next(iter(trip.typical_rpm_speed_kn.values()))
-        tooltip = f"{_nl_num(min_kn)}-{_nl_num(max_kn)} kn at that RPM (avg {_nl_num(avg_kn)} kn)"
+        tooltip = f"avg {_nl_num(avg_kn)} kn at that RPM ({_nl_num(min_kn)}-{_nl_num(max_kn)} kn)"
     else:
         tooltip = ", ".join(
-            f"engine {instance}: {_nl_num(min_kn)}-{_nl_num(max_kn)} kn (avg {_nl_num(avg_kn)} kn)"
+            f"engine {instance}: avg {_nl_num(avg_kn)} kn ({_nl_num(min_kn)}-{_nl_num(max_kn)} kn)"
             for instance, (min_kn, max_kn, avg_kn) in sorted(trip.typical_rpm_speed_kn.items())
         )
     tooltip = escape(tooltip)
