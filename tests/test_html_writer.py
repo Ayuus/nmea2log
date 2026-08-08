@@ -22,6 +22,7 @@ def _trip(**overrides) -> TripLeg:
         engine_health={},
         battery_health={},
         typical_rpm={},
+        typical_rpm_speed_kn={},
         min_depth_m=None,
         min_depth_lat=None,
         min_depth_lon=None,
@@ -242,6 +243,17 @@ def test_write_html_logbook_shows_water_temp_badge(tmp_path: Path):
     assert "temp-hover" in html
     assert "21,8°C" in html
     assert "#EAF3DE" in html  # green bucket for 18-22°C
+
+
+def test_write_html_logbook_shows_speed_at_typical_rpm_tooltip(tmp_path: Path):
+    trip = _trip(typical_rpm={0: 2250.0}, typical_rpm_speed_kn={0: (12.6, 13.4)})
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([trip], out_path)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert "2250" in html
+    assert "12,6-13,4 kn at that RPM" in html
 
 
 def test_write_html_logbook_shows_motion_variation(tmp_path: Path):

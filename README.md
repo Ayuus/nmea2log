@@ -95,7 +95,14 @@ the tests.
      `--engine-count 1` to ignore it.
    - **Typical RPM**: the most commonly occurring engine speed during the trip (rounded to the
      nearest 50 RPM before counting) -- a more representative "cruising RPM" than an average
-     (skewed by idle/neutral periods and maneuvering) or a maximum (skewed by brief revs).
+     (skewed by idle/neutral periods and maneuvering) or a maximum (skewed by brief revs). In the
+     HTML logbook, hovering over it shows the speed range recorded during *sustained* runs
+     (at least 2 minutes) at that RPM, since the trip's overall average speed is diluted by
+     slower maneuvering and can otherwise read as if that RPM only makes that (lower) speed; a
+     brief pass through that RPM while accelerating/decelerating doesn't count as holding it.
+     The range can still be wide for a long cruise at a constant RPM (found in practice: over
+     two hours at a steady 2250 RPM legitimately ranged from 8 to 17.6 kn with the tide) -- that's
+     real, not a bug.
    - **Engine health**: average oil pressure/temperature, coolant temperature, alternator
      voltage, and maximum engine load during the trip, plus a separate **warnings** column with
      all active status flags (e.g. "Low Oil Pressure") that occurred at any point during the

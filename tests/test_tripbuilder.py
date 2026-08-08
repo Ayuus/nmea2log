@@ -247,6 +247,102 @@ def test_typical_rpm_absent_without_samples():
 
     assert len(trips) == 1
     assert trips[0].typical_rpm == {}
+    assert trips[0].typical_rpm_speed_kn == {}
+
+
+def test_typical_rpm_speed_range_reflects_speed_at_that_rpm_not_trip_average():
+    """Regression test for a real report: the trip's overall average speed is diluted by any
+    moment the boat's RPM (and thus speed) dipped away from the steady cruising value -- e.g. one
+    brief coast in neutral -- so showing that average next to the typical RPM misleadingly reads
+    as "this RPM only makes that speed". The speed range must reflect only the moments actually
+    spent at the typical RPM."""
+    fixes = []
+    sogs = []
+    engine_samples = []
+    rpm_samples = []
+
+    for m in range(0, 12):
+        fixes.append(PositionFix(_dt(m), 52.30, 4.90))
+        sogs.append(SogSample(_dt(m), 0.0))
+        engine_samples.append(EngineSample(_dt(m), 0, 0.5, 3600 * 100 + m * 60))
+
+    for i, m in enumerate(range(12, 42)):
+        frac = i / 29
+        fixes.append(PositionFix(_dt(m), 52.30 + 0.10 * frac, 4.90 + 0.05 * frac))
+        if m == 20:
+            sogs.append(SogSample(_dt(m), 0.5))  # brief coast in neutral
+            rpm_samples.append(EngineRpmSample(_dt(m), 0, 800.0))
+        else:
+            sogs.append(SogSample(_dt(m), 6.5))  # steady cruise, ~12.6 kn
+            rpm_samples.append(EngineRpmSample(_dt(m), 0, 2200.0))
+        engine_samples.append(EngineSample(_dt(m), 0, 8.0, 3600 * 100 + m * 60))
+
+    for m in range(42, 54):
+        fixes.append(PositionFix(_dt(m), 52.40, 4.95))
+        sogs.append(SogSample(_dt(m), 0.0))
+        engine_samples.append(EngineSample(_dt(m), 0, 0.5, 3600 * 100 + m * 60))
+
+    geocoder = _StubGeocoder()
+    trips = build_trips(
+        fixes, sogs, engine_samples, rpm_samples=rpm_samples,
+        geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+    )
+
+    assert len(trips) == 1
+    trip = trips[0]
+    assert trip.typical_rpm[0] == pytest.approx(2200.0)
+    min_kn, max_kn = trip.typical_rpm_speed_kn[0]
+    assert min_kn > 5.0  # the one neutral-coast sample (0.5 m/s / ~1 kn) must not drag it down
+    assert max_kn == pytest.approx(6.5 / 0.514444, rel=1e-3)
+
+
+def test_typical_rpm_speed_range_ignores_a_brief_pass_through_while_accelerating():
+    """A short (< 2 min) isolated run at the typical RPM bucket -- e.g. briefly passing through
+    it on the way up to cruising speed -- must not count, even though the RPM value matches;
+    only a *sustained* run at that bucket represents actually holding that RPM."""
+    fixes = []
+    sogs = []
+    engine_samples = []
+    rpm_samples = []
+
+    for m in range(0, 12):
+        fixes.append(PositionFix(_dt(m), 52.30, 4.90))
+        sogs.append(SogSample(_dt(m), 0.0))
+        engine_samples.append(EngineSample(_dt(m), 0, 0.5, 3600 * 100 + m * 60))
+
+    for i, m in enumerate(range(12, 42)):
+        frac = i / 29
+        fixes.append(PositionFix(_dt(m), 52.30 + 0.10 * frac, 4.90 + 0.05 * frac))
+        if m in (12, 13):
+            sogs.append(SogSample(_dt(m), 1.5))  # brief overshoot to 2200 rpm while accelerating
+            rpm_samples.append(EngineRpmSample(_dt(m), 0, 2200.0))
+        elif m == 14:
+            sogs.append(SogSample(_dt(m), 4.0))  # dips back down before settling into cruise
+            rpm_samples.append(EngineRpmSample(_dt(m), 0, 1600.0))
+        else:
+            sogs.append(SogSample(_dt(m), 6.5))  # steady cruise, ~12.6 kn
+            rpm_samples.append(EngineRpmSample(_dt(m), 0, 2200.0))
+        engine_samples.append(EngineSample(_dt(m), 0, 8.0, 3600 * 100 + m * 60))
+
+    for m in range(42, 54):
+        fixes.append(PositionFix(_dt(m), 52.40, 4.95))
+        sogs.append(SogSample(_dt(m), 0.0))
+        engine_samples.append(EngineSample(_dt(m), 0, 0.5, 3600 * 100 + m * 60))
+
+    geocoder = _StubGeocoder()
+    trips = build_trips(
+        fixes, sogs, engine_samples, rpm_samples=rpm_samples,
+        geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+    )
+
+    assert len(trips) == 1
+    trip = trips[0]
+    assert trip.typical_rpm[0] == pytest.approx(2200.0)
+    min_kn, max_kn = trip.typical_rpm_speed_kn[0]
+    # the brief 1-minute overshoot (1.5 m/s / ~2.9 kn) must be excluded -- too short to be a
+    # sustained run -- leaving only the steady-cruise speed
+    assert min_kn > 5.0
+    assert max_kn == pytest.approx(6.5 / 0.514444, rel=1e-3)
 
 
 def test_motion_variation_reflects_roll_and_pitch_spread():

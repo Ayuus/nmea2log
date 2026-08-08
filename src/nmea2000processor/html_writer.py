@@ -152,6 +152,35 @@ def _motion_variation_html(trip: TripLeg) -> str:
     )
 
 
+def _typical_rpm_html(trip: TripLeg) -> str:
+    """Plain RPM text in the cell; hovering shows the speed actually recorded while holding that
+    RPM. Without this, the RPM number sits right next to the trip's overall *average* speed,
+    which is diluted by slower maneuvering in/out of the harbor and reads as if that RPM only
+    makes that speed (found in practice: "2250 RPM" next to "11.9 kn avg" looked like 2250 RPM
+    made 11.9 kn, when the boat was actually doing 12.6-13.4 kn whenever it held that RPM)."""
+    visible_text = _typical_rpm_text(trip)
+    if not visible_text:
+        return ""
+    visible = escape(visible_text)
+    if not trip.typical_rpm_speed_kn:
+        return visible
+
+    if len(trip.typical_rpm_speed_kn) == 1:
+        min_kn, max_kn = next(iter(trip.typical_rpm_speed_kn.values()))
+        tooltip = f"{_nl_num(min_kn)}-{_nl_num(max_kn)} kn at that RPM"
+    else:
+        tooltip = ", ".join(
+            f"engine {instance}: {_nl_num(min_kn)}-{_nl_num(max_kn)} kn"
+            for instance, (min_kn, max_kn) in sorted(trip.typical_rpm_speed_kn.items())
+        )
+    tooltip = escape(tooltip)
+    return (
+        f'<span class="temp-hover">{visible}'
+        f'<span class="temp-tooltip" style="background:#eef4fb;color:#1a4a7a;">'
+        f"⚙️ {tooltip}</span></span>"
+    )
+
+
 def _totals_html(totals: _Totals) -> str:
     avg_l_per_nm = totals.fuel_liters / totals.distance_nm if totals.distance_nm > 0 else None
     avg_l_per_hour = totals.fuel_liters / totals.moving_hours if totals.moving_hours > 0 else None
@@ -230,7 +259,7 @@ def _trip_row_html(
         _nl_num(trip.fuel_liters) + " L",
         f"{_nl_num(avg_consumption_nm, 2)} L/nm" if avg_consumption_nm is not None else "",
         escape(_engine_hours_text(trip)),
-        escape(_typical_rpm_text(trip)),
+        _typical_rpm_html(trip),
         escape(_all_warnings_text(trip, battery_warning_voltage)),
         _water_temp_badge_html(trip),
         _motion_variation_html(trip),
