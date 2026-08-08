@@ -166,12 +166,12 @@ def _typical_rpm_html(trip: TripLeg) -> str:
         return visible
 
     if len(trip.typical_rpm_speed_kn) == 1:
-        min_kn, max_kn = next(iter(trip.typical_rpm_speed_kn.values()))
-        tooltip = f"{_nl_num(min_kn)}-{_nl_num(max_kn)} kn at that RPM"
+        min_kn, max_kn, avg_kn = next(iter(trip.typical_rpm_speed_kn.values()))
+        tooltip = f"{_nl_num(min_kn)}-{_nl_num(max_kn)} kn at that RPM (avg {_nl_num(avg_kn)} kn)"
     else:
         tooltip = ", ".join(
-            f"engine {instance}: {_nl_num(min_kn)}-{_nl_num(max_kn)} kn"
-            for instance, (min_kn, max_kn) in sorted(trip.typical_rpm_speed_kn.items())
+            f"engine {instance}: {_nl_num(min_kn)}-{_nl_num(max_kn)} kn (avg {_nl_num(avg_kn)} kn)"
+            for instance, (min_kn, max_kn, avg_kn) in sorted(trip.typical_rpm_speed_kn.items())
         )
     tooltip = escape(tooltip)
     return (
@@ -412,9 +412,9 @@ def write_html_logbook(
   .show-map {{ cursor: pointer; border: 1px solid #1a6ecc; background: white; color: #1a6ecc; border-radius: 4px; padding: 0.2em 0.6em; }}
   .show-map:hover {{ background: #1a6ecc; color: white; }}
   .trip-map-title {{ font-weight: 600; margin-bottom: 0.4em; }}
-  .temp-hover {{ position: relative; cursor: default; border-bottom: 1px dotted #999; }}
+  .temp-hover {{ cursor: default; border-bottom: 1px dotted #999; }}
   .temp-tooltip {{
-    display: none; position: absolute; left: 0; top: 100%; margin-top: 0.3em; z-index: 10;
+    display: none; position: fixed; z-index: 10;
     border-radius: 12px; padding: 0.15em 0.6em; font-size: 0.85em; white-space: nowrap;
     box-shadow: 0 1px 4px rgba(0,0,0,0.25);
   }}
@@ -428,6 +428,29 @@ def write_html_logbook(
 {"".join(sections)}
 <script>
 const TRIPS = {trips_json};
+// position: fixed + JS placement (instead of position: absolute anchored to the cell) so a
+// tooltip on the last row of a table never gets clipped by .table-scroll's overflow-x: auto --
+// setting only one overflow axis makes the browser clip the other one too, cutting off anything
+// that pokes past the container's bottom edge.
+document.querySelectorAll('.temp-hover').forEach(function(el) {{
+  var tooltip = el.querySelector('.temp-tooltip');
+  if (!tooltip) return;
+  el.addEventListener('mouseenter', function() {{
+    tooltip.style.display = 'block';
+    var rect = el.getBoundingClientRect();
+    var tooltipRect = tooltip.getBoundingClientRect();
+    var top = rect.bottom + 4;
+    if (top + tooltipRect.height > window.innerHeight) {{
+      top = rect.top - tooltipRect.height - 4;
+    }}
+    var left = Math.min(rect.left, window.innerWidth - tooltipRect.width - 8);
+    tooltip.style.top = Math.max(top, 4) + 'px';
+    tooltip.style.left = Math.max(left, 4) + 'px';
+  }});
+  el.addEventListener('mouseleave', function() {{
+    tooltip.style.display = '';
+  }});
+}});
 document.querySelectorAll('.show-map').forEach(function(btn) {{
   btn.addEventListener('click', function() {{
     var idx = btn.dataset.trip;

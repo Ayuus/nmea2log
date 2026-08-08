@@ -96,7 +96,7 @@ class TripLeg:
     engine_hours_total: Dict[int, float]  # engine instance -> absolute hour-meter reading at arrival
     engine_health: Dict[int, EngineHealth]  # engine instance -> health indicators + warnings
     typical_rpm: Dict[int, float]  # engine instance -> most commonly occurring RPM during the trip
-    typical_rpm_speed_kn: Dict[int, Tuple[float, float]]  # engine instance -> (min, max) speed at that RPM
+    typical_rpm_speed_kn: Dict[int, Tuple[float, float, float]]  # engine instance -> (min, max, avg) speed
     battery_health: Dict[int, BatteryHealth]  # battery instance -> voltage stats during this trip
     min_depth_m: Optional[float]  # shallowest water depth measured during this trip
     min_depth_lat: Optional[float]
@@ -510,18 +510,23 @@ def _typical_rpm(samples: List[EngineRpmSample], start: datetime, end: datetime)
 
 def _typical_rpm_speed_range(
     rpm_samples: List[EngineRpmSample], track: List[NavSample], start: datetime, end: datetime
-) -> Dict[int, Tuple[float, float]]:
-    """Range (min, max) of boat speed in knots recorded at the moments the engine was actually
+) -> Dict[int, Tuple[float, float, float]]:
+    """(min, max, avg) boat speed in knots recorded at the moments the engine was actually
     running at its typical RPM (see ``_typical_rpm``) -- the trip's overall average speed is
     diluted by slower maneuvering in/out of the harbor, so "2250 RPM" next to "11.9 kn avg" reads
     as if that RPM only makes 11.9 kn, when the boat was really doing 12.6-13.4 kn whenever it
     was actually holding that RPM (found in practice).
 
-    Only counts samples from a *sustained* run at the typical RPM bucket (at least
-    ``_RPM_STABLE_MINUTES`` long) -- a lone reading that briefly passes through that exact RPM
-    while accelerating or decelerating isn't steady cruising, and including it widened the range
-    far beyond what the boat was actually doing at a held RPM (found in practice: a 2250 RPM trip
-    showing an 8-17.6 kn range instead of the ~2 kn spread a steady cruise actually has)."""
+    Only counts samples from a *sustained* run at (or within one bucket of) the typical RPM
+    bucket -- at least ``_RPM_STABLE_MINUTES`` long -- a lone reading that briefly passes through
+    that exact RPM while accelerating or decelerating isn't steady cruising, and including it
+    widened the range far beyond what the boat was actually doing at a held RPM (found in
+    practice: a 2250 RPM trip showing an 8-17.6 kn range instead of the ~2 kn spread a steady
+    cruise actually has). The one-bucket tolerance matters in practice too: an engine genuinely
+    holding a steady RPM still hunts back and forth by a bucket or two from second to second
+    (throttle/governor jitter, sea state), so requiring the *exact* same bucket for the whole
+    window fragmented an obviously-steady 40+ minute cruise into dozens of sub-minute runs, none
+    of which ever reached the duration threshold on its own."""
     if not track:
         return {}
     times = [s.time for s in track]
@@ -533,7 +538,7 @@ def _typical_rpm_speed_range(
         by_instance.setdefault(sample.instance, []).append(sample)
 
     min_duration = timedelta(minutes=_RPM_STABLE_MINUTES)
-    result: Dict[int, Tuple[float, float]] = {}
+    result: Dict[int, Tuple[float, float, float]] = {}
     for instance, samples in by_instance.items():
         samples = sorted(samples, key=lambda s: s.time)
         buckets = [round(s.rpm / _RPM_BUCKET) * _RPM_BUCKET for s in samples]
@@ -541,15 +546,19 @@ def _typical_rpm_speed_range(
         if not counts:
             continue
         typical_bucket = counts.most_common(1)[0][0]
+        near_typical = [abs(b - typical_bucket) <= _RPM_BUCKET for b in buckets]
 
         speeds_kn = []
         idx = 0
         n = len(samples)
         while idx < n:
+            if not near_typical[idx]:
+                idx += 1
+                continue
             j = idx
-            while j + 1 < n and buckets[j + 1] == buckets[idx]:
+            while j + 1 < n and near_typical[j + 1]:
                 j += 1
-            if buckets[idx] == typical_bucket and samples[j].time - samples[idx].time >= min_duration:
+            if samples[j].time - samples[idx].time >= min_duration:
                 for sample in samples[idx : j + 1]:
                     pos = bisect.bisect_left(times, sample.time)
                     candidates = [i for i in (pos - 1, pos) if 0 <= i < len(track)]
@@ -560,7 +569,7 @@ def _typical_rpm_speed_range(
             idx = j + 1
 
         if speeds_kn:
-            result[instance] = (min(speeds_kn), max(speeds_kn))
+            result[instance] = (min(speeds_kn), max(speeds_kn), sum(speeds_kn) / len(speeds_kn))
     return result
 
 

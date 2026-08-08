@@ -246,14 +246,14 @@ def test_write_html_logbook_shows_water_temp_badge(tmp_path: Path):
 
 
 def test_write_html_logbook_shows_speed_at_typical_rpm_tooltip(tmp_path: Path):
-    trip = _trip(typical_rpm={0: 2250.0}, typical_rpm_speed_kn={0: (12.6, 13.4)})
+    trip = _trip(typical_rpm={0: 2250.0}, typical_rpm_speed_kn={0: (12.6, 13.4, 13.0)})
     out_path = tmp_path / "logbook.html"
 
     write_html_logbook([trip], out_path)
 
     html = out_path.read_text(encoding="utf-8")
     assert "2250" in html
-    assert "12,6-13,4 kn at that RPM" in html
+    assert "12,6-13,4 kn at that RPM (avg 13,0 kn)" in html
 
 
 def test_write_html_logbook_shows_motion_variation(tmp_path: Path):
