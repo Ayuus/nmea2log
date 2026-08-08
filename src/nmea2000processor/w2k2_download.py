@@ -226,7 +226,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "or get a fresh token"
             )
         sys.exit(f"[error] HTTP {exc.code}: {exc}")
-    except urllib.error.URLError as exc:
+    except (urllib.error.URLError, TimeoutError) as exc:
         sys.exit(f"[error] network: {exc}")
     return 0
 
