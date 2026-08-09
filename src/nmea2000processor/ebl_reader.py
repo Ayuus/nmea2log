@@ -97,7 +97,10 @@ def _iter_raw_records(data: bytes) -> Iterator[bytes]:
 
 
 def _parse_can_id(can_id: int) -> Tuple[int, int, int, int]:
-    """Decomposes a 29-bit extended CAN ID into (priority, pgn, source, destination)."""
+    """Decomposes a 29-bit extended CAN ID into (priority, pgn, source, destination). Kept
+    around (and covered by its own tests) as the readable reference for the inlined version in
+    ``_decode_bst95_record`` -- that hot path (millions of calls per real log) skips the extra
+    function-call and tuple pack/unpack overhead of calling this separately."""
     source = can_id & 0xFF
     ps = (can_id >> 8) & 0xFF
     pf = (can_id >> 16) & 0xFF
@@ -113,13 +116,26 @@ def _parse_can_id(can_id: int) -> Tuple[int, int, int, int]:
 
 
 def _decode_bst95_record(raw: bytes) -> Optional[Tuple[int, int, int, int, bytes]]:
-    """raw = everything after the '07 95' header: length(1) + time counter(2, ignored) + CAN ID(4) + data."""
-    if len(raw) < 8:
-        return None
-    if raw[0] != len(raw) - 1:
-        return None  # length field doesn't match -> probably a corrupt record
+    """raw = everything after the '07 95' header: length(1) + time counter(2, ignored) + CAN ID(4) + data.
+
+    Inlines ``_parse_can_id`` (see its docstring) since this runs once per CAN record in the
+    whole file -- millions of times for a real multi-day log -- so avoiding the extra call and
+    intermediate tuple noticeably adds up."""
+    n = len(raw)
+    if n < 8 or raw[0] != n - 1:
+        return None  # too short, or the length field doesn't match -> probably a corrupt record
     can_id = raw[3] | (raw[4] << 8) | (raw[5] << 16) | (raw[6] << 24)
-    priority, pgn, source, destination = _parse_can_id(can_id)
+    source = can_id & 0xFF
+    ps = (can_id >> 8) & 0xFF
+    pf = (can_id >> 16) & 0xFF
+    dp = (can_id >> 24) & 0x1
+    priority = (can_id >> 26) & 0x7
+    if pf < 240:  # PDU1: addressed message, the PS byte is the destination address
+        pgn = (dp << 16) | (pf << 8)
+        destination = ps
+    else:  # PDU2: broadcast, the PS byte is part of the PGN
+        pgn = (dp << 16) | (pf << 8) | ps
+        destination = 0xFF
     return priority, pgn, source, destination, raw[7:]
 
 
@@ -185,7 +201,9 @@ def iter_frames(
     fast_packet_state: Dict[Tuple[int, int], _FastPacketAssembly] = {}
 
     for record in _iter_raw_records(data):
-        if len(record) < 2 or record[0] != 0x07 or record[1] != _CMD_RAW_ACTISENSE_MESSAGE_RECEIVED:
+        # _iter_raw_records only ever yields records with len(message) > 4 (see its "> 4" check),
+        # so record is always at least 5 bytes here -- no need to re-check the length.
+        if record[0] != 0x07 or record[1] != _CMD_RAW_ACTISENSE_MESSAGE_RECEIVED:
             continue
         decoded = _decode_bst95_record(record[2:])
         if decoded is None:
