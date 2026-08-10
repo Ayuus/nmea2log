@@ -296,6 +296,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "-o", "--output", type=Path, default=Path("logbook.csv"), help="Path to the CSV file (default: logbook.csv)"
     )
     parser.add_argument(
+        "--csv",
+        action="store_true",
+        help="Also write the CSV logbook (default: only the HTML logbook is written)",
+    )
+    parser.add_argument(
+        "--gpx",
+        action="store_true",
+        help="Also write the GPX route file (default: only the HTML logbook is written)",
+    )
+    parser.add_argument(
         "--start-date",
         type=str,
         default=None,
@@ -451,6 +461,10 @@ def _apply_config_defaults(parser: argparse.ArgumentParser) -> None:
         defaults["no_geocode"] = _bool(section["no_geocode"])
     if "no_sample_cache" in section:
         defaults["no_sample_cache"] = _bool(section["no_sample_cache"])
+    if "csv" in section:
+        defaults["csv"] = _bool(section["csv"])
+    if "gpx" in section:
+        defaults["gpx"] = _bool(section["gpx"])
 
     parser.set_defaults(**defaults)
 
@@ -600,13 +614,17 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     trip_uids = assign_trip_ids(trips, utc_offset_hours=args.utc_offset)
 
-    write_csv(
-        trips, args.output, utc_offset_hours=args.utc_offset, battery_warning_voltage=args.battery_warning_voltage
-    )
-    gpx_path = args.output.with_suffix(".gpx")
-    write_gpx(
-        trips, gpx_path, utc_offset_hours=args.utc_offset, battery_warning_voltage=args.battery_warning_voltage
-    )
+    if args.csv:
+        write_csv(
+            trips, args.output, utc_offset_hours=args.utc_offset, battery_warning_voltage=args.battery_warning_voltage
+        )
+        log(f"Logbook written: {args.output}")
+    if args.gpx:
+        gpx_path = args.output.with_suffix(".gpx")
+        write_gpx(
+            trips, gpx_path, utc_offset_hours=args.utc_offset, battery_warning_voltage=args.battery_warning_voltage
+        )
+        log(f"Route written: {gpx_path}")
     html_path = args.output.with_suffix(".html")
     write_html_logbook(
         trips,
@@ -616,9 +634,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         trip_uids=trip_uids,
         battery_warning_voltage=args.battery_warning_voltage,
     )
-    log(f"Logbook written: {args.output} ({len(trips)} trip(s))")
-    log(f"Route written: {gpx_path}")
-    log(f"HTML logbook written: {html_path}")
+    log(f"HTML logbook written: {html_path} ({len(trips)} trip(s))")
     return 0
 
 

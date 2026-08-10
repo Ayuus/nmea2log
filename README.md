@@ -2,11 +2,11 @@
 
 Pure Python application that turns NMEA2000 log files from an **Actisense W2K-2** into a
 sailing logbook: departure/arrival port, fuel consumption (from engine data, not a tank sensor),
-and engine hours. Writes three files (same name as `-o`, different extension): a **CSV**
-(`.csv`), a **GPX** with the sailed route per trip (`.gpx`, opens in navigation software like
-OpenCPN/Navionics), and an **HTML logbook** (`.html`) — one self-contained file with the boat
-name, totals (distance/fuel/engine hours/average consumption), trips grouped by year/week, and a
-clickable, zoomable map per trip.
+and engine hours. By default writes an **HTML logbook** (`.html`) — one self-contained file with
+the boat name, totals (distance/fuel/engine hours/average consumption), trips grouped by
+year/week, and a clickable, zoomable map per trip. Pass `--csv` and/or `--gpx` to also write a
+**CSV** (`.csv`) and/or a **GPX** with the sailed route per trip (`.gpx`, opens in navigation
+software like OpenCPN/Navionics) — same name as `-o`, different extension.
 
 > **Attribution**: the SD-card `.ebl` binary log format has never been officially published by
 > Actisense. `ebl_reader.py` is a clean-room Python reimplementation based on reading the
@@ -134,12 +134,12 @@ the tests.
    the matched feature's OSM type is something boats actually tie up to (marina, harbour, quay,
    ...) or not. This is a coarse heuristic (there's no coastline data to check against), not a
    real "is the boat touching the shore" measurement.
-5. **Writing the logbook** (`logbook_writer.py`): CSV with English column names but Dutch Excel
-   convention for the values (`;` as the delimiter, `,` as the decimal separator) — opens
-   correctly right away in Dutch-locale Excel.
-6. **Writing the route** (`gpx_writer.py`): alongside the CSV, a GPX file is always written too
-   (same file name, `.gpx` extension) with one track per trip. Click a track in a map program and
-   you see a name and description with duration, distance, fuel, and engine hours for that trip.
+5. **Writing the logbook** (`logbook_writer.py`, only with `--csv`): CSV with English column names
+   but Dutch Excel convention for the values (`;` as the delimiter, `,` as the decimal separator)
+   — opens correctly right away in Dutch-locale Excel.
+6. **Writing the route** (`gpx_writer.py`, only with `--gpx`): a GPX file (same file name, `.gpx`
+   extension) with one track per trip. Click a track in a map program and you see a name and
+   description with duration, distance, fuel, and engine hours for that trip.
 7. **HTML logbook** (`html_writer.py`): one self-contained `.html` file (same file name, `.html`
    extension) — no separate map file or workbook needed anymore. At the top, the boat name
    (`--boat-name`, or the `boat_name` setting in the config file) and totals: trip count, total
@@ -212,9 +212,9 @@ path/to/nmea2log.ini`.
 Once configured (see above), day-to-day use is one double-click, no terminal needed:
 
 - **`nmea2log.bat`** — downloads any new `.ebl` files from the W2K-2, then processes everything
-  under `ebl_dir` into `logbook.csv`, `logbook.gpx`, and `logbook.html`. If the boat isn't
-  reachable (no wifi), it prints a message and just processes whatever's already local instead of
-  getting stuck — nothing to babysit.
+  under `ebl_dir` into `logbook.html`. If the boat isn't reachable (no wifi), it prints a message
+  and just processes whatever's already local instead of getting stuck — nothing to babysit. Add
+  `--csv`/`--gpx` (e.g. by editing the shortcut/command) if you also want those files.
   Drag a single log file onto it instead to skip both the download and the `ebl_dir` search, and
   process just that one file.
 - **`nmea2log-no-download.bat`** — the same, but always skips the download step. Handy for
@@ -265,8 +265,9 @@ from the data itself).
 nmea2log 2026-07-15.raw -o logbook.csv
 ```
 
-This writes `logbook.csv`, `logbook.gpx` (the route per trip), and `logbook.html` (the
-self-contained HTML logbook with totals, year/week grouping, and clickable maps).
+This writes `logbook.html` (the self-contained HTML logbook with totals, year/week grouping, and
+clickable maps). Add `--csv` and/or `--gpx` to also get `logbook.csv` and/or `logbook.gpx` (the
+route per trip).
 
 Processing multiple files at once (e.g. one per day, `.ebl` and `.raw` mixed together):
 
@@ -298,6 +299,8 @@ nmea2log --live 192.168.4.1:60001 --tee 2026-07-16.raw -o logbook.csv
 
 | Option | Meaning |
 |---|---|
+| `--csv` | Also write the CSV logbook (default: only the HTML logbook is written) |
+| `--gpx` | Also write the GPX route file (default: only the HTML logbook is written) |
 | `--live HOST[:PORT]` | Connect live to the W2K-2 over TCP instead of processing files (default port 60001) |
 | `--tee PATH` | Only with `--live`: also save the raw incoming ASCII lines to this file |
 | `--duration SECONDS` | Only with `--live`: stop automatically after this many seconds |

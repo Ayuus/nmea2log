@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from nmea2000processor.cli import (
@@ -234,3 +234,65 @@ def test_main_reuses_cached_samples_on_a_second_run(tmp_path, monkeypatch, capsy
     assert call_count == 1  # second run must be served from cache, not re-parsed
     captured = capsys.readouterr()
     assert "[cache] reused decoded samples for 1/1 file(s)" in captured.err
+
+
+def _run_with_one_trip(tmp_path: Path, monkeypatch, extra_args=()):
+    """12 min stationary -> 30 min underway -> 12 min stationary, enough for build_trips to
+    recognize one real trip (a single position fix doesn't -- there's no departure/arrival to
+    tell apart)."""
+    ebl_path = tmp_path / "000000_000.ebl"
+    ebl_path.write_bytes(b"x" * 100)  # content doesn't matter -- parsing itself is stubbed out
+
+    def _dt(minute):
+        return datetime(2026, 7, 15, 8, 0, 0) + timedelta(minutes=minute)
+
+    fixes, sogs = [], []
+    for m in range(0, 12):
+        fixes.append(PositionFix(_dt(m), 52.30, 4.90))
+        sogs.append(SogSample(_dt(m), 0.0))
+    for i, m in enumerate(range(12, 42)):
+        frac = i / 29
+        fixes.append(PositionFix(_dt(m), 52.30 + 0.10 * frac, 4.90 + 0.05 * frac))
+        sogs.append(SogSample(_dt(m), 3.0))
+    for m in range(42, 54):
+        fixes.append(PositionFix(_dt(m), 52.40, 4.95))
+        sogs.append(SogSample(_dt(m), 0.0))
+
+    fixed_samples = (
+        {10: fixes},
+        {10: sogs},
+        [],
+        [],
+        {},
+        {},
+        {},
+        [],
+        {},
+    )
+    monkeypatch.setattr(
+        "nmea2000processor.cli._collect_samples", lambda frames, deadline=None: fixed_samples
+    )
+    monkeypatch.setattr(
+        "nmea2000processor.cli._iter_frames_for_path", lambda path, start_date, state: iter([])
+    )
+    output = tmp_path / "logbook.csv"
+    main([str(ebl_path), "-o", str(output), "--no-geocode", "--no-sample-cache", *extra_args])
+    return output
+
+
+def test_main_only_writes_html_by_default(tmp_path: Path, monkeypatch):
+    """Regression test: CSV and GPX used to be written unconditionally on every run, which most
+    of the time nobody looks at -- now they're opt-in via --csv/--gpx, default is HTML only."""
+    output = _run_with_one_trip(tmp_path, monkeypatch)
+
+    assert not output.exists()
+    assert not output.with_suffix(".gpx").exists()
+    assert output.with_suffix(".html").exists()
+
+
+def test_main_writes_csv_and_gpx_when_requested(tmp_path: Path, monkeypatch):
+    output = _run_with_one_trip(tmp_path, monkeypatch, extra_args=["--csv", "--gpx"])
+
+    assert output.exists()
+    assert output.with_suffix(".gpx").exists()
+    assert output.with_suffix(".html").exists()
