@@ -574,7 +574,7 @@ def _typical_rpm_speed_range(
 
 
 def _motion_variation(
-    samples: List[AttitudeSample], start: datetime, end: datetime
+    sorted_samples: List[AttitudeSample], start: datetime, end: datetime
 ) -> Tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
     """Returns (roll_stdev, pitch_stdev, roll_range, pitch_range) from roll/pitch (PGN 127257)
     during the trip -- a rougher sea or more wave action shows up as more variation in how the
@@ -585,9 +585,18 @@ def _motion_variation(
     feeling (found in practice: a trip with stdev 2.5 deg still had a roll range of ~23 deg).
     Neither is an established metric (unlike e.g. significant wave height, which needs a wave
     sensor this app doesn't have); just relative indicators from whatever motion sensor is
-    already on the network."""
-    rolls = [s.roll_deg for s in samples if s.roll_deg is not None and start <= s.time <= end]
-    pitches = [s.pitch_deg for s in samples if s.pitch_deg is not None and start <= s.time <= end]
+    already on the network.
+
+    ``sorted_samples`` must already be sorted by time (see build_trips, which sorts once up
+    front) -- this is called once per trip, and a real log can have millions of attitude samples
+    spanning many days, so re-scanning the *entire* list per trip to filter down to its own
+    window is real, measured cost (found in practice: ~21s of a ~37s run, for just 18 calls)
+    that a one-off sort + bisect avoids almost entirely."""
+    lo = bisect.bisect_left(sorted_samples, start, key=lambda s: s.time)
+    hi = bisect.bisect_right(sorted_samples, end, key=lambda s: s.time)
+    window = sorted_samples[lo:hi]
+    rolls = [s.roll_deg for s in window if s.roll_deg is not None]
+    pitches = [s.pitch_deg for s in window if s.pitch_deg is not None]
     roll_stdev = statistics.stdev(rolls) if len(rolls) >= 2 else None
     pitch_stdev = statistics.stdev(pitches) if len(pitches) >= 2 else None
     roll_range = max(rolls) - min(rolls) if rolls else None
@@ -641,6 +650,7 @@ def build_trips(
         rpm_samples = []
     if attitude_samples is None:
         attitude_samples = []
+    attitude_samples = sorted(attitude_samples, key=lambda s: s.time)
     if max_gap_minutes is None:
         max_gap_minutes = min_stop_minutes
 
