@@ -127,7 +127,13 @@ the tests.
    - **Minimum water depth**, including the position where it was measured.
 4. **Port names** (`geocode.py`): the GPS position of each port visit is turned into a place
    name via OpenStreetMap/Nominatim (reverse geocoding), with local caching so the same position
-   is never looked up twice.
+   is never looked up twice. If the nearest match is more than 250 m away (common when
+   anchoring/mooring away from any mapped harbour, e.g. in a sparsely-mapped bay), the name is
+   prefixed with "op het water, bij" (on the water, near) or "aan de kant, bij" (alongside, near)
+   instead of silently implying the boat was right there -- which of the two depends on whether
+   the matched feature's OSM type is something boats actually tie up to (marina, harbour, quay,
+   ...) or not. This is a coarse heuristic (there's no coastline data to check against), not a
+   real "is the boat touching the shore" measurement.
 5. **Writing the logbook** (`logbook_writer.py`): CSV with English column names but Dutch Excel
    convention for the values (`;` as the delimiter, `,` as the decimal separator) — opens
    correctly right away in Dutch-locale Excel.

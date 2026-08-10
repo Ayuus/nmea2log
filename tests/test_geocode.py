@@ -80,3 +80,42 @@ def test_successful_lookup_is_cached_and_not_looked_up_again(monkeypatch, tmp_pa
 
 def test_no_geocoder_returns_coordinates():
     assert NoGeocoder().place_name(52.3676, 4.9041) == "52.3676, 4.9041"
+
+
+def test_place_name_no_prefix_when_match_is_close(monkeypatch, tmp_path):
+    def fake_urlopen(request, timeout=10):
+        # ~50 m from the query position -- well under the 250 m threshold
+        return _FakeResponse({"lat": "47.57070", "lon": "-2.88536", "type": "islet", "address": {"village": "Kerners"}})
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    geocoder = Geocoder(cache_file=tmp_path / "cache.json")
+
+    assert geocoder.place_name(47.5707, -2.8853) == "Kerners"
+
+
+def test_place_name_prefixed_on_the_water_when_match_is_far_and_not_a_mooring(monkeypatch, tmp_path):
+    """Regression test for a real case: an anchor position in the Golfe du Morbihan whose
+    nearest Nominatim match (a coastal path) was ~1.1 km away -- far enough that just showing
+    the name would wrongly imply the boat was right there."""
+    def fake_urlopen(request, timeout=10):
+        # ~1.1 km away, and not a mooring-type feature
+        return _FakeResponse(
+            {"lat": "47.5700", "lon": "-2.8704", "type": "locality", "address": {"village": "Penhap"}}
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    geocoder = Geocoder(cache_file=tmp_path / "cache.json")
+
+    assert geocoder.place_name(47.5707, -2.8853) == "op het water, bij Penhap"
+
+
+def test_place_name_prefixed_alongside_when_match_is_far_and_a_mooring(monkeypatch, tmp_path):
+    def fake_urlopen(request, timeout=10):
+        return _FakeResponse(
+            {"lat": "47.5700", "lon": "-2.8704", "type": "marina", "address": {"village": "Penhap"}}
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    geocoder = Geocoder(cache_file=tmp_path / "cache.json")
+
+    assert geocoder.place_name(47.5707, -2.8853) == "aan de kant, bij Penhap"

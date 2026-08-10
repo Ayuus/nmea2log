@@ -9,6 +9,7 @@ use, consider running your own Nominatim instance or a paid geocoding service.
 from __future__ import annotations
 
 import json
+import math
 import time
 import urllib.error
 import urllib.parse
@@ -18,6 +19,19 @@ from typing import Optional, Tuple
 
 _NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
 _MIN_INTERVAL_S = 1.0
+_EARTH_RADIUS_M = 6_371_000.0
+
+# Beyond this distance from the matched feature, the name is no longer really "the" place we're
+# at -- it's just the closest one Nominatim could find (common at anchor, away from any mapped
+# harbour) -- so it gets prefixed to say so instead of silently implying we're right there.
+_NEARBY_THRESHOLD_M = 250.0
+
+# OSM feature types that mean "somewhere boats actually tie up", used to distinguish the two
+# prefixes for a far-away match: "aan de kant, bij" (alongside, near) vs "op het water, bij" (on
+# the water, near). This is a coarse heuristic, not a real "am I touching the shore" measurement
+# (no coastline data available) -- e.g. a nearby coastal path or generic pier doesn't necessarily
+# mean the boat is alongside it, so those deliberately stay in the "on the water" bucket.
+_MOORING_TYPES = {"marina", "harbour", "quay", "mooring", "yacht_club", "boatyard"}
 
 _PREFERRED_ADDRESS_KEYS = (
     "leisure",
@@ -30,6 +44,14 @@ _PREFERRED_ADDRESS_KEYS = (
     "suburb",
     "quarter",
 )
+
+
+def _distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlambda / 2) ** 2
+    return 2 * _EARTH_RADIUS_M * math.asin(math.sqrt(a))
 
 
 class Geocoder:
@@ -79,7 +101,15 @@ class Geocoder:
                 "format": "jsonv2",
                 "lat": f"{lat:.6f}",
                 "lon": f"{lon:.6f}",
-                "zoom": 16,
+                # Nominatim's "zoom" also limits which feature types are even considered, not
+                # just the search radius -- 16 ("major streets") excludes small islets/hamlets
+                # entirely, so in sparsely-mapped water (e.g. Golfe du Morbihan) it can return a
+                # named feature over a kilometer away in favor of nothing closer being eligible.
+                # 18 ("building" level) considers much smaller/closer features (found in
+                # practice: 1.1 km away -> ~250 m away for the same anchor position), without
+                # regressing the marina lookups this app relies on most (leisure=marina areas are
+                # still the nearest eligible feature at a real harbor either way).
+                "zoom": 18,
                 "addressdetails": 1,
                 "accept-language": self.language,
             }
@@ -95,7 +125,7 @@ class Geocoder:
             return f"Unknown ({lat:.4f}, {lon:.4f}) [geocoding failed: {exc}]", False
 
         self._last_request = time.monotonic()
-        return _pick_place_name(payload, lat, lon), True
+        return _describe_place(payload, lat, lon), True
 
     def _save_cache(self) -> None:
         if self.cache_file is None:
@@ -130,3 +160,22 @@ def _pick_place_name(payload: dict, lat: float, lon: float) -> str:
         return display_name.split(",")[0]
 
     return f"Unknown ({lat:.4f}, {lon:.4f})"
+
+
+def _describe_place(payload: dict, lat: float, lon: float) -> str:
+    """Prefixes the picked name with "aan de kant, bij" (alongside, near) or "op het water, bij"
+    (on the water, near) when the matched feature is more than ``_NEARBY_THRESHOLD_M`` away from
+    the actual position -- otherwise the name reads as if we were right there, e.g. showing a
+    village name for a position that was really anchored ~250 m offshore of it."""
+    name = _pick_place_name(payload, lat, lon)
+    try:
+        feature_lat = float(payload["lat"])
+        feature_lon = float(payload["lon"])
+    except (KeyError, TypeError, ValueError):
+        return name
+
+    if _distance_m(lat, lon, feature_lat, feature_lon) <= _NEARBY_THRESHOLD_M:
+        return name
+
+    prefix = "aan de kant, bij" if payload.get("type") in _MOORING_TYPES else "op het water, bij"
+    return f"{prefix} {name}"
