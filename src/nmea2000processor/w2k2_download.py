@@ -33,7 +33,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import concurrent.futures
 import getpass
 import json
 import os
@@ -53,7 +52,6 @@ SD_LOG_ROOT = "/sdcard/logs/ebl_data_logs"
 
 TIMEOUT = 30  # seconds per API request
 DOWNLOAD_TIMEOUT = 300  # more headroom for the ~5 MB files
-DEFAULT_DOWNLOAD_WORKERS = 4
 
 # file_time value the W2K-2 uses when there was no GPS time (1980-01-01). 10-year margin:
 # anything before 1990 is treated as "no real time".
@@ -199,25 +197,6 @@ def download_file(session: _Session, download_dir: Path, folder: str, info: dict
     log(f"[ok] {folder}/{info['file_name']} ({info['file_size']} bytes, {stamp})")
 
 
-def download_files(
-    session: _Session, download_dir: Path, folder: str, files: List[dict], max_workers: int
-) -> None:
-    """Downloads one folder's files, up to ``max_workers`` at once. Each download is a separate
-    HTTP request/response over its own connection, so overlapping them hides most of the
-    per-request latency -- worthwhile since each ~5 MB file otherwise takes ~30s dominated by the
-    W2K-2's own (slow) serving speed, not by anything on this end. ``max_workers=1`` downloads
-    sequentially, e.g. if the device turns out not to handle concurrent connections well."""
-    if max_workers <= 1:
-        for info in files:
-            download_file(session, download_dir, folder, info)
-        return
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = [pool.submit(download_file, session, download_dir, folder, info) for info in files]
-        for future in concurrent.futures.as_completed(futures):
-            future.result()  # re-raise so a failed download (e.g. 401) still aborts the run
-
-
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="nmea2log-download",
@@ -229,13 +208,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help=f"Path to the INI config file (default: {DEFAULT_CONFIG_PATH})",
     )
-    parser.add_argument(
-        "--workers",
-        type=int,
-        default=DEFAULT_DOWNLOAD_WORKERS,
-        help=f"Number of files to download concurrently per folder (default {DEFAULT_DOWNLOAD_WORKERS}). "
-        "Use 1 to download sequentially, e.g. if the device can't handle concurrent connections.",
-    )
     return parser
 
 
@@ -246,8 +218,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         session = make_session(config)
         for folder in get_folders(session):
-            files = get_files(session, folder["name"])
-            download_files(session, config.download_dir, folder["name"], files, max_workers=args.workers)
+            for info in get_files(session, folder["name"]):
+                download_file(session, config.download_dir, folder["name"], info)
     except urllib.error.HTTPError as exc:
         if exc.code == 401:
             sys.exit(
