@@ -6,6 +6,14 @@ when you click a trip's "Map" button.
 Everything lives in one file -- there's nothing to keep together or link between. Map tiles and
 the Leaflet library load from a CDN when you view the page, so viewing requires internet (the
 file itself needs none to generate or to open).
+
+The map is entirely JavaScript-driven, which doesn't work when this file is opened straight from
+an email attachment -- essentially every email client strips <script> tags for security, so the
+"Map" button silently does nothing there. There's no way to fix that while keeping an interactive
+map (a static, always-visible image per trip would work in email too, but was deliberately not
+built: it needs a network call per trip to render, and would make the file much bigger for a
+season's worth of trips). Instead, a <noscript> banner explains that the file needs to be opened
+in a real browser to see the maps.
 """
 
 from __future__ import annotations
@@ -420,9 +428,20 @@ def write_html_logbook(
   }}
   .temp-hover:hover .temp-tooltip {{ display: block; }}
   .map {{ height: 350px; }}
+  .noscript-warning {{
+    background: #fff3cd; color: #664d03; border: 1px solid #ffe69c; border-radius: 8px;
+    padding: 0.8em 1.2em; margin-bottom: 1.5em;
+  }}
 </style>
 </head>
 <body>
+<noscript>
+  <div class="noscript-warning">
+    The "Map" buttons in this logbook need JavaScript to draw the route. Most email programs
+    strip that out of attachments, so if you're reading this in an email client, save the
+    attachment and open it in a web browser (Chrome, Edge, Firefox, Safari, ...) to see the maps.
+  </div>
+</noscript>
 <h1>{heading}</h1>
 {_totals_html(_compute_totals(trips))}
 {"".join(sections)}
