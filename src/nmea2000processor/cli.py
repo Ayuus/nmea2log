@@ -27,6 +27,7 @@ from .model import (
     WaterTempSample,
 )
 from .network_reader import DEFAULT_PORT, iter_frames_tcp
+from .sample_cache import SampleCache
 from .pgn_decode import (
     PGN_ATTITUDE,
     PGN_BATTERY_STATUS,
@@ -350,6 +351,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Skip the online port-name lookup; shows coordinates instead of names",
     )
     parser.add_argument(
+        "--no-sample-cache",
+        action="store_true",
+        help="Always re-parse every .ebl file from scratch, instead of reusing decoded samples "
+        "cached from a previous run for files whose size hasn't changed since",
+    )
+    parser.add_argument(
+        "--sample-cache-file",
+        type=Path,
+        default=Path(".ebl_sample_cache.pkl"),
+        help="Cache file for decoded .ebl samples (default .ebl_sample_cache.pkl)",
+    )
+    parser.add_argument(
         "--cache-file",
         type=Path,
         default=Path(".geocode_cache.json"),
@@ -429,11 +442,14 @@ def _apply_config_defaults(parser: argparse.ArgumentParser) -> None:
         ("ebl_dir", Path),
         ("lock_radius_m", float),
         ("lock_max_duration_minutes", float),
+        ("sample_cache_file", Path),
     ):
         if key in section:
             defaults[key] = caster(section[key])
     if "no_geocode" in section:
         defaults["no_geocode"] = _bool(section["no_geocode"])
+    if "no_sample_cache" in section:
+        defaults["no_sample_cache"] = _bool(section["no_sample_cache"])
 
     parser.set_defaults(**defaults)
 
@@ -493,12 +509,27 @@ def main(argv: Optional[List[str]] = None) -> int:
     else:
         start_date = date.fromisoformat(args.start_date) if args.start_date else None
         ebl_time_state: Dict[str, object] = {}
+        sample_cache = None if args.no_sample_cache else SampleCache(args.sample_cache_file)
+        cache_hits = 0
         for index, path in enumerate(args.logfiles):
             if not path.exists():
                 print(f"Log file not found: {path}", file=sys.stderr)
                 return 1
-            frames = _iter_frames_for_path(path, start_date if index == 0 else None, ebl_time_state)
-            fixes, sogs, engine, trip_fuel, depth, water_temp, battery, rpm, attitude = _collect_samples(frames)
+
+            is_ebl = path.suffix.lower() == ".ebl"
+            cached = sample_cache.get(path) if sample_cache is not None and is_ebl else None
+            if cached is not None:
+                samples, time_state_after = cached
+                fixes, sogs, engine, trip_fuel, depth, water_temp, battery, rpm, attitude = samples
+                ebl_time_state["current"] = time_state_after
+                cache_hits += 1
+            else:
+                frames = _iter_frames_for_path(path, start_date if index == 0 else None, ebl_time_state)
+                samples = _collect_samples(frames)
+                fixes, sogs, engine, trip_fuel, depth, water_temp, battery, rpm, attitude = samples
+                if sample_cache is not None and is_ebl:
+                    sample_cache.put(path, samples, ebl_time_state.get("current"))
+
             _merge_by_source(fixes_by_source, fixes)
             _merge_by_source(sogs_by_source, sogs)
             all_engine += engine
@@ -508,6 +539,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             _merge_by_source(battery_by_source, battery)
             all_rpm += rpm
             _merge_by_source(attitude_by_source, attitude)
+
+        if sample_cache is not None:
+            sample_cache.save()
+            if cache_hits:
+                print(
+                    f"[cache] reused decoded samples for {cache_hits}/{len(args.logfiles)} file(s), "
+                    f"only re-parsed {len(args.logfiles) - cache_hits}",
+                    file=sys.stderr,
+                )
 
     all_fixes, all_sogs, primary_gps_source = _select_primary_gps_source(fixes_by_source, sogs_by_source)
     all_depth = _dominant_source_only(depth_by_source)

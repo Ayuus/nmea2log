@@ -188,3 +188,49 @@ def test_main_reports_a_clear_error_when_ebl_dir_has_no_ebl_files(tmp_path, caps
 
     assert exit_code == 2
     assert "no .ebl files found" in capsys.readouterr().err
+
+
+def test_main_reuses_cached_samples_on_a_second_run(tmp_path, monkeypatch, capsys):
+    """Integration test for the .ebl sample cache: a second run against the same, unchanged file
+    must not re-parse it (only reuse the decoded samples from the first run's cache)."""
+    ebl_path = tmp_path / "000000_000.ebl"
+    ebl_path.write_bytes(b"x" * 100)  # content doesn't matter -- parsing itself is stubbed out
+
+    call_count = 0
+    fixed_samples = (
+        {10: [PositionFix(datetime(2026, 7, 15, 9, 0), 52.30, 4.90)]},
+        {10: [SogSample(datetime(2026, 7, 15, 9, 0), 0.0)]},
+        [],
+        [],
+        {},
+        {},
+        {},
+        [],
+        {},
+    )
+
+    def fake_collect_samples(frames, deadline=None):
+        nonlocal call_count
+        call_count += 1
+        return fixed_samples
+
+    monkeypatch.setattr("nmea2000processor.cli._collect_samples", fake_collect_samples)
+    monkeypatch.setattr(
+        "nmea2000processor.cli._iter_frames_for_path", lambda path, start_date, state: iter([])
+    )
+
+    cache_file = tmp_path / "cache.pkl"
+    common_args = [
+        str(ebl_path), "-o", str(tmp_path / "logbook.csv"), "--no-geocode",
+        "--sample-cache-file", str(cache_file),
+    ]
+
+    main(common_args)
+    assert call_count == 1
+
+    capsys.readouterr()  # discard first run's captured output
+    main(common_args)
+
+    assert call_count == 1  # second run must be served from cache, not re-parsed
+    captured = capsys.readouterr()
+    assert "[cache] reused decoded samples for 1/1 file(s)" in captured.err
