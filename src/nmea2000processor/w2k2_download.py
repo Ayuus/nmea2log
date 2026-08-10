@@ -46,6 +46,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .config import DEFAULT_CONFIG_PATH, load_section
+from .log import log
 
 SD_LOG_ROOT = "/sdcard/logs/ebl_data_logs"
 
@@ -149,14 +150,14 @@ def make_session(config: W2K2Config) -> _Session:
             f"field name to _TOKEN_KEYS. Response: {body}"
         )
     session.token = token
-    print("[ok] logged in, token received")
+    log("[ok] logged in, token received")
     return session
 
 
 def get_folders(session: _Session) -> List[dict]:
     body = session.get_json("/api/data_logs")
     folders = body.get("dataFolders", [])
-    print(f"[info] {len(folders)} folder(s): " + ", ".join(f["name"] for f in folders))
+    log(f"[info] {len(folders)} folder(s): " + ", ".join(f["name"] for f in folders))
     return folders
 
 
@@ -164,7 +165,7 @@ def get_files(session: _Session, folder: str) -> List[dict]:
     body = session.get_json("/api/data_logs", {"method": "fileList", "folder": folder})
     files = body.get("dataFiles", [])
     total_mb = sum(f["file_size"] for f in files) / 1e6
-    print(f"[info] {folder}: {len(files)} file(s), {total_mb:.0f} MB total")
+    log(f"[info] {folder}: {len(files)} file(s), {total_mb:.0f} MB total")
     return files
 
 
@@ -180,7 +181,7 @@ def download_file(session: _Session, download_dir: Path, folder: str, info: dict
     target = target_dir / info["file_name"]
 
     if not _needs_download(target, info["file_size"]):
-        print(f"[skip] {folder}/{info['file_name']} already complete locally")
+        log(f"[skip] {folder}/{info['file_name']} already complete locally")
         return
 
     session.download_to(
@@ -193,7 +194,7 @@ def download_file(session: _Session, download_dir: Path, folder: str, info: dict
         stamp = datetime.fromtimestamp(file_time, tz=timezone.utc).isoformat()
     else:
         stamp = "NO GPS TIME (1980 stamp)"
-    print(f"[ok] {folder}/{info['file_name']} ({info['file_size']} bytes, {stamp})")
+    log(f"[ok] {folder}/{info['file_name']} ({info['file_size']} bytes, {stamp})")
 
 
 def build_arg_parser() -> argparse.ArgumentParser:

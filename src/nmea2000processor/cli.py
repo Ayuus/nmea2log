@@ -13,6 +13,7 @@ from .ebl_reader import iter_frames as iter_frames_ebl
 from .geocode import Geocoder, NoGeocoder
 from .gpx_writer import write_gpx
 from .html_writer import write_html_logbook
+from .log import log
 from .logbook_writer import write_csv
 from .model import (
     AttitudeSample,
@@ -166,7 +167,7 @@ def _collect_samples(
     try:
         for frame in frames:
             if deadline is not None and time.monotonic() >= deadline:
-                print("Duration elapsed; closing live session...", file=sys.stderr)
+                log("Duration elapsed; closing live session...", file=sys.stderr)
                 break
             if frame.pgn == PGN_POSITION_RAPID:
                 decoded = decode_position_rapid(frame.data)
@@ -214,7 +215,7 @@ def _collect_samples(
                         AttitudeSample(frame.time, pitch_deg, roll_deg)
                     )
     except KeyboardInterrupt:
-        print("\nInterrupted by user; writing the logbook with the data collected so far...", file=sys.stderr)
+        log("Interrupted by user; writing the logbook with the data collected so far...", file=sys.stderr)
     return (
         fixes_by_source,
         sogs_by_source,
@@ -464,7 +465,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         args.logfiles = _discover_ebl_files(args.ebl_dir)
         if not args.logfiles:
             parser.error(f"no .ebl files found under {args.ebl_dir}")
-        print(f"Found {len(args.logfiles)} .ebl file(s) under {args.ebl_dir}.", file=sys.stderr)
+        log(f"Found {len(args.logfiles)} .ebl file(s) under {args.ebl_dir}.", file=sys.stderr)
 
     if bool(args.logfiles) == bool(args.live):
         parser.error(
@@ -488,11 +489,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.live:
         host, port = _parse_host_port(args.live, DEFAULT_PORT)
-        print(f"Connecting live to {host}:{port}... (Ctrl+C to stop)", file=sys.stderr)
+        log(f"Connecting live to {host}:{port}... (Ctrl+C to stop)", file=sys.stderr)
         try:
             frames = iter_frames_tcp(host, port, tee_to=args.tee)
         except OSError as exc:
-            print(f"Could not connect to {host}:{port}: {exc}", file=sys.stderr)
+            log(f"Could not connect to {host}:{port}: {exc}", file=sys.stderr)
             return 1
         deadline = time.monotonic() + args.duration if args.duration else None
         (
@@ -513,7 +514,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         cache_hits = 0
         for index, path in enumerate(args.logfiles):
             if not path.exists():
-                print(f"Log file not found: {path}", file=sys.stderr)
+                log(f"Log file not found: {path}", file=sys.stderr)
                 return 1
 
             is_ebl = path.suffix.lower() == ".ebl"
@@ -543,7 +544,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         if sample_cache is not None:
             sample_cache.save()
             if cache_hits:
-                print(
+                log(
                     f"[cache] reused decoded samples for {cache_hits}/{len(args.logfiles)} file(s), "
                     f"only re-parsed {len(args.logfiles) - cache_hits}",
                     file=sys.stderr,
@@ -556,14 +557,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     all_attitude = _dominant_source_only(attitude_by_source)
 
     if len(fixes_by_source) > 1:
-        print(
+        log(
             f"Multiple position sources found ({sorted(fixes_by_source)}); "
             f"using source {primary_gps_source} as the primary GPS (most messages).",
             file=sys.stderr,
         )
 
     if not all_fixes:
-        print("No position data (PGN 129025) found.", file=sys.stderr)
+        log("No position data (PGN 129025) found.", file=sys.stderr)
         return 1
 
     if args.engine_count == 1:
@@ -591,7 +592,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
 
     if not trips:
-        print(
+        log(
             "No trips found (maybe never stopped or underway long enough relative to the thresholds).",
             file=sys.stderr,
         )
@@ -615,9 +616,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         trip_uids=trip_uids,
         battery_warning_voltage=args.battery_warning_voltage,
     )
-    print(f"Logbook written: {args.output} ({len(trips)} trip(s))")
-    print(f"Route written: {gpx_path}")
-    print(f"HTML logbook written: {html_path}")
+    log(f"Logbook written: {args.output} ({len(trips)} trip(s))")
+    log(f"Route written: {gpx_path}")
+    log(f"HTML logbook written: {html_path}")
     return 0
 
 
