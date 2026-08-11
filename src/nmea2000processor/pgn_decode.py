@@ -105,6 +105,16 @@ def decode_sog(data: bytes) -> Optional[float]:
     return sog_raw * 0.01
 
 
+def decode_cog(data: bytes) -> Optional[float]:
+    """PGN 129026: course over ground in degrees (0-360), true or magnetic depending on the
+    "COG Reference" field -- not decoded separately here since the W2K-2/GPS combination this app
+    was built for always reports true."""
+    cog_raw = _extract(data, 16, 16, signed=False)
+    if cog_raw is None:
+        return None
+    return math.degrees(cog_raw * 0.0001)
+
+
 def _decode_bit_warnings(raw: Optional[int], bit_names: Dict[int, str]) -> FrozenSet[str]:
     if raw is None:
         return frozenset()

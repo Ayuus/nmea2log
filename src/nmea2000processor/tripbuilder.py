@@ -53,6 +53,7 @@ class NavSample:
     sog_ms: float
     depth_m: Optional[float] = None
     water_temp_c: Optional[float] = None
+    cog_deg: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -135,11 +136,13 @@ def _merge_nav_samples(
     depth_idx = 0
     water_temp_idx = 0
     last_sog = 0.0
+    last_cog: Optional[float] = None
     last_depth: Optional[float] = None
     last_water_temp: Optional[float] = None
     for fix in sorted(fixes, key=lambda f: f.time):
         while sog_idx < len(sogs_sorted) and sogs_sorted[sog_idx].time <= fix.time:
             last_sog = sogs_sorted[sog_idx].sog_ms
+            last_cog = sogs_sorted[sog_idx].cog_deg
             sog_idx += 1
         while depth_idx < len(depths_sorted) and depths_sorted[depth_idx].time <= fix.time:
             last_depth = depths_sorted[depth_idx].depth_m
@@ -147,7 +150,7 @@ def _merge_nav_samples(
         while water_temp_idx < len(water_temps_sorted) and water_temps_sorted[water_temp_idx].time <= fix.time:
             last_water_temp = water_temps_sorted[water_temp_idx].temp_c
             water_temp_idx += 1
-        samples.append(NavSample(fix.time, fix.lat, fix.lon, last_sog, last_depth, last_water_temp))
+        samples.append(NavSample(fix.time, fix.lat, fix.lon, last_sog, last_depth, last_water_temp, last_cog))
     return samples
 
 

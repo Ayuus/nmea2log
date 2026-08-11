@@ -1,3 +1,4 @@
+import math
 import struct
 from datetime import date, datetime, timedelta
 
@@ -5,6 +6,7 @@ import pytest
 
 from nmea2000processor.pgn_decode import (
     decode_battery_status,
+    decode_cog,
     decode_engine_dynamic,
     decode_engine_rapid,
     decode_position_rapid,
@@ -38,6 +40,20 @@ def test_decode_sog():
     data = struct.pack("<BBHHH", 0, 0, 0, sog_raw, 0xFFFF)
 
     assert decode_sog(data) == pytest.approx(3.5)
+
+
+def test_decode_cog():
+    cog_raw = round(math.radians(225.0) / 0.0001)  # 225 degrees
+    # sid(1B) + cogRef/reserved(1B) + cog(2B) + sog(2B) + reserved(2B)
+    data = struct.pack("<BBHHH", 0, 0, cog_raw, 0, 0xFFFF)
+
+    assert decode_cog(data) == pytest.approx(225.0, abs=0.01)
+
+
+def test_decode_cog_not_available():
+    data = struct.pack("<BBHHH", 0, 0, 0xFFFF, 0, 0xFFFF)
+
+    assert decode_cog(data) is None
 
 
 def test_decode_engine_dynamic_full_fields():

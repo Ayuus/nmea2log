@@ -203,6 +203,52 @@ def test_write_html_logbook_map_button_only_with_track(tmp_path: Path):
     assert '"points": [[52.3, 4.9]]' in html.replace(" ", "").replace("\n", "") or "52.3" in html
 
 
+def _track_every_10_minutes(count: int, cog_deg=200.0):
+    return [
+        NavSample(datetime(2026, 7, 15, 9, 0) + timedelta(minutes=10 * i), 52.30 + 0.001 * i, 4.90, 3.0, None, None, cog_deg)
+        for i in range(count)
+    ]
+
+
+def test_write_html_logbook_shows_periodic_log_entries(tmp_path: Path):
+    """Default interval is 30 minutes: a 90-minute track sampled every 10 minutes should collapse
+    to entries at 0/30/60/90 (start, two 30-min steps, and the trip's own end)."""
+    track = _track_every_10_minutes(10)  # 0..90 minutes
+    trip = _trip(track=track)
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([trip], out_path)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert '<summary>Log</summary>' in html
+    assert html.count("<tr><td>09:") + html.count("<tr><td>10:") == 4
+    assert "200&deg;" in html
+    assert "5,8 kn" in html  # 3.0 m/s -> ~5.8 kn
+
+
+def test_write_html_logbook_log_interval_is_configurable(tmp_path: Path):
+    track = _track_every_10_minutes(10)  # 0..90 minutes
+    trip = _trip(track=track)
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([trip], out_path, log_interval_minutes=60)
+
+    html = out_path.read_text(encoding="utf-8")
+    # every 60 minutes -> 09:00, 10:00 (>= next_due), 10:30 (trip end) = 3 rows
+    assert html.count("<tr><td>09:") + html.count("<tr><td>10:") == 3
+
+
+def test_write_html_logbook_no_log_table_with_a_single_track_point(tmp_path: Path):
+    track = [NavSample(datetime(2026, 7, 15, 9, 0), 52.30, 4.90, 3.0)]
+    trip = _trip(track=track)
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([trip], out_path)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert "<summary>Log</summary>" not in html
+
+
 def test_write_html_logbook_shows_last_updated_timestamp(tmp_path: Path):
     out_path = tmp_path / "logbook.html"
 

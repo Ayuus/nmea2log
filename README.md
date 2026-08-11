@@ -152,7 +152,11 @@ the tests.
    Each trip with a track has a "Map" button that opens a zoomable Leaflet/OpenStreetMap map with
    the route line inline, embedded in the same page. Map tiles and the Leaflet library come from
    a CDN, so **viewing** requires internet (generating doesn't). Trips with a logged water
-   temperature also get a colored badge (blue → red by temperature).
+   temperature also get a colored badge (blue → red by temperature). Each trip with a track also
+   has a "Log" button — a traditional periodic logbook table (time, position, course over ground,
+   speed), sampled every `--log-interval-minutes` (default 30) plus always the trip's own start
+   and end. Unlike the map, this needs no JavaScript or internet to display (native HTML
+   `<details>`), so it also works when the file is opened from an email attachment.
 
 ## Installation
 
@@ -317,6 +321,7 @@ nmea2log --live 192.168.4.1:60001 --tee 2026-07-16.raw -o logbook.csv
 | `--boat-name NAME` | Boat name at the top of the HTML logbook (default: none, or the `boat_name` setting from the config file) |
 | `--mmsi MMSI` | MMSI at the top of the HTML logbook (default: none, or the `mmsi` setting from the config file) |
 | `--call-sign SIGN` | Call sign at the top of the HTML logbook (default: none, or the `call_sign` setting from the config file) |
+| `--log-interval-minutes` | Interval between periodic course/speed/position entries in each trip's "Log" table (default 30) |
 | `--engine-count N` | Number of physical engines. With `1`, any extra engine instance in the data is ignored as noise (same idea as the GPS source-dominance filtering) |
 | `--ebl-dir DIR` | Folder to search recursively for `.ebl` files when no logfiles are given and `--live` isn't used either. Default: not set, or the `ebl_dir` setting from the config file |
 | `--battery-warning-voltage V` | Flags a trip's battery voltage as low in the 'Warnings' column if it drops below this at any point (default 12.2 V; a common threshold for a 12V lead-acid battery -- adjust for a 24V system or a different chemistry) |

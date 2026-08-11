@@ -85,6 +85,28 @@ def test_build_trips_single_leg():
     assert len(geocoder.calls) == 2
 
 
+def test_track_carries_cog_forward_filled_from_sog_samples():
+    """PGN 129026 reports COG and SOG together, so cog_deg is decoded and forward-filled onto
+    the track exactly like sog_ms already was -- needed for the periodic log table in the HTML
+    logbook (course, speed, position)."""
+    fixes, sogs, engine_samples = _build_scenario()
+    # give the underway samples a real course; leave the rest at the SogSample default (None)
+    sogs = [
+        SogSample(s.time, s.sog_ms, 225.0) if 12 <= i < 42 else s for i, s in enumerate(sogs)
+    ]
+    geocoder = _StubGeocoder()
+
+    trips = build_trips(
+        fixes, sogs, engine_samples, geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10
+    )
+
+    trip = trips[0]
+    assert trip.track  # sanity: this scenario does produce track points
+    underway_points = [s for s in trip.track if s.sog_ms > 0]
+    assert underway_points
+    assert all(s.cog_deg == pytest.approx(225.0) for s in underway_points)
+
+
 def test_trip_fuel_device_delta():
     fixes, sogs, engine_samples = _build_scenario()
     geocoder = _StubGeocoder()

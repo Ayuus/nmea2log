@@ -21,7 +21,7 @@ from typing import Any, Dict, Optional, Tuple
 # on one of the sample dataclasses, ...) so a cache written by older code doesn't silently keep
 # being served after an upgrade that should have changed its contents -- the whole cache is
 # discarded and rebuilt from scratch when the stored version doesn't match.
-CACHE_FORMAT_VERSION = 2
+CACHE_FORMAT_VERSION = 3
 
 # Raw pickled samples are highly repetitive (many similar-shaped dataclass instances), so zlib
 # compresses them roughly 10x for very little time cost -- measured on a real 625-file, ~500 MB

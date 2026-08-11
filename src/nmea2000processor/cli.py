@@ -12,7 +12,7 @@ from .config import load_section
 from .ebl_reader import iter_frames as iter_frames_ebl
 from .geocode import Geocoder, NoGeocoder
 from .gpx_writer import write_gpx
-from .html_writer import write_html_logbook
+from .html_writer import _DEFAULT_LOG_INTERVAL_MINUTES, write_html_logbook
 from .log import log
 from .logbook_writer import write_csv
 from .model import (
@@ -41,6 +41,7 @@ from .pgn_decode import (
     PGN_WATER_DEPTH,
     decode_attitude,
     decode_battery_status,
+    decode_cog,
     decode_engine_dynamic,
     decode_engine_rapid,
     decode_position_rapid,
@@ -177,7 +178,8 @@ def _collect_samples(
             elif frame.pgn == PGN_COG_SOG_RAPID:
                 sog = decode_sog(frame.data)
                 if sog is not None:
-                    sogs_by_source.setdefault(frame.source, []).append(SogSample(frame.time, sog))
+                    cog = decode_cog(frame.data)
+                    sogs_by_source.setdefault(frame.source, []).append(SogSample(frame.time, sog, cog))
             elif frame.pgn == PGN_ENGINE_DYNAMIC:
                 decoded = decode_engine_dynamic(frame.data)
                 if decoded is not None:
@@ -409,6 +411,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "'call_sign' setting from the config file)",
     )
     parser.add_argument(
+        "--log-interval-minutes",
+        type=float,
+        default=_DEFAULT_LOG_INTERVAL_MINUTES,
+        help="Interval (minutes) between the periodic course/speed/position entries in each "
+        f"trip's 'Log' table in the HTML logbook (default {_DEFAULT_LOG_INTERVAL_MINUTES:g})",
+    )
+    parser.add_argument(
         "--engine-count",
         type=int,
         default=None,
@@ -464,6 +473,7 @@ def _apply_config_defaults(parser: argparse.ArgumentParser) -> None:
         ("boat_name", str),
         ("mmsi", str),
         ("call_sign", str),
+        ("log_interval_minutes", float),
         ("engine_count", int),
         ("battery_warning_voltage", float),
         ("ebl_dir", Path),
@@ -651,6 +661,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         utc_offset_hours=args.utc_offset,
         trip_uids=trip_uids,
         battery_warning_voltage=args.battery_warning_voltage,
+        log_interval_minutes=args.log_interval_minutes,
     )
     log(f"HTML logbook written: {html_path} ({len(trips)} trip(s))")
     return 0

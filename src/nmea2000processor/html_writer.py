@@ -36,11 +36,13 @@ from .logbook_writer import (
     _trip_utc_offset_hours,
     _typical_rpm_text,
 )
-from .tripbuilder import TripLeg
+from .tripbuilder import NavSample, TripLeg
 
 _LEAFLET_CSS = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
 _LEAFLET_JS = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
 _MAX_MAP_POINTS = 500
+_KNOT_IN_MS = 0.514444
+_DEFAULT_LOG_INTERVAL_MINUTES = 30.0
 
 
 @dataclass
@@ -189,6 +191,45 @@ def _typical_rpm_html(trip: TripLeg) -> str:
     )
 
 
+def _periodic_log_entries(track: List[NavSample], interval_minutes: float) -> List[NavSample]:
+    """Picks one track point every ``interval_minutes`` -- like the periodic course/speed/
+    position entries a traditional (paper) logbook records during a passage -- plus always the
+    very first and last point of the trip, so the log covers the full departure-to-arrival span
+    even if it doesn't divide evenly by the interval."""
+    if not track:
+        return []
+    interval = timedelta(minutes=interval_minutes)
+    entries = [track[0]]
+    next_due = track[0].time + interval
+    for sample in track[1:]:
+        if sample.time >= next_due:
+            entries.append(sample)
+            next_due = sample.time + interval
+    if entries[-1] is not track[-1]:
+        entries.append(track[-1])
+    return entries
+
+
+def _log_table_html(trip: TripLeg, interval_minutes: float) -> str:
+    entries = _periodic_log_entries(trip.track, interval_minutes)
+    if len(entries) < 2:
+        return ""
+    rows = []
+    for entry in entries:
+        cog_text = f"{_nl_num(entry.cog_deg, 0)}&deg;" if entry.cog_deg is not None else ""
+        sog_text = f"{_nl_num(entry.sog_ms / _KNOT_IN_MS)} kn"
+        position_text = f"{entry.lat:.4f}, {entry.lon:.4f}"
+        rows.append(
+            f"<tr><td>{entry.time:%H:%M}</td><td>{position_text}</td>"
+            f"<td>{cog_text}</td><td>{sog_text}</td></tr>"
+        )
+    return (
+        '<details class="log-details"><summary>Log</summary>'
+        '<table class="log-table"><thead><tr><th>Time</th><th>Position</th><th>COG</th><th>SOG</th></tr></thead>'
+        f'<tbody>{"".join(rows)}</tbody></table></details>'
+    )
+
+
 def _totals_html(totals: _Totals) -> str:
     avg_l_per_nm = totals.fuel_liters / totals.distance_nm if totals.distance_nm > 0 else None
     avg_l_per_hour = totals.fuel_liters / totals.moving_hours if totals.moving_hours > 0 else None
@@ -244,6 +285,7 @@ def _trip_row_html(
     utc_offset_hours: Optional[float],
     trip_uid: Optional[str] = None,
     battery_warning_voltage: Optional[float] = None,
+    log_interval_minutes: float = _DEFAULT_LOG_INTERVAL_MINUTES,
 ) -> str:
     offset = _trip_utc_offset_hours(trip, utc_offset_hours)
     depart_local = _to_local(trip.depart_time, offset)
@@ -272,6 +314,7 @@ def _trip_row_html(
         _water_temp_badge_html(trip),
         _motion_variation_html(trip),
         map_cell,
+        _log_table_html(trip, log_interval_minutes),
     ]
     row = "".join(f"<td>{cell}</td>" for cell in cells)
     map_row = ""
@@ -316,6 +359,7 @@ _HEADERS = [
     "Water temp",
     "Motion",
     "Route",
+    "Log",
 ]
 
 
@@ -329,6 +373,7 @@ def write_html_logbook(
     trip_uids: Optional[List[str]] = None,
     battery_warning_voltage: Optional[float] = None,
     generated_at: Optional[datetime] = None,
+    log_interval_minutes: float = _DEFAULT_LOG_INTERVAL_MINUTES,
 ) -> None:
     """``trip_uids``: one id per trip, in the same order as ``trips`` *before* sorting -- e.g.
     from ``trip_ids.assign_trip_ids(trips)``. Embedded as an invisible ``data-uid`` attribute on
@@ -369,7 +414,12 @@ def write_html_logbook(
             )
             body_rows.extend(
                 _trip_row_html(
-                    trips[i], i, utc_offset_hours, uid_by_trip.get(id(trips[i])), battery_warning_voltage
+                    trips[i],
+                    i,
+                    utc_offset_hours,
+                    uid_by_trip.get(id(trips[i])),
+                    battery_warning_voltage,
+                    log_interval_minutes,
                 )
                 for i in indices
             )
@@ -442,6 +492,17 @@ def write_html_logbook(
   .show-map {{ cursor: pointer; border: 1px solid #1a6ecc; background: white; color: #1a6ecc; border-radius: 4px; padding: 0.2em 0.6em; }}
   .show-map:hover {{ background: #1a6ecc; color: white; }}
   .trip-map-title {{ font-weight: 600; margin-bottom: 0.4em; }}
+  /* <details>/<summary> instead of a JS-driven toggle (like .show-map) on purpose: the periodic
+     log doesn't need Leaflet/tiles to render, so unlike the map it can work with zero JavaScript
+     -- including when this file is opened from an email attachment (see the module docstring). */
+  .log-details summary {{
+    cursor: pointer; border: 1px solid #1a6ecc; background: white; color: #1a6ecc;
+    border-radius: 4px; padding: 0.2em 0.6em; display: inline-block; white-space: nowrap;
+  }}
+  .log-details[open] summary {{ margin-bottom: 0.5em; }}
+  .log-table {{ border-collapse: collapse; white-space: nowrap; }}
+  .log-table th, .log-table td {{ padding: 0.2em 0.6em; border-bottom: 1px solid #eee; text-align: left; font-size: 0.85em; }}
+  .log-table th {{ background: #f0f0f0; }}
   .temp-hover {{ cursor: default; border-bottom: 1px dotted #999; }}
   .temp-tooltip {{
     display: none; position: fixed; z-index: 10;

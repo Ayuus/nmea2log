@@ -28,6 +28,7 @@ class PositionFix:
 class SogSample:
     time: datetime
     sog_ms: float  # speed over ground, meters/second
+    cog_deg: Optional[float] = None  # course over ground, degrees (PGN 129026, same message as SOG)
 
 
 @dataclass(frozen=True)
