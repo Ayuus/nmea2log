@@ -248,12 +248,12 @@ def _log_cell_html(trip: TripLeg, idx: int, interval_minutes: float, offset_hour
             f"<td>{cog_text}</td><td>{sog_text}</td></tr>"
         )
     table = (
-        '<table class="log-table"><thead><tr><th>Time</th><th>Position</th><th>COG</th><th>SOG</th></tr></thead>'
+        '<table class="log-table"><thead><tr><th>Tijd</th><th>Positie</th><th>Koers</th><th>Snelheid</th></tr></thead>'
         f'<tbody>{"".join(rows)}</tbody></table>'
     )
     dialog = (
         f'<dialog class="log-dialog" id="log-{idx}">{table}'
-        '<button type="button" class="close-log">Close</button></dialog>'
+        '<button type="button" class="close-log">Sluiten</button></dialog>'
     )
     return f'<button type="button" class="show-log" data-trip="{idx}">Log</button>{dialog}'
 
