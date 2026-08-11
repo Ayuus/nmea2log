@@ -8,7 +8,11 @@ if "%~1"=="" (
 )
 
 py -m nmea2000processor %* -o "%OUTPUT%"
+if errorlevel 1 (
+    echo.
+    echo Something went wrong -- see the message above.
+    pause
+    exit /b 1
+)
 
-echo.
-echo Done. Press any key to close this window.
-pause >nul
+start "" "%OUTPUT:.csv=.html%"
