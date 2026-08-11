@@ -49,6 +49,26 @@ def test_write_html_logbook_includes_boat_name_in_title_and_heading(tmp_path: Pa
     assert "Zeevalk" in html and "Sailing Logbook" in html
 
 
+def test_write_html_logbook_shows_mmsi_and_call_sign(tmp_path: Path):
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([_trip()], out_path, mmsi="244003579", call_sign="PI 3201")
+
+    html = out_path.read_text(encoding="utf-8")
+    assert "MMSI: 244003579" in html
+    assert "Call sign: PI 3201" in html
+
+
+def test_write_html_logbook_omits_vessel_info_when_not_given(tmp_path: Path):
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([_trip()], out_path)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert "MMSI" not in html
+    assert "Call sign" not in html
+
+
 def test_write_html_logbook_without_boat_name(tmp_path: Path):
     out_path = tmp_path / "logbook.html"
 

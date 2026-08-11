@@ -395,6 +395,20 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "'boat_name' setting from the config file)",
     )
     parser.add_argument(
+        "--mmsi",
+        type=str,
+        default=None,
+        help="MMSI shown at the top of the HTML logbook (default: none, or the 'mmsi' setting "
+        "from the config file)",
+    )
+    parser.add_argument(
+        "--call-sign",
+        type=str,
+        default=None,
+        help="Call sign shown at the top of the HTML logbook (default: none, or the "
+        "'call_sign' setting from the config file)",
+    )
+    parser.add_argument(
         "--engine-count",
         type=int,
         default=None,
@@ -448,6 +462,8 @@ def _apply_config_defaults(parser: argparse.ArgumentParser) -> None:
         ("language", str),
         ("utc_offset", float),
         ("boat_name", str),
+        ("mmsi", str),
+        ("call_sign", str),
         ("engine_count", int),
         ("battery_warning_voltage", float),
         ("ebl_dir", Path),
@@ -630,6 +646,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         trips,
         html_path,
         boat_name=args.boat_name,
+        mmsi=args.mmsi,
+        call_sign=args.call_sign,
         utc_offset_hours=args.utc_offset,
         trip_uids=trip_uids,
         battery_warning_voltage=args.battery_warning_voltage,

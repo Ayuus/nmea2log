@@ -323,6 +323,8 @@ def write_html_logbook(
     trips: Iterable[TripLeg],
     path: Path,
     boat_name: Optional[str] = None,
+    mmsi: Optional[str] = None,
+    call_sign: Optional[str] = None,
     utc_offset_hours: Optional[float] = None,
     trip_uids: Optional[List[str]] = None,
     battery_warning_voltage: Optional[float] = None,
@@ -388,6 +390,17 @@ def write_html_logbook(
     title = f"{boat_name} - Sailing Logbook" if boat_name else "Sailing Logbook"
     heading = f"{escape(boat_name)} &mdash; Sailing Logbook" if boat_name else "Sailing Logbook"
 
+    vessel_info_lines = []
+    if mmsi:
+        vessel_info_lines.append(f"MMSI: {escape(mmsi)}")
+    if call_sign:
+        vessel_info_lines.append(f"Call sign: {escape(call_sign)}")
+    vessel_info_html = (
+        '<div class="vessel-info">' + "".join(f"<div>{line}</div>" for line in vessel_info_lines) + "</div>"
+        if vessel_info_lines
+        else ""
+    )
+
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -397,7 +410,9 @@ def write_html_logbook(
 <script src="{_LEAFLET_JS}"></script>
 <style>
   body {{ font-family: sans-serif; margin: 0; padding: 1.5em; background: #f7f7f8; color: #1a1a1a; }}
-  h1 {{ margin-bottom: 0.2em; }}
+  h1 {{ margin: 0 0 0.2em; }}
+  .header-row {{ display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5em 1.5em; }}
+  .vessel-info {{ color: #444; font-size: 1.1em; font-weight: 600; text-align: right; line-height: 1.4; }}
   .last-updated {{ color: #666; font-size: 0.85em; margin-bottom: 1em; }}
   h2 {{ margin-top: 2em; border-bottom: 2px solid #1a6ecc; padding-bottom: 0.2em; }}
   .totals {{ display: flex; flex-wrap: wrap; gap: 1em; margin: 1em 0 2em; }}
@@ -449,7 +464,7 @@ def write_html_logbook(
     attachment and open it in a web browser (Chrome, Edge, Firefox, Safari, ...) to see the maps.
   </div>
 </noscript>
-<h1>{heading}</h1>
+<div class="header-row"><h1>{heading}</h1>{vessel_info_html}</div>
 <div class="last-updated">Last updated: {generated_at:%Y-%m-%d %H:%M}</div>
 {_totals_html(_compute_totals(trips))}
 {"".join(sections)}
