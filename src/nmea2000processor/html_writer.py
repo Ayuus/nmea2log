@@ -412,7 +412,7 @@ def write_html_logbook(
   body {{ font-family: sans-serif; margin: 0; padding: 1.5em; background: #f7f7f8; color: #1a1a1a; }}
   h1 {{ margin: 0 0 0.2em; }}
   .header-row {{ display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5em 1.5em; }}
-  .vessel-info {{ color: #444; font-size: 1.1em; font-weight: 600; text-align: right; line-height: 1.4; }}
+  .vessel-info {{ color: #444; font-size: 1.1em; text-align: right; line-height: 1.4; }}
   .last-updated {{ color: #666; font-size: 0.85em; margin-bottom: 1em; }}
   h2 {{ margin-top: 2em; border-bottom: 2px solid #1a6ecc; padding-bottom: 0.2em; }}
   .totals {{ display: flex; flex-wrap: wrap; gap: 1em; margin: 1em 0 2em; }}
