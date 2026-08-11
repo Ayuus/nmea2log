@@ -1,19 +1,20 @@
 """Writes the whole logbook out as a single, self-contained HTML file: a boat name header,
 overall totals (trip count, distance, fuel, engine hours, average consumption), trips grouped
-by year and ISO week, and a per-trip route map (Leaflet + OpenStreetMap) that expands inline
-when you click a trip's "Map" button.
+by year and ISO week, a per-trip route map (Leaflet + OpenStreetMap) that opens in a popup when
+you click a trip's "Map" button, and a per-trip periodic course/speed/position log (like a
+traditional paper logbook) that opens the same way via a "Log" button.
 
 Everything lives in one file -- there's nothing to keep together or link between. Map tiles and
-the Leaflet library load from a CDN when you view the page, so viewing requires internet (the
-file itself needs none to generate or to open).
+the Leaflet library load from a CDN when you view the page, so viewing the map requires internet
+(the file itself needs none to generate or to open; the periodic log has no such dependency).
 
-The map is entirely JavaScript-driven, which doesn't work when this file is opened straight from
-an email attachment -- essentially every email client strips <script> tags for security, so the
-"Map" button silently does nothing there. There's no way to fix that while keeping an interactive
-map (a static, always-visible image per trip would work in email too, but was deliberately not
-built: it needs a network call per trip to render, and would make the file much bigger for a
-season's worth of trips). Instead, a <noscript> banner explains that the file needs to be opened
-in a real browser to see the maps.
+Both popups are JavaScript-driven (a <dialog> opened via .showModal()), which doesn't work when
+this file is opened straight from an email attachment -- essentially every email client strips
+<script> tags for security, so the buttons silently do nothing there. There's no way to fix that
+while keeping them interactive (a static, always-visible image/table per trip would work in email
+too, but was deliberately not built for the map: it needs a network call per trip to render, and
+would make the file much bigger for a season's worth of trips). Instead, a <noscript> banner
+explains that the file needs to be opened in a real browser.
 """
 
 from __future__ import annotations
@@ -191,43 +192,70 @@ def _typical_rpm_html(trip: TripLeg) -> str:
     )
 
 
-def _periodic_log_entries(track: List[NavSample], interval_minutes: float) -> List[NavSample]:
-    """Picks one track point every ``interval_minutes`` -- like the periodic course/speed/
-    position entries a traditional (paper) logbook records during a passage -- plus always the
-    very first and last point of the trip, so the log covers the full departure-to-arrival span
-    even if it doesn't divide evenly by the interval."""
+def _next_aligned_time(local_time: datetime, interval: timedelta) -> datetime:
+    """Rounds up to the next clock-aligned boundary (e.g. the next :00 or :30 for a 30-minute
+    interval) rather than counting from whatever arbitrary minute the trip happened to depart --
+    a real (paper) logbook's periodic entries land on tidy clock times, not on e.g. 07:41, 08:11,
+    08:41."""
+    midnight = local_time.replace(hour=0, minute=0, second=0, microsecond=0)
+    remainder = (local_time - midnight) % interval
+    return local_time if remainder == timedelta(0) else local_time + (interval - remainder)
+
+
+def _periodic_log_entries(
+    track: List[NavSample], interval_minutes: float, offset_hours: float
+) -> List[NavSample]:
+    """Picks one track point every ``interval_minutes`` on a clock-aligned grid in local time --
+    like the periodic course/speed/position entries a traditional (paper) logbook records during
+    a passage -- plus always the very first and last point of the trip, so the log covers the
+    full departure-to-arrival span even if it doesn't divide evenly by the interval."""
     if not track:
         return []
     interval = timedelta(minutes=interval_minutes)
+    local_start = _to_local(track[0].time, offset_hours)
+    next_due = _next_aligned_time(local_start, interval)
+    while next_due <= local_start:  # don't immediately re-log the departure point itself
+        next_due += interval
     entries = [track[0]]
-    next_due = track[0].time + interval
     for sample in track[1:]:
-        if sample.time >= next_due:
+        local_time = _to_local(sample.time, offset_hours)
+        if local_time >= next_due:
             entries.append(sample)
-            next_due = sample.time + interval
+            while next_due <= local_time:  # stay on the clock grid even across a data gap
+                next_due += interval
     if entries[-1] is not track[-1]:
         entries.append(track[-1])
     return entries
 
 
-def _log_table_html(trip: TripLeg, interval_minutes: float) -> str:
-    entries = _periodic_log_entries(trip.track, interval_minutes)
+def _log_cell_html(trip: TripLeg, idx: int, interval_minutes: float, offset_hours: float) -> str:
+    """Button + <dialog> popup (like Map, not an inline-expanding table) so opening the log
+    doesn't push the rest of a possibly very wide, already horizontally-scrolled trips table
+    around -- found in practice: with an inline table, the COG/SOG columns could end up scrolled
+    out of view off the right edge of the same .table-scroll region the button itself was in,
+    making it look like the log only ever had a time and position column."""
+    entries = _periodic_log_entries(trip.track, interval_minutes, offset_hours)
     if len(entries) < 2:
         return ""
     rows = []
     for entry in entries:
+        local_time = _to_local(entry.time, offset_hours)
         cog_text = f"{_nl_num(entry.cog_deg, 0)}&deg;" if entry.cog_deg is not None else ""
         sog_text = f"{_nl_num(entry.sog_ms / _KNOT_IN_MS)} kn"
         position_text = f"{entry.lat:.4f}, {entry.lon:.4f}"
         rows.append(
-            f"<tr><td>{entry.time:%H:%M}</td><td>{position_text}</td>"
+            f"<tr><td>{local_time:%H:%M}</td><td>{position_text}</td>"
             f"<td>{cog_text}</td><td>{sog_text}</td></tr>"
         )
-    return (
-        '<details class="log-details"><summary>Log</summary>'
+    table = (
         '<table class="log-table"><thead><tr><th>Time</th><th>Position</th><th>COG</th><th>SOG</th></tr></thead>'
-        f'<tbody>{"".join(rows)}</tbody></table></details>'
+        f'<tbody>{"".join(rows)}</tbody></table>'
     )
+    dialog = (
+        f'<dialog class="log-dialog" id="log-{idx}">{table}'
+        '<button type="button" class="close-log">Close</button></dialog>'
+    )
+    return f'<button type="button" class="show-log" data-trip="{idx}">Log</button>{dialog}'
 
 
 def _totals_html(totals: _Totals) -> str:
@@ -314,7 +342,7 @@ def _trip_row_html(
         _water_temp_badge_html(trip),
         _motion_variation_html(trip),
         map_cell,
-        _log_table_html(trip, log_interval_minutes),
+        _log_cell_html(trip, idx, log_interval_minutes, offset),
     ]
     row = "".join(f"<td>{cell}</td>" for cell in cells)
     map_row = ""
@@ -489,20 +517,21 @@ def write_html_logbook(
     background: #eef4fb; font-weight: 700; color: #1a4a7a; font-size: 0.95em;
     padding: 1em 0.6em 0.5em; border-top: 2px solid #1a6ecc; border-bottom: none;
   }}
-  .show-map {{ cursor: pointer; border: 1px solid #1a6ecc; background: white; color: #1a6ecc; border-radius: 4px; padding: 0.2em 0.6em; }}
-  .show-map:hover {{ background: #1a6ecc; color: white; }}
+  .show-map, .show-log {{ cursor: pointer; border: 1px solid #1a6ecc; background: white; color: #1a6ecc; border-radius: 4px; padding: 0.2em 0.6em; white-space: nowrap; }}
+  .show-map:hover, .show-log:hover {{ background: #1a6ecc; color: white; }}
   .trip-map-title {{ font-weight: 600; margin-bottom: 0.4em; }}
-  /* <details>/<summary> instead of a JS-driven toggle (like .show-map) on purpose: the periodic
-     log doesn't need Leaflet/tiles to render, so unlike the map it can work with zero JavaScript
-     -- including when this file is opened from an email attachment (see the module docstring). */
-  .log-details summary {{
-    cursor: pointer; border: 1px solid #1a6ecc; background: white; color: #1a6ecc;
-    border-radius: 4px; padding: 0.2em 0.6em; display: inline-block; white-space: nowrap;
-  }}
-  .log-details[open] summary {{ margin-bottom: 0.5em; }}
-  .log-table {{ border-collapse: collapse; white-space: nowrap; }}
-  .log-table th, .log-table td {{ padding: 0.2em 0.6em; border-bottom: 1px solid #eee; text-align: left; font-size: 0.85em; }}
+  /* A popup (like the map) instead of an inline-expanding table on purpose: in a wide, already
+     horizontally-scrolled trips table, expanding a table inline pushed the COG/SOG columns off
+     the right edge of the same scroll region the button itself was in, making the log look like
+     it only ever had a time and position column (found in practice). A dialog isn't constrained
+     by that scroll position at all. */
+  .log-dialog {{ border: none; border-radius: 8px; padding: 1em 1.2em; box-shadow: 0 4px 20px rgba(0,0,0,0.25); }}
+  .log-dialog::backdrop {{ background: rgba(0,0,0,0.4); }}
+  .log-table {{ border-collapse: collapse; white-space: nowrap; margin-bottom: 0.8em; }}
+  .log-table th, .log-table td {{ padding: 0.2em 0.6em; border-bottom: 1px solid #eee; text-align: left; font-size: 0.9em; }}
   .log-table th {{ background: #f0f0f0; }}
+  .close-log {{ cursor: pointer; border: 1px solid #ccc; background: white; border-radius: 4px; padding: 0.3em 0.8em; }}
+  .close-log:hover {{ background: #f0f0f0; }}
   .temp-hover {{ cursor: default; border-bottom: 1px dotted #999; }}
   .temp-tooltip {{
     display: none; position: fixed; z-index: 10;
@@ -520,9 +549,9 @@ def write_html_logbook(
 <body>
 <noscript>
   <div class="noscript-warning">
-    The "Map" buttons in this logbook need JavaScript to draw the route. Most email programs
+    The "Map" and "Log" buttons in this logbook need JavaScript to open. Most email programs
     strip that out of attachments, so if you're reading this in an email client, save the
-    attachment and open it in a web browser (Chrome, Edge, Firefox, Safari, ...) to see the maps.
+    attachment and open it in a web browser (Chrome, Edge, Firefox, Safari, ...) instead.
   </div>
 </noscript>
 <div class="header-row"><h1>{heading}</h1>{vessel_info_html}</div>
@@ -575,6 +604,16 @@ document.querySelectorAll('.show-map').forEach(function(btn) {{
       map.fitBounds(line.getBounds(), {{padding: [20, 20]}});
       setTimeout(function() {{ map.invalidateSize(); }}, 0);
     }}
+  }});
+}});
+document.querySelectorAll('.show-log').forEach(function(btn) {{
+  var dialog = document.getElementById('log-' + btn.dataset.trip);
+  btn.addEventListener('click', function() {{ dialog.showModal(); }});
+  dialog.querySelector('.close-log').addEventListener('click', function() {{ dialog.close(); }});
+  // clicking the backdrop closes the dialog too -- a click that lands on the dialog element
+  // itself (not any of its content) can only be the backdrop, since the content fills the box.
+  dialog.addEventListener('click', function(e) {{
+    if (e.target === dialog) dialog.close();
   }});
 }});
 </script>

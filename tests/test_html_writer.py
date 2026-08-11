@@ -217,10 +217,13 @@ def test_write_html_logbook_shows_periodic_log_entries(tmp_path: Path):
     trip = _trip(track=track)
     out_path = tmp_path / "logbook.html"
 
-    write_html_logbook([trip], out_path)
+    write_html_logbook([trip], out_path, utc_offset_hours=0)
 
     html = out_path.read_text(encoding="utf-8")
-    assert '<summary>Log</summary>' in html
+    assert 'class="show-log"' in html
+    assert 'id="log-0"' in html  # dialog id must match the button's data-trip
+    assert 'class="log-dialog"' in html
+    assert 'class="close-log"' in html
     assert html.count("<tr><td>09:") + html.count("<tr><td>10:") == 4
     assert "200&deg;" in html
     assert "5,8 kn" in html  # 3.0 m/s -> ~5.8 kn
@@ -231,11 +234,34 @@ def test_write_html_logbook_log_interval_is_configurable(tmp_path: Path):
     trip = _trip(track=track)
     out_path = tmp_path / "logbook.html"
 
-    write_html_logbook([trip], out_path, log_interval_minutes=60)
+    write_html_logbook([trip], out_path, log_interval_minutes=60, utc_offset_hours=0)
 
     html = out_path.read_text(encoding="utf-8")
     # every 60 minutes -> 09:00, 10:00 (>= next_due), 10:30 (trip end) = 3 rows
     assert html.count("<tr><td>09:") + html.count("<tr><td>10:") == 3
+
+
+def test_write_html_logbook_log_entries_are_clock_aligned(tmp_path: Path):
+    """Regression test: entries must land on the next whole/half hour (09:30, 10:00, ...), not on
+    times offset from the trip's own arbitrary departure minute (09:37, 10:07, ... if counted
+    from a 09:07 departure) -- a real logbook's periodic entries read on the clock, not relative
+    to whenever the boat happened to leave."""
+    track = [
+        NavSample(datetime(2026, 7, 15, 9, 7) + timedelta(minutes=i), 52.30, 4.90, 3.0, None, None, 90.0)
+        for i in range(61)  # one point per minute, 09:07 .. 10:07
+    ]
+    trip = _trip(track=track, depart_time=track[0].time, arrive_time=track[-1].time)
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([trip], out_path, utc_offset_hours=0)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert "<tr><td>09:30</td>" in html
+    assert "<tr><td>10:00</td>" in html
+    assert "<tr><td>09:37</td>" not in html
+    # 10:07 IS present -- but only once, as the trip's own (mandatory) end time, not as a second
+    # clock-aligned entry landing exactly on the old drift-from-departure schedule
+    assert html.count("<tr><td>10:07</td>") == 1
 
 
 def test_write_html_logbook_no_log_table_with_a_single_track_point(tmp_path: Path):
@@ -246,7 +272,7 @@ def test_write_html_logbook_no_log_table_with_a_single_track_point(tmp_path: Pat
     write_html_logbook([trip], out_path)
 
     html = out_path.read_text(encoding="utf-8")
-    assert "<summary>Log</summary>" not in html
+    assert 'class="show-log"' not in html
 
 
 def test_write_html_logbook_shows_last_updated_timestamp(tmp_path: Path):
