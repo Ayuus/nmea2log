@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 from xml.sax.saxutils import escape
@@ -326,11 +326,17 @@ def write_html_logbook(
     utc_offset_hours: Optional[float] = None,
     trip_uids: Optional[List[str]] = None,
     battery_warning_voltage: Optional[float] = None,
+    generated_at: Optional[datetime] = None,
 ) -> None:
     """``trip_uids``: one id per trip, in the same order as ``trips`` *before* sorting -- e.g.
     from ``trip_ids.assign_trip_ids(trips)``. Embedded as an invisible ``data-uid`` attribute on
     each trip row so a future feature could key off it instead of a timestamp that could shift
-    with a trip-recognition fix. Not used by anything else yet."""
+    with a trip-recognition fix. Not used by anything else yet.
+
+    ``generated_at``: shown as "Last updated" under the heading, in the local time of whoever
+    generates the file. Defaults to now; a caller passes a fixed value only for testing."""
+    if generated_at is None:
+        generated_at = datetime.now()
     trips = list(trips)
     uid_by_trip = {id(trip): uid for trip, uid in zip(trips, trip_uids)} if trip_uids is not None else {}
     trips = sorted(trips, key=lambda t: t.depart_time)
@@ -392,6 +398,7 @@ def write_html_logbook(
 <style>
   body {{ font-family: sans-serif; margin: 0; padding: 1.5em; background: #f7f7f8; color: #1a1a1a; }}
   h1 {{ margin-bottom: 0.2em; }}
+  .last-updated {{ color: #666; font-size: 0.85em; margin-bottom: 1em; }}
   h2 {{ margin-top: 2em; border-bottom: 2px solid #1a6ecc; padding-bottom: 0.2em; }}
   .totals {{ display: flex; flex-wrap: wrap; gap: 1em; margin: 1em 0 2em; }}
   .stat {{ background: white; border-radius: 8px; padding: 0.8em 1.2em; box-shadow: 0 1px 3px rgba(0,0,0,0.1); min-width: 140px; }}
@@ -443,6 +450,7 @@ def write_html_logbook(
   </div>
 </noscript>
 <h1>{heading}</h1>
+<div class="last-updated">Last updated: {generated_at:%Y-%m-%d %H:%M}</div>
 {_totals_html(_compute_totals(trips))}
 {"".join(sections)}
 <script>

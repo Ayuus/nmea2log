@@ -183,6 +183,15 @@ def test_write_html_logbook_map_button_only_with_track(tmp_path: Path):
     assert '"points": [[52.3, 4.9]]' in html.replace(" ", "").replace("\n", "") or "52.3" in html
 
 
+def test_write_html_logbook_shows_last_updated_timestamp(tmp_path: Path):
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([_trip()], out_path, generated_at=datetime(2026, 8, 11, 14, 32))
+
+    html = out_path.read_text(encoding="utf-8")
+    assert "Last updated: 2026-08-11 14:32" in html
+
+
 def test_write_html_logbook_has_a_noscript_fallback_for_the_map_buttons(tmp_path: Path):
     """The route map is entirely JS-driven (Leaflet). Most email clients strip <script> tags from
     attachments, so a Map button silently does nothing if this file is opened from an email --
