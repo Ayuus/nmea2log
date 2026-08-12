@@ -417,6 +417,7 @@ def _trip_row_html(
 
 
 _HEADER_FULL_NAMES = {
+    T["header_seq_abbr"]: T["header_seq_full"],
     T["header_departure_abbr"]: T["header_departure_full"],
     T["header_arrival_abbr"]: T["header_arrival_full"],
 }
@@ -443,7 +444,7 @@ def _header_cell_html(label: str) -> str:
 
 
 _HEADERS = [
-    T["header_seq"],
+    T["header_seq_abbr"],
     T["header_date"],
     T["header_departure_abbr"],
     T["header_from"],

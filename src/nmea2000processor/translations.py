@@ -25,7 +25,8 @@ NL: Dict[str, str] = {
         "vanuit de e-mail te bekijken."
     ),
     # Trips table headers (see html_writer._HEADERS)
-    "header_seq": "Volgnummer",
+    "header_seq_abbr": "Nr.",
+    "header_seq_full": "Volgnummer",
     "header_date": "Datum",
     "header_departure_abbr": "Vertr.",
     "header_departure_full": "Vertrek",
