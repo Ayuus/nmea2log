@@ -299,6 +299,29 @@ processing and a permanent log file:
 nmea2log --live 192.168.4.1:60001 --tee 2026-07-16.raw -o logbook.csv
 ```
 
+### Uploading the logbook
+
+Pass `--upload` to also copy the generated HTML logbook to a website over SFTP right after
+writing it, so it's viewable from anywhere without running a server of your own (no port-
+forwarding or dynamic DNS needed for a home connection). Requires an SSH key pair for
+authentication -- a login password can't be scripted through the `sftp` client without an
+interactive prompt, which defeats the point of running this unattended. Uses the system's own
+`sftp` client (OpenSSH, already installed on Windows 10/11 and Debian), not an extra dependency.
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519
+```
+
+Add the resulting `~/.ssh/id_ed25519.pub` to your hosting provider's SSH/SFTP access settings
+(for TransIP webhosting: control panel → Webhosting → your domain → Website → SFTP/SSH → "+ Key
+toevoegen"), then either pass the connection details on the command line or set them once in the
+config file's `[upload]` section (see `nmea2log.ini`):
+
+```bash
+nmea2log --upload --upload-host ssh.example.transip.nl --upload-user my-user \
+  --upload-remote-path logboek/logbook.html --upload-key-file ~/.ssh/id_ed25519 -o logbook.csv
+```
+
 ### Useful options
 
 | Option | Meaning |
@@ -322,6 +345,8 @@ nmea2log --live 192.168.4.1:60001 --tee 2026-07-16.raw -o logbook.csv
 | `--mmsi MMSI` | MMSI at the top of the HTML logbook (default: none, or the `mmsi` setting from the config file) |
 | `--call-sign SIGN` | Call sign at the top of the HTML logbook (default: none, or the `call_sign` setting from the config file) |
 | `--log-interval-minutes` | Interval between periodic course/speed/position entries in each trip's "Log" table (default 30) |
+| `--upload` | Upload the HTML logbook over SFTP after writing it (see "Uploading the logbook" above) |
+| `--upload-host` / `--upload-user` / `--upload-remote-path` / `--upload-key-file` / `--upload-port` | SFTP connection details (only with `--upload`; default port 22) |
 | `--engine-count N` | Number of physical engines. With `1`, any extra engine instance in the data is ignored as noise (same idea as the GPS source-dominance filtering) |
 | `--ebl-dir DIR` | Folder to search recursively for `.ebl` files when no logfiles are given and `--live` isn't used either. Default: not set, or the `ebl_dir` setting from the config file |
 | `--battery-warning-voltage V` | Flags a trip's battery voltage as low in the 'Warnings' column if it drops below this at any point (default 12.2 V; a common threshold for a 12V lead-acid battery -- adjust for a 24V system or a different chemistry) |

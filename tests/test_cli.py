@@ -190,6 +190,17 @@ def test_main_reports_a_clear_error_when_ebl_dir_has_no_ebl_files(tmp_path, caps
     assert "no .ebl files found" in capsys.readouterr().err
 
 
+def test_main_reports_a_clear_error_when_upload_is_missing_settings(tmp_path, capsys):
+    exit_code = None
+    try:
+        main(["--upload", "--ebl-dir", str(tmp_path)])
+    except SystemExit as exc:
+        exit_code = exc.code
+
+    assert exit_code == 2
+    assert "--upload needs" in capsys.readouterr().err
+
+
 def test_main_reuses_cached_samples_on_a_second_run(tmp_path, monkeypatch, capsys):
     """Integration test for the .ebl sample cache: a second run against the same, unchanged file
     must not re-parse it (only reuse the decoded samples from the first run's cache)."""

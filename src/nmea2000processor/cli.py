@@ -52,6 +52,7 @@ from .pgn_decode import (
 )
 from .trip_ids import assign_trip_ids
 from .tripbuilder import build_trips
+from .upload import UploadError, upload_file
 
 _T = TypeVar("_T")
 
@@ -437,6 +438,44 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "alongside engine warnings.",
     )
     parser.add_argument(
+        "--upload",
+        action="store_true",
+        help="Upload the HTML logbook over SFTP after writing it (see 'upload-host'/'upload-"
+        "user'/'upload-remote-path'/'upload-key-file', or the matching [upload] settings in the "
+        "config file)",
+    )
+    parser.add_argument(
+        "--upload-host",
+        type=str,
+        default=None,
+        help="SFTP host to upload the HTML logbook to (only with --upload)",
+    )
+    parser.add_argument(
+        "--upload-user",
+        type=str,
+        default=None,
+        help="SFTP username (only with --upload)",
+    )
+    parser.add_argument(
+        "--upload-remote-path",
+        type=str,
+        default=None,
+        help="Destination path on the SFTP server for the HTML logbook (only with --upload)",
+    )
+    parser.add_argument(
+        "--upload-key-file",
+        type=Path,
+        default=None,
+        help="Private SSH key file for the SFTP upload (only with --upload); the matching public "
+        "key must be added to the server's SSH/SFTP access settings",
+    )
+    parser.add_argument(
+        "--upload-port",
+        type=int,
+        default=22,
+        help="SFTP port (default 22, only with --upload)",
+    )
+    parser.add_argument(
         "--ebl-dir",
         type=Path,
         default=None,
@@ -492,12 +531,32 @@ def _apply_config_defaults(parser: argparse.ArgumentParser) -> None:
     if "gpx" in section:
         defaults["gpx"] = _bool(section["gpx"])
 
+    upload_section = load_section("upload")
+    if "enabled" in upload_section:
+        defaults["upload"] = _bool(upload_section["enabled"])
+    for key, dest, caster in (
+        ("host", "upload_host", str),
+        ("user", "upload_user", str),
+        ("remote_path", "upload_remote_path", str),
+        ("key_file", "upload_key_file", Path),
+        ("port", "upload_port", int),
+    ):
+        if key in upload_section:
+            defaults[dest] = caster(upload_section[key])
+
     parser.set_defaults(**defaults)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
+
+    if args.upload and not (args.upload_host and args.upload_user and args.upload_remote_path and args.upload_key_file):
+        parser.error(
+            "--upload needs --upload-host, --upload-user, --upload-remote-path, and "
+            "--upload-key-file (or the matching settings in the [upload] section of the config "
+            "file) to all be set"
+        )
 
     if not args.logfiles and not args.live and args.ebl_dir:
         if not args.ebl_dir.is_dir():
@@ -664,6 +723,22 @@ def main(argv: Optional[List[str]] = None) -> int:
         log_interval_minutes=args.log_interval_minutes,
     )
     log(f"HTML logbook written: {html_path} ({len(trips)} trip(s))")
+
+    if args.upload:
+        try:
+            upload_file(
+                html_path,
+                host=args.upload_host,
+                user=args.upload_user,
+                remote_path=args.upload_remote_path,
+                key_file=args.upload_key_file,
+                port=args.upload_port,
+            )
+            log(f"Uploaded to {args.upload_user}@{args.upload_host}:{args.upload_remote_path}")
+        except UploadError as exc:
+            log(f"[error] upload failed: {exc}", file=sys.stderr)
+            return 1
+
     return 0
 
 
