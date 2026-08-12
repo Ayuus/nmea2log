@@ -45,8 +45,8 @@ def test_write_html_logbook_includes_boat_name_in_title_and_heading(tmp_path: Pa
     write_html_logbook([_trip()], out_path, boat_name="Zeevalk")
 
     html = out_path.read_text(encoding="utf-8")
-    assert "<title>Zeevalk - Sailing Logbook</title>" in html
-    assert "Zeevalk" in html and "Sailing Logbook" in html
+    assert "<title>Zeevalk - Vaarlogboek</title>" in html
+    assert "Zeevalk" in html and "Vaarlogboek" in html
 
 
 def test_write_html_logbook_shows_mmsi_and_call_sign(tmp_path: Path):
@@ -56,7 +56,7 @@ def test_write_html_logbook_shows_mmsi_and_call_sign(tmp_path: Path):
 
     html = out_path.read_text(encoding="utf-8")
     assert "MMSI: 244003579" in html
-    assert "Call sign: PI 3201" in html
+    assert "Roepnaam: PI 3201" in html
 
 
 def test_write_html_logbook_omits_vessel_info_when_not_given(tmp_path: Path):
@@ -66,7 +66,7 @@ def test_write_html_logbook_omits_vessel_info_when_not_given(tmp_path: Path):
 
     html = out_path.read_text(encoding="utf-8")
     assert "MMSI" not in html
-    assert "Call sign" not in html
+    assert "Roepnaam" not in html
 
 
 def test_write_html_logbook_without_boat_name(tmp_path: Path):
@@ -75,7 +75,7 @@ def test_write_html_logbook_without_boat_name(tmp_path: Path):
     write_html_logbook([_trip()], out_path, boat_name=None)
 
     html = out_path.read_text(encoding="utf-8")
-    assert "<title>Sailing Logbook</title>" in html
+    assert "<title>Vaarlogboek</title>" in html
 
 
 def test_write_html_logbook_shows_totals(tmp_path: Path):
@@ -88,8 +88,8 @@ def test_write_html_logbook_shows_totals(tmp_path: Path):
     html = out_path.read_text(encoding="utf-8")
     assert "16,0 nm" in html  # total distance
     assert "8,0 L" in html  # total fuel
-    assert "Hours logged, engine 0" in html
-    assert "Hours logged, engine 1" in html
+    assert "Gelogde uren, motor 0" in html
+    assert "Gelogde uren, motor 1" in html
 
 
 def test_write_html_logbook_shows_hours_underway_and_avg_speed(tmp_path: Path):
@@ -100,9 +100,9 @@ def test_write_html_logbook_shows_hours_underway_and_avg_speed(tmp_path: Path):
     write_html_logbook([trip_a, trip_b], out_path)
 
     html = out_path.read_text(encoding="utf-8")
-    assert "Total hours" in html
+    assert "Totale uren" in html
     assert "4,0 h" in html  # 2h + 2h
-    assert "Avg speed" in html
+    assert "Gem. snelheid" in html
     assert "4,0 kn" in html  # 16 nm / 4 h, distance-weighted
 
 
@@ -113,7 +113,7 @@ def test_write_html_logbook_totals_omit_engine_label_with_one_engine(tmp_path: P
     write_html_logbook([trip], out_path)
 
     html = out_path.read_text(encoding="utf-8")
-    assert "Hours logged</div>" in html
+    assert "Gelogde uren</div>" in html
     assert "engine 0" not in html.lower()
 
 
@@ -132,7 +132,7 @@ def test_write_html_logbook_shows_current_engine_hour_meter(tmp_path: Path):
     write_html_logbook([trip_a, trip_b], out_path)
 
     html = out_path.read_text(encoding="utf-8")
-    assert "Engine hour meter</div>" in html
+    assert "Motoruren-teller</div>" in html
     assert "102,5 h" in html
     assert "100,0 h" not in html
 
@@ -281,7 +281,7 @@ def test_write_html_logbook_shows_last_updated_timestamp(tmp_path: Path):
     write_html_logbook([_trip()], out_path, generated_at=datetime(2026, 8, 11, 14, 32))
 
     html = out_path.read_text(encoding="utf-8")
-    assert "Last updated: 2026-08-11 14:32" in html
+    assert "Laatst bijgewerkt: 2026-08-11 14:32" in html
 
 
 def test_write_html_logbook_has_a_noscript_fallback_for_the_map_buttons(tmp_path: Path):
@@ -336,7 +336,7 @@ def test_write_html_logbook_shows_max_speed_per_trip_and_overall(tmp_path: Path)
     html = out_path.read_text(encoding="utf-8")
     assert "8,2 kn" in html
     assert "11,6 kn" in html
-    assert "Top speed</div>" in html
+    assert "Topsnelheid</div>" in html
 
 
 def test_write_html_logbook_shows_low_battery_warning(tmp_path: Path):
@@ -369,18 +369,22 @@ def test_write_html_logbook_shows_speed_at_typical_rpm_tooltip(tmp_path: Path):
 
     html = out_path.read_text(encoding="utf-8")
     assert "2250" in html
-    assert "avg 13,0 kn at that RPM (12,6-13,4 kn)" in html
+    assert "gem. 13,0 kn bij dat toerental (12,6-13,4 kn)" in html
 
 
 def test_write_html_logbook_shows_motion_variation(tmp_path: Path):
+    """The visible cell shows just the numbers (roll, then pitch) so the column stays narrow --
+    which of the two is which is explained by the "Beweging" column header's own tooltip, and
+    spelled out again here in this cell's tooltip."""
     trip = _trip(roll_variation_deg=2.5, pitch_variation_deg=0.7)
     out_path = tmp_path / "logbook.html"
 
     write_html_logbook([trip], out_path)
 
     html = out_path.read_text(encoding="utf-8")
-    assert "roll ±2,5°" in html
-    assert "pitch ±0,7°" in html
+    assert "±2,5°, ±0,7°" in html  # the visible, numbers-only cell content
+    assert "slingeren ±2,5°" in html
+    assert "stampen ±0,7°" in html
 
 
 def test_write_html_logbook_shows_motion_peak_in_tooltip(tmp_path: Path):
@@ -393,9 +397,9 @@ def test_write_html_logbook_shows_motion_peak_in_tooltip(tmp_path: Path):
     write_html_logbook([trip], out_path)
 
     html = out_path.read_text(encoding="utf-8")
-    assert "roll ±2,5°" in html
-    assert "roll peak 23,0°" in html
-    assert "pitch peak 5,3°" in html
+    assert "slingeren ±2,5°" in html
+    assert "slingeren piek 23,0°" in html
+    assert "stampen piek 5,3°" in html
 
 
 def test_write_html_logbook_water_temp_badge_shows_range_when_notable(tmp_path: Path):
@@ -409,12 +413,15 @@ def test_write_html_logbook_water_temp_badge_shows_range_when_notable(tmp_path: 
 
 
 def test_write_html_logbook_no_water_temp_badge_without_data(tmp_path: Path):
+    """The "Beweging" column header always carries its own explanatory temp-hover tooltip
+    (regardless of trip data), so this checks for the water-temp badge's own tooltip content
+    specifically, not just the shared temp-hover class."""
     out_path = tmp_path / "logbook.html"
 
     write_html_logbook([_trip()], out_path)
 
     html = out_path.read_text(encoding="utf-8")
-    assert 'class="temp-hover"' not in html
+    assert "🌡️" not in html
 
 
 def test_write_html_logbook_escapes_place_names(tmp_path: Path):

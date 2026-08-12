@@ -1,8 +1,10 @@
 """Writes the whole logbook out as a single, self-contained HTML file: a boat name header,
 overall totals (trip count, distance, fuel, engine hours, average consumption), trips grouped
 by year and ISO week, a per-trip route map (Leaflet + OpenStreetMap) that opens in a popup when
-you click a trip's "Map" button, and a per-trip periodic course/speed/position log (like a
+you click a trip's "Kaart" button, and a per-trip periodic course/speed/position log (like a
 traditional paper logbook) that opens the same way via a "Log" button.
+
+All UI text lives in translations.py, not here -- see that module's docstring for why.
 
 Everything lives in one file -- there's nothing to keep together or link between. Map tiles and
 the Leaflet library load from a CDN when you view the page, so viewing the map requires internet
@@ -37,6 +39,7 @@ from .logbook_writer import (
     _trip_utc_offset_hours,
     _typical_rpm_text,
 )
+from .translations import MONTH_ABBR_NL, NL as T
 from .tripbuilder import NavSample, TripLeg
 
 _LEAFLET_CSS = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -89,10 +92,19 @@ def _compute_totals(trips: List[TripLeg]) -> _Totals:
     )
 
 
+def _localized_date(d: date) -> str:
+    """strftime's %b is locale-independent (always English month abbreviations) unless the
+    process locale is changed, which is fragile/platform-dependent -- MONTH_ABBR_NL avoids
+    that."""
+    text = f"{d:%b %d}"
+    month, day = text.split(" ", 1)
+    return f"{MONTH_ABBR_NL[month]} {day}"
+
+
 def _week_label(iso_year: int, iso_week: int) -> str:
     monday = date.fromisocalendar(iso_year, iso_week, 1)
     sunday = monday + timedelta(days=6)
-    return f"Week {iso_week} ({monday:%b %d} - {sunday:%b %d})"
+    return f"{T['week_label_prefix']} {iso_week} ({_localized_date(monday)} - {_localized_date(sunday)})"
 
 
 def _decimated_points(trip: TripLeg) -> List[Tuple[float, float]]:
@@ -135,31 +147,38 @@ def _water_temp_badge_html(trip: TripLeg) -> str:
 
 
 def _motion_variation_html(trip: TripLeg) -> str:
-    """Plain text in the table cell (standard deviation, the "typical" motion); hovering shows
-    the peak-to-peak roll/pitch range too -- a trip that's mostly calm with one rough patch
-    still averages out to a small standard deviation, so the single worst swing is worth
-    surfacing separately rather than only showing the diluted average."""
+    """Just the numbers (roll, then pitch standard deviation, in that order) in the table cell so
+    the column stays narrow; hovering shows which is which (slingeren/stampen) plus the
+    peak-to-peak range -- a trip that's mostly calm with one rough patch still averages out to a
+    small standard deviation, so the single worst swing is worth surfacing separately rather than
+    only showing the diluted average. The column header itself also explains the number order
+    (see _HEADER_TOOLTIPS) since a bare "±2,5°, ±0,7°" means nothing without that context."""
     visible_parts = []
+    tooltip_avg_parts = []
     if trip.roll_variation_deg is not None:
-        visible_parts.append(f"roll ±{_nl_num(trip.roll_variation_deg)}°")
+        visible_parts.append(f"±{_nl_num(trip.roll_variation_deg)}°")
+        tooltip_avg_parts.append(f"{T['motion_roll']} ±{_nl_num(trip.roll_variation_deg)}°")
     if trip.pitch_variation_deg is not None:
-        visible_parts.append(f"pitch ±{_nl_num(trip.pitch_variation_deg)}°")
+        visible_parts.append(f"±{_nl_num(trip.pitch_variation_deg)}°")
+        tooltip_avg_parts.append(f"{T['motion_pitch']} ±{_nl_num(trip.pitch_variation_deg)}°")
     if not visible_parts:
         return ""
     visible = escape(", ".join(visible_parts))
 
     peak_parts = []
     if trip.roll_range_deg is not None:
-        peak_parts.append(f"roll peak {_nl_num(trip.roll_range_deg)}°")
+        peak_parts.append(f"{T['motion_roll']} {T['motion_peak']} {_nl_num(trip.roll_range_deg)}°")
     if trip.pitch_range_deg is not None:
-        peak_parts.append(f"pitch peak {_nl_num(trip.pitch_range_deg)}°")
-    if not peak_parts:
-        return visible
-    peak = escape(", ".join(peak_parts))
+        peak_parts.append(f"{T['motion_pitch']} {T['motion_peak']} {_nl_num(trip.pitch_range_deg)}°")
+
+    tooltip_text = ", ".join(tooltip_avg_parts)
+    if peak_parts:
+        tooltip_text += " (" + ", ".join(peak_parts) + ")"
+    tooltip = escape(tooltip_text)
     return (
         f'<span class="temp-hover">{visible}'
         f'<span class="temp-tooltip" style="background:#eef4fb;color:#1a4a7a;">'
-        f"〰️ {peak}</span></span>"
+        f"〰️ {tooltip}</span></span>"
     )
 
 
@@ -178,10 +197,14 @@ def _typical_rpm_html(trip: TripLeg) -> str:
 
     if len(trip.typical_rpm_speed_kn) == 1:
         min_kn, max_kn, avg_kn = next(iter(trip.typical_rpm_speed_kn.values()))
-        tooltip = f"avg {_nl_num(avg_kn)} kn at that RPM ({_nl_num(min_kn)}-{_nl_num(max_kn)} kn)"
+        tooltip = T["rpm_tooltip_single"].format(
+            avg=_nl_num(avg_kn), min=_nl_num(min_kn), max=_nl_num(max_kn)
+        )
     else:
         tooltip = ", ".join(
-            f"engine {instance}: avg {_nl_num(avg_kn)} kn ({_nl_num(min_kn)}-{_nl_num(max_kn)} kn)"
+            T["rpm_tooltip_per_engine"].format(
+                instance=instance, avg=_nl_num(avg_kn), min=_nl_num(min_kn), max=_nl_num(max_kn)
+            )
             for instance, (min_kn, max_kn, avg_kn) in sorted(trip.typical_rpm_speed_kn.items())
         )
     tooltip = escape(tooltip)
@@ -229,7 +252,7 @@ def _periodic_log_entries(
 
 
 def _log_cell_html(trip: TripLeg, idx: int, interval_minutes: float, offset_hours: float) -> str:
-    """Button + <dialog> popup (like Map, not an inline-expanding table) so opening the log
+    """Button + <dialog> popup (like the map, not an inline-expanding table) so opening the log
     doesn't push the rest of a possibly very wide, already horizontally-scrolled trips table
     around -- found in practice: with an inline table, the COG/SOG columns could end up scrolled
     out of view off the right edge of the same .table-scroll region the button itself was in,
@@ -248,14 +271,16 @@ def _log_cell_html(trip: TripLeg, idx: int, interval_minutes: float, offset_hour
             f"<td>{cog_text}</td><td>{sog_text}</td></tr>"
         )
     table = (
-        '<table class="log-table"><thead><tr><th>Tijd</th><th>Positie</th><th>Koers</th><th>Snelheid</th></tr></thead>'
-        f'<tbody>{"".join(rows)}</tbody></table>'
+        "<table class=\"log-table\"><thead><tr>"
+        f"<th>{escape(T['log_header_time'])}</th><th>{escape(T['log_header_position'])}</th>"
+        f"<th>{escape(T['log_header_cog'])}</th><th>{escape(T['log_header_sog'])}</th>"
+        f'</tr></thead><tbody>{"".join(rows)}</tbody></table>'
     )
     dialog = (
         f'<dialog class="log-dialog" id="log-{idx}">{table}'
-        '<button type="button" class="close-log">Sluiten</button></dialog>'
+        f'<button type="button" class="close-log">{escape(T["log_close_button"])}</button></dialog>'
     )
-    return f'<button type="button" class="show-log" data-trip="{idx}">Log</button>{dialog}'
+    return f'<button type="button" class="show-log" data-trip="{idx}">{escape(T["log_button"])}</button>{dialog}'
 
 
 def _totals_html(totals: _Totals) -> str:
@@ -266,38 +291,40 @@ def _totals_html(totals: _Totals) -> str:
     avg_speed_kn = totals.distance_nm / totals.moving_hours if totals.moving_hours > 0 else None
 
     items = [
-        ("Trips", str(totals.trip_count)),
-        ("Total distance", f"{_nl_num(totals.distance_nm)} nm"),
-        ("Total hours", f"{_nl_num(totals.moving_hours)} h"),
-        ("Total fuel (calculated)", f"{_nl_num(totals.fuel_liters)} L"),
+        (T["totals_trips"], str(totals.trip_count)),
+        (T["totals_distance"], f"{_nl_num(totals.distance_nm)} nm"),
+        (T["totals_hours"], f"{_nl_num(totals.moving_hours)} h"),
+        (T["totals_fuel_calculated"], f"{_nl_num(totals.fuel_liters)} L"),
     ]
     if totals.fuel_liters_device is not None:
-        items.append(("Total fuel (engine meter)", f"{_nl_num(totals.fuel_liters_device)} L"))
+        items.append((T["totals_fuel_engine_meter"], f"{_nl_num(totals.fuel_liters_device)} L"))
     if avg_l_per_nm is not None:
-        items.append(("Avg. consumption", f"{_nl_num(avg_l_per_nm, 2)} L/nm"))
+        items.append((T["totals_avg_consumption"], f"{_nl_num(avg_l_per_nm, 2)} L/nm"))
     if avg_l_per_hour is not None:
-        items.append(("Avg. consumption", f"{_nl_num(avg_l_per_hour)} L/h"))
+        items.append((T["totals_avg_consumption"], f"{_nl_num(avg_l_per_hour)} L/h"))
     if avg_speed_kn is not None:
-        items.append(("Avg speed", f"{_nl_num(avg_speed_kn)} kn"))
+        items.append((T["totals_avg_speed"], f"{_nl_num(avg_speed_kn)} kn"))
     if totals.max_speed_kn is not None:
-        items.append(("Top speed", f"{_nl_num(totals.max_speed_kn)} kn"))
+        items.append((T["totals_top_speed"], f"{_nl_num(totals.max_speed_kn)} kn"))
 
     # The engine's own absolute hour meter (for maintenance intervals), as of the most recent
     # trip -- distinct from "hours logged", which only counts time run during this logbook's
     # own trips and misses everything the engine ran before logging started.
     if len(totals.engine_hours_current) == 1:
         hours = next(iter(totals.engine_hours_current.values()))
-        items.append(("Engine hour meter", f"{_nl_num(hours)} h"))
+        items.append((T["totals_engine_hour_meter"], f"{_nl_num(hours)} h"))
     else:
         for instance, hours in sorted(totals.engine_hours_current.items()):
-            items.append((f"Engine hour meter, engine {instance}", f"{_nl_num(hours)} h"))
+            label = T["totals_engine_hour_meter_engine"].format(instance=instance)
+            items.append((label, f"{_nl_num(hours)} h"))
 
     if len(totals.engine_hours) == 1:
         hours = next(iter(totals.engine_hours.values()))
-        items.append(("Hours logged", f"{_nl_num(hours)} h"))
+        items.append((T["totals_hours_logged"], f"{_nl_num(hours)} h"))
     else:
         for instance, hours in sorted(totals.engine_hours.items()):
-            items.append((f"Hours logged, engine {instance}", f"{_nl_num(hours)} h"))
+            label = T["totals_hours_logged_engine"].format(instance=instance)
+            items.append((label, f"{_nl_num(hours)} h"))
 
     cards = "".join(
         f'<div class="stat"><div class="stat-label">{escape(label)}</div>'
@@ -321,7 +348,9 @@ def _trip_row_html(
     avg_consumption_nm = _avg_consumption_l_per_nm(trip)
 
     map_cell = (
-        f'<button class="show-map" data-trip="{idx}">Map</button>' if trip.track else ""
+        f'<button class="show-map" data-trip="{idx}">{escape(T["map_button_show"])}</button>'
+        if trip.track
+        else ""
     )
 
     cells = [
@@ -357,37 +386,51 @@ def _trip_row_html(
     return f'<tr class="trip-row"{uid_attr}>{row}</tr>{map_row}'
 
 
-_HEADER_FULL_NAMES = {"Dep.": "Departure", "Arr.": "Arrival"}
+_HEADER_FULL_NAMES = {
+    T["header_departure_abbr"]: T["header_departure_full"],
+    T["header_arrival_abbr"]: T["header_arrival_full"],
+}
+# Headers whose meaning isn't obvious from the label alone get a hover tooltip (same CSS-only
+# mechanism as the table cells, see .temp-hover/.temp-tooltip) instead of a longer header.
+_HEADER_TOOLTIPS = {T["header_motion"]: T["header_motion_tooltip"]}
 
 
 def _header_cell_html(label: str) -> str:
     full = _HEADER_FULL_NAMES.get(label)
     if full is None:
-        return escape(label)
-    # Shows the abbreviation by default; a wide-enough viewport swaps to the full word (see the
-    # .hdr-full / .hdr-abbr media query in write_html_logbook's <style>).
-    return f'<span class="hdr-full">{escape(full)}</span><span class="hdr-abbr">{escape(label)}</span>'
+        base = escape(label)
+    else:
+        # Shows the abbreviation by default; a wide-enough viewport swaps to the full word (see
+        # the .hdr-full / .hdr-abbr media query in write_html_logbook's <style>).
+        base = f'<span class="hdr-full">{escape(full)}</span><span class="hdr-abbr">{escape(label)}</span>'
+    tooltip = _HEADER_TOOLTIPS.get(label)
+    if tooltip is None:
+        return base
+    return (
+        f'<span class="temp-hover">{base}'
+        f'<span class="temp-tooltip" style="background:#eef4fb;color:#1a4a7a;">{escape(tooltip)}</span></span>'
+    )
 
 
 _HEADERS = [
-    "Date",
-    "Dep.",
-    "From",
-    "Arr.",
-    "To",
-    "Duration",
-    "Distance",
-    "Avg speed",
-    "Max speed",
-    "Fuel",
-    "L/nm",
-    "Engine hours",
-    "RPM",
-    "Warnings",
-    "Water temp",
-    "Motion",
-    "Route",
-    "Log",
+    T["header_date"],
+    T["header_departure_abbr"],
+    T["header_from"],
+    T["header_arrival_abbr"],
+    T["header_to"],
+    T["header_duration"],
+    T["header_distance"],
+    T["header_avg_speed"],
+    T["header_max_speed"],
+    T["header_fuel"],
+    T["header_l_per_nm"],
+    T["header_engine_hours"],
+    T["header_rpm"],
+    T["header_warnings"],
+    T["header_water_temp"],
+    T["header_motion"],
+    T["header_route"],
+    T["header_log"],
 ]
 
 
@@ -408,8 +451,9 @@ def write_html_logbook(
     each trip row so a future feature could key off it instead of a timestamp that could shift
     with a trip-recognition fix. Not used by anything else yet.
 
-    ``generated_at``: shown as "Last updated" under the heading, in the local time of whoever
-    generates the file. Defaults to now; a caller passes a fixed value only for testing."""
+    ``generated_at``: shown as "Laatst bijgewerkt" under the heading, in the local time of
+    whoever generates the file. Defaults to now; a caller passes a fixed value only for
+    testing."""
     if generated_at is None:
         generated_at = datetime.now()
     trips = list(trips)
@@ -465,14 +509,16 @@ def write_html_logbook(
     }
     trips_json = json.dumps(trip_data).replace("</", "<\\/")
 
-    title = f"{boat_name} - Sailing Logbook" if boat_name else "Sailing Logbook"
-    heading = f"{escape(boat_name)} &mdash; Sailing Logbook" if boat_name else "Sailing Logbook"
+    title = f"{boat_name} - {T['logbook_title_suffix']}" if boat_name else T["logbook_title_suffix"]
+    heading = (
+        f"{escape(boat_name)} &mdash; {T['logbook_title_suffix']}" if boat_name else T["logbook_title_suffix"]
+    )
 
     vessel_info_lines = []
     if mmsi:
         vessel_info_lines.append(f"MMSI: {escape(mmsi)}")
     if call_sign:
-        vessel_info_lines.append(f"Call sign: {escape(call_sign)}")
+        vessel_info_lines.append(f"{T['vessel_call_sign']}: {escape(call_sign)}")
     vessel_info_html = (
         '<div class="vessel-info">' + "".join(f"<div>{line}</div>" for line in vessel_info_lines) + "</div>"
         if vessel_info_lines
@@ -480,7 +526,7 @@ def write_html_logbook(
     )
 
     html = f"""<!DOCTYPE html>
-<html lang="en">
+<html lang="nl">
 <head>
 <meta charset="utf-8">
 <title>{escape(title)}</title>
@@ -549,17 +595,19 @@ def write_html_logbook(
 <body>
 <noscript>
   <div class="noscript-warning">
-    The "Map" and "Log" buttons in this logbook need JavaScript to open. Most email programs
-    strip that out of attachments, so if you're reading this in an email client, save the
-    attachment and open it in a web browser (Chrome, Edge, Firefox, Safari, ...) instead.
+    {escape(T["noscript_warning"])}
   </div>
 </noscript>
 <div class="header-row"><h1>{heading}</h1>{vessel_info_html}</div>
-<div class="last-updated">Last updated: {generated_at:%Y-%m-%d %H:%M}</div>
+<div class="last-updated">{escape(T["last_updated"])}: {generated_at:%Y-%m-%d %H:%M}</div>
 {_totals_html(_compute_totals(trips))}
 {"".join(sections)}
 <script>
 const TRIPS = {trips_json};
+const MAP_SHOW = {json.dumps(T["map_button_show"])};
+const MAP_HIDE = {json.dumps(T["map_button_hide"])};
+const MAP_MARKER_DEPARTURE = {json.dumps(T["map_marker_departure"])};
+const MAP_MARKER_ARRIVAL = {json.dumps(T["map_marker_arrival"])};
 // position: fixed + JS placement (instead of position: absolute anchored to the cell) so a
 // tooltip on the last row of a table never gets clipped by .table-scroll's overflow-x: auto --
 // setting only one overflow axis makes the browser clip the other one too, cutting off anything
@@ -589,7 +637,7 @@ document.querySelectorAll('.show-map').forEach(function(btn) {{
     var row = document.querySelector('.trip-map-row[data-trip="' + idx + '"]');
     var visible = row.style.display !== 'none';
     row.style.display = visible ? 'none' : '';
-    btn.textContent = visible ? 'Map' : 'Hide map';
+    btn.textContent = visible ? MAP_SHOW : MAP_HIDE;
     if (!visible && !row.dataset.initialized) {{
       row.dataset.initialized = '1';
       var map = L.map('map-' + idx);
@@ -599,8 +647,8 @@ document.querySelectorAll('.show-map').forEach(function(btn) {{
       }}).addTo(map);
       var points = TRIPS[idx].points;
       var line = L.polyline(points, {{color: '#1a6ecc', weight: 3}}).addTo(map);
-      L.marker(points[0]).addTo(map).bindPopup('Departure');
-      L.marker(points[points.length - 1]).addTo(map).bindPopup('Arrival');
+      L.marker(points[0]).addTo(map).bindPopup(MAP_MARKER_DEPARTURE);
+      L.marker(points[points.length - 1]).addTo(map).bindPopup(MAP_MARKER_ARRIVAL);
       map.fitBounds(line.getBounds(), {{padding: [20, 20]}});
       setTimeout(function() {{ map.invalidateSize(); }}, 0);
     }}
