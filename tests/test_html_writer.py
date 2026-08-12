@@ -1,8 +1,9 @@
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from nmea2000processor.html_writer import write_html_logbook
-from nmea2000processor.tripbuilder import BatteryHealth, NavSample, TripLeg
+from nmea2000processor.tripbuilder import BatteryHealth, EngineHealth, NavSample, TripLeg
 
 
 def _trip(**overrides) -> TripLeg:
@@ -149,6 +150,23 @@ def test_write_html_logbook_groups_by_year_and_week(tmp_path: Path):
     assert "<h2>2026</h2>" in html
     # 2026 is a more recent year and must appear before 2025 in the document
     assert html.index("<h2>2026</h2>") < html.index("<h2>2025</h2>")
+
+
+def test_write_html_logbook_sequence_number_resets_each_year(tmp_path: Path):
+    """Volgnummer counts trips chronologically within a year (1, 2, 3, ...), independent of the
+    display order (most recent week first) -- and starts back at 1 for the next year."""
+    trip_2025_a = _trip(depart_time=datetime(2025, 6, 10, 9, 0), arrive_time=datetime(2025, 6, 10, 10, 0))
+    trip_2025_b = _trip(depart_time=datetime(2025, 6, 17, 9, 0), arrive_time=datetime(2025, 6, 17, 10, 0))
+    trip_2026_a = _trip(depart_time=datetime(2026, 7, 15, 9, 0), arrive_time=datetime(2026, 7, 15, 10, 0))
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([trip_2025_a, trip_2025_b, trip_2026_a], out_path)
+
+    html = out_path.read_text(encoding="utf-8")
+    rows = re.findall(r'<tr class="trip-row"[^>]*><td>(\d+)</td>', html)
+    # display order: 2026's only trip (seq 1), then 2025's b (chronologically 2nd -> seq 2, but
+    # shown first within 2025 since its week is later), then 2025's a (chronologically 1st -> seq 1)
+    assert rows == ["1", "2", "1"]
 
 
 def test_write_html_logbook_one_table_per_year_with_week_divider_rows(tmp_path: Path):
@@ -349,6 +367,36 @@ def test_write_html_logbook_shows_low_battery_warning(tmp_path: Path):
     assert "low battery 11,8 V" in html
 
 
+def test_write_html_logbook_warnings_cell_shows_a_count(tmp_path: Path):
+    """The cell itself shows just a count, not the warning text (which would blow up the column
+    width with several warnings) -- the actual text is in a hover tooltip, same pattern as the
+    other tooltip columns."""
+    trip = _trip(
+        engine_health={
+            0: EngineHealth(None, None, None, None, None, warnings=frozenset({"low oil pressure", "overheat"}))
+        },
+        battery_health={0: BatteryHealth(avg_voltage_v=12.6, min_voltage_v=11.8)},
+    )
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([trip], out_path, battery_warning_voltage=12.2)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert 'class="temp-hover warning-count">3<' in html  # 2 engine warnings + 1 battery
+    assert "low oil pressure" in html
+    assert "overheat" in html
+    assert "low battery 11,8 V" in html
+
+
+def test_write_html_logbook_no_warnings_cell_without_warnings(tmp_path: Path):
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([_trip()], out_path)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert 'class="temp-hover warning-count"' not in html
+
+
 def test_write_html_logbook_shows_water_temp_badge(tmp_path: Path):
     trip = _trip(avg_water_temp_c=21.8, min_water_temp_c=21.7, max_water_temp_c=21.9)
     out_path = tmp_path / "logbook.html"
@@ -385,6 +433,17 @@ def test_write_html_logbook_shows_motion_variation(tmp_path: Path):
     assert "±2,5°, ±0,7°" in html  # the visible, numbers-only cell content
     assert "slingeren ±2,5°" in html
     assert "stampen ±0,7°" in html
+
+
+def test_write_html_logbook_motion_header_tooltip_has_no_ordinal_prefixes(tmp_path: Path):
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([_trip()], out_path)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert "slingeren (roll), stampen (pitch)" in html
+    assert "1e getal" not in html
+    assert "2e:" not in html
 
 
 def test_write_html_logbook_shows_motion_peak_in_tooltip(tmp_path: Path):

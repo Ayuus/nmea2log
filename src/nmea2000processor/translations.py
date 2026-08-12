@@ -25,6 +25,7 @@ NL: Dict[str, str] = {
         "vanuit de e-mail te bekijken."
     ),
     # Trips table headers (see html_writer._HEADERS)
+    "header_seq": "Volgnummer",
     "header_date": "Datum",
     "header_departure_abbr": "Vertr.",
     "header_departure_full": "Vertrek",
@@ -43,7 +44,7 @@ NL: Dict[str, str] = {
     "header_warnings": "Waarschuwingen",
     "header_water_temp": "Watertemp.",
     "header_motion": "Beweging",
-    "header_motion_tooltip": "1e getal: slingeren (roll), 2e: stampen (pitch)",
+    "header_motion_tooltip": "slingeren (roll), stampen (pitch)",
     "header_route": "Route",
     "header_log": "Log",
     # Week divider row, e.g. "Week 32 (11 aug - 17 aug)"

@@ -125,6 +125,34 @@ _TEMP_COLORS = (
 _TEMP_COLOR_HOT = ("#FCEBEB", "#791F1F")
 
 
+def _warnings_count(trip: TripLeg, battery_warning_voltage: Optional[float]) -> int:
+    """Counts individual warnings (not text segments) directly from the underlying data instead
+    of parsing _all_warnings_text's semicolon-joined string, since one engine's segment can
+    itself contain several comma-separated warnings."""
+    count = sum(len(health.warnings) for health in trip.engine_health.values())
+    if battery_warning_voltage is not None:
+        count += sum(
+            1
+            for health in trip.battery_health.values()
+            if health.min_voltage_v is not None and health.min_voltage_v < battery_warning_voltage
+        )
+    return count
+
+
+def _warnings_html(trip: TripLeg, battery_warning_voltage: Optional[float]) -> str:
+    """Just the count in the cell (so a trip with many warnings doesn't blow up the column
+    width); hovering shows the actual warning text, same pattern as the other tooltip columns."""
+    count = _warnings_count(trip, battery_warning_voltage)
+    if count == 0:
+        return ""
+    tooltip = escape(_all_warnings_text(trip, battery_warning_voltage))
+    return (
+        f'<span class="temp-hover warning-count">{count}'
+        f'<span class="temp-tooltip" style="background:#fdecea;color:#7a2b22;">'
+        f"⚠️ {tooltip}</span></span>"
+    )
+
+
 def _water_temp_badge_html(trip: TripLeg) -> str:
     """Plain text in the table cell (so it doesn't blow up the column width); hovering over it
     shows the colored thermometer badge (with the min-max range, if notable) as a CSS-only
@@ -341,6 +369,7 @@ def _trip_row_html(
     trip_uid: Optional[str] = None,
     battery_warning_voltage: Optional[float] = None,
     log_interval_minutes: float = _DEFAULT_LOG_INTERVAL_MINUTES,
+    seq: Optional[int] = None,
 ) -> str:
     offset = _trip_utc_offset_hours(trip, utc_offset_hours)
     depart_local = _to_local(trip.depart_time, offset)
@@ -354,6 +383,7 @@ def _trip_row_html(
     )
 
     cells = [
+        str(seq) if seq is not None else "",
         depart_local.strftime("%Y-%m-%d"),
         depart_local.strftime("%H:%M"),
         escape(trip.depart_place),
@@ -367,7 +397,7 @@ def _trip_row_html(
         f"{_nl_num(avg_consumption_nm, 2)} L/nm" if avg_consumption_nm is not None else "",
         escape(_engine_hours_text(trip)),
         _typical_rpm_html(trip),
-        escape(_all_warnings_text(trip, battery_warning_voltage)),
+        _warnings_html(trip, battery_warning_voltage),
         _water_temp_badge_html(trip),
         _motion_variation_html(trip),
         map_cell,
@@ -413,6 +443,7 @@ def _header_cell_html(label: str) -> str:
 
 
 _HEADERS = [
+    T["header_seq"],
     T["header_date"],
     T["header_departure_abbr"],
     T["header_from"],
@@ -473,6 +504,13 @@ def write_html_logbook(
     for iso_year in sorted({y for y, _ in by_week}, reverse=True):
         weeks_in_year = sorted((w for y, w in by_week if y == iso_year), reverse=True)
         year_trips = [trips[i] for w in weeks_in_year for i in by_week[(iso_year, w)]]
+        # ``trips`` is already sorted chronologically (see above), so a trip's own position
+        # within its year's indices, sorted ascending, is exactly its 1-based sequence number
+        # for that year -- resets every year since each year's indices are handled separately.
+        seq_by_index = {
+            i: n + 1
+            for n, i in enumerate(sorted(i for w in weeks_in_year for i in by_week[(iso_year, w)]))
+        }
         # One continuous <table> for the whole year (not one per week): a single table lets the
         # browser compute column widths from *all* the year's rows together, so every week lines
         # up automatically and no column ever ends up narrower than its widest content -- which
@@ -492,6 +530,7 @@ def write_html_logbook(
                     uid_by_trip.get(id(trips[i])),
                     battery_warning_voltage,
                     log_interval_minutes,
+                    seq_by_index[i],
                 )
                 for i in indices
             )
@@ -579,6 +618,7 @@ def write_html_logbook(
   .close-log {{ cursor: pointer; border: 1px solid #ccc; background: white; border-radius: 4px; padding: 0.3em 0.8em; }}
   .close-log:hover {{ background: #f0f0f0; }}
   .temp-hover {{ cursor: default; border-bottom: 1px dotted #999; }}
+  .warning-count {{ color: #c0392b; font-weight: 600; }}
   .temp-tooltip {{
     display: none; position: fixed; z-index: 10;
     border-radius: 12px; padding: 0.15em 0.6em; font-size: 0.85em; white-space: nowrap;
