@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from nmea2000processor.trip_ids import assign_trip_ids
-from nmea2000processor.tripbuilder import TripLeg
+from nmea2000processor.tripbuilder import NavSample, TripLeg
 
 
 def _trip(**overrides) -> TripLeg:
@@ -84,6 +84,28 @@ def test_repeated_same_day_same_route_trips_get_distinct_uids_via_occurrence(tmp
     # Re-running with the same two trips (fresh objects) must reuse both, in order.
     second_run = assign_trip_ids([_trip(), _trip()], registry_path)
     assert second_run == first_run
+
+
+def test_uid_survives_a_changed_place_name_at_the_same_position(tmp_path: Path):
+    """Regression test for a real bug: matching used to be on depart_place/arrive_place *text*,
+    which broke every time that text changed for a reason unrelated to the trip itself --
+    geocoding on vs. off, a future geocoding fix returning a different name for the same spot,
+    --language -- silently orphaning the trip's uid and, with it, any remark already saved
+    against the old one (found in practice: remarks disappearing after every upload, because
+    some uploads used --no-geocode and some didn't). Matching a track's own GPS position instead
+    of the displayed name must survive exactly this."""
+    registry_path = tmp_path / "trip_ids.json"
+    track = [
+        NavSample(datetime(2026, 7, 15, 9, 0), 52.30000, 4.90000, 0.0),
+        NavSample(datetime(2026, 7, 15, 10, 30), 52.35000, 4.95000, 0.0),
+    ]
+    no_geocode_run = _trip(depart_place="52.3000, 4.9000", arrive_place="52.3500, 4.9500", track=track)
+    geocoded_run = _trip(depart_place="Marina A", arrive_place="Marina B", track=track)
+
+    first = assign_trip_ids([no_geocode_run], registry_path)
+    second = assign_trip_ids([geocoded_run], registry_path)
+
+    assert first == second
 
 
 def test_registry_file_is_created_and_reused(tmp_path: Path):

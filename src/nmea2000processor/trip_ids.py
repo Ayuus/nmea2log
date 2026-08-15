@@ -23,14 +23,29 @@ from .tripbuilder import TripLeg
 DEFAULT_REGISTRY_PATH = Path("trip_ids.json")
 
 
+def _position_key(trip: TripLeg) -> str:
+    """Rounded depart/arrive GPS coordinates, not the *displayed* place name -- found in
+    practice: matching on ``depart_place``/``arrive_place`` text broke as soon as that text
+    changed for any reason unrelated to the trip itself (geocoding on vs. off, a future
+    geocoding fix returning a different name for the same spot, --language, ...), silently
+    orphaning that trip's uid -- and with it, any remark already saved against the old one.
+    Rounded to ~100 m (3 decimals), which comfortably groups GPS noise around the same port
+    without conflating two actually-different nearby locations. Falls back to the place-name
+    text only if there's no track at all to take a position from."""
+    if not trip.track:
+        return f"{trip.depart_place}|{trip.arrive_place}"
+    depart, arrive = trip.track[0], trip.track[-1]
+    return f"{depart.lat:.3f},{depart.lon:.3f}|{arrive.lat:.3f},{arrive.lon:.3f}"
+
+
 def _match_key(trip: TripLeg, utc_offset_hours: Optional[float], occurrence: int) -> str:
-    """A trip's identity for matching purposes: local departure date + departure port + arrival
-    port, plus an occurrence counter to tell apart repeated same-day round trips between the
-    same two ports. Deliberately doesn't include the exact time -- that's the whole point,
-    since exact times are exactly what a trip-recognition fix might shift."""
+    """A trip's identity for matching purposes: local departure date + depart/arrive position,
+    plus an occurrence counter to tell apart repeated same-day round trips between the same two
+    spots. Deliberately doesn't include the exact time -- that's the whole point, since exact
+    times are exactly what a trip-recognition fix might shift."""
     offset = _trip_utc_offset_hours(trip, utc_offset_hours)
     local_date = _to_local(trip.depart_time, offset).date().isoformat()
-    return f"{local_date}|{trip.depart_place}|{trip.arrive_place}|{occurrence}"
+    return f"{local_date}|{_position_key(trip)}|{occurrence}"
 
 
 def assign_trip_ids(
