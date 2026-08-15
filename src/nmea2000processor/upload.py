@@ -38,8 +38,16 @@ def upload_file(
     # Batch mode (-b) instead of passing the "put" command as an argument: it's the documented
     # way to script the OpenSSH sftp client non-interactively, and avoids any shell-quoting
     # concerns with paths that contain spaces.
+    #
+    # sftp's own batch-file parser treats backslash as an escape character in its "put"
+    # arguments (like a shell would), so a Windows path's backslashes silently vanish instead of
+    # being treated as path separators -- found in practice: "C:\Users\...\logbook.html" turned
+    # into "C:UsersLogbook.html", which then failed with "No such file or directory". Windows
+    # accepts forward slashes just as well, so using those in the batch file sidesteps the whole
+    # escaping question.
+    local_str = str(local_path).replace("\\", "/")
     with tempfile.NamedTemporaryFile("w", suffix=".sftp-batch", delete=False, encoding="utf-8") as handle:
-        handle.write(f'put "{local_path}" "{remote_path}"\n')
+        handle.write(f'put "{local_str}" "{remote_path}"\n')
         batch_file = Path(handle.name)
 
     try:
@@ -49,6 +57,12 @@ def upload_file(
                 "-i", str(key_file),
                 "-P", str(port),
                 "-o", "BatchMode=yes",  # fail instead of falling back to a password prompt
+                # Auto-trust the host key the first time this host is ever connected to instead
+                # of failing with "Host key verification failed." (BatchMode disables the normal
+                # interactive "are you sure? (yes/no)" prompt too, found in practice) -- still
+                # refuses to connect if a *previously trusted* host's key later changes, which is
+                # what you actually want flagged (a changed key can mean a man-in-the-middle).
+                "-o", "StrictHostKeyChecking=accept-new",
                 "-b", str(batch_file),
                 f"{user}@{host}",
             ],

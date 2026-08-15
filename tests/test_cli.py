@@ -190,7 +190,12 @@ def test_main_reports_a_clear_error_when_ebl_dir_has_no_ebl_files(tmp_path, caps
     assert "no .ebl files found" in capsys.readouterr().err
 
 
-def test_main_reports_a_clear_error_when_upload_is_missing_settings(tmp_path, capsys):
+def test_main_reports_a_clear_error_when_upload_is_missing_settings(tmp_path, monkeypatch, capsys):
+    # Isolated from any real nmea2log.ini (e.g. this project's own, which has real [upload]
+    # settings filled in) -- otherwise those would supply the "missing" settings as config
+    # defaults and this test would stop testing what it claims to (found in practice).
+    monkeypatch.chdir(tmp_path)
+
     exit_code = None
     try:
         main(["--upload", "--ebl-dir", str(tmp_path)])
