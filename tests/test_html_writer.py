@@ -338,6 +338,41 @@ def test_write_html_logbook_without_trip_uids(tmp_path: Path):
     assert "data-uid" not in html
 
 
+def test_write_html_logbook_remarks_disabled_by_default(tmp_path: Path):
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([_trip()], out_path, trip_uids=["uid-a"])
+
+    html = out_path.read_text(encoding="utf-8")
+    assert 'class="show-remarks"' not in html
+    assert "<th>Opmerkingen</th>" not in html  # header not shown either
+
+
+def test_write_html_logbook_shows_remarks_button_when_enabled(tmp_path: Path):
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook(
+        [_trip()], out_path, trip_uids=["uid-a"], remarks_api_url="/wp-json/nmea2log/v1/remarks",
+    )
+
+    html = out_path.read_text(encoding="utf-8")
+    assert "Opmerkingen" in html  # header
+    assert 'class="show-remarks" data-trip="0"' in html
+    assert 'id="remarks-0"' in html
+    assert 'data-trip-uid="uid-a"' in html
+    assert '"/wp-json/nmea2log/v1/remarks"' in html  # embedded as the JS REMARKS_API_URL const
+
+
+def test_write_html_logbook_no_remarks_button_without_a_trip_uid(tmp_path: Path):
+    out_path = tmp_path / "logbook.html"
+
+    # trip_uids omitted -> no stable id to key a remark on
+    write_html_logbook([_trip()], out_path, remarks_api_url="/wp-json/nmea2log/v1/remarks")
+
+    html = out_path.read_text(encoding="utf-8")
+    assert 'class="show-remarks"' not in html
+
+
 def test_write_html_logbook_shows_max_speed_per_trip_and_overall(tmp_path: Path):
     trip_a = _trip(
         depart_time=datetime(2026, 7, 15, 9, 0), arrive_time=datetime(2026, 7, 15, 10, 0),

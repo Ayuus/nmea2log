@@ -19,10 +19,10 @@ NL: Dict[str, str] = {
     "vessel_call_sign": "Roepnaam",
     # <noscript> banner
     "noscript_warning": (
-        'De knoppen "Kaart" en "Log" in dit logboek hebben JavaScript nodig om te openen. De '
-        "meeste e-mailprogramma's verwijderen dat uit bijlagen -- open dit bestand in dat geval "
-        "in een webbrowser (Chrome, Edge, Firefox, Safari, ...) in plaats van het rechtstreeks "
-        "vanuit de e-mail te bekijken."
+        'De knoppen "Kaart", "Log" en "Opmerking" in dit logboek hebben JavaScript nodig om te '
+        "openen. De meeste e-mailprogramma's verwijderen dat uit bijlagen -- open dit bestand in "
+        "dat geval in een webbrowser (Chrome, Edge, Firefox, Safari, ...) in plaats van het "
+        "rechtstreeks vanuit de e-mail te bekijken."
     ),
     # Trips table headers (see html_writer._HEADERS)
     "header_seq_abbr": "Nr.",
@@ -42,12 +42,13 @@ NL: Dict[str, str] = {
     "header_l_per_nm": "L/nm",
     "header_engine_hours": "Motoruren",
     "header_rpm": "Toerental",
-    "header_warnings": "Waarschuwingen",
+    "header_warnings": "Meldingen",
     "header_water_temp": "Watertemp.",
     "header_motion": "Beweging",
     "header_motion_tooltip": "slingeren (roll), stampen (pitch)",
     "header_route": "Route",
     "header_log": "Log",
+    "header_remarks": "Opmerkingen",
     # Week divider row, e.g. "Week 32 (11 aug - 17 aug)"
     "week_label_prefix": "Week",
     # Totals cards
@@ -82,6 +83,19 @@ NL: Dict[str, str] = {
     "log_header_position": "Positie",
     "log_header_cog": "Koers",
     "log_header_sog": "Snelheid",
+    # Remarks button + popup. Auth for both reading and saving rides on the WordPress login
+    # session that got you to the (login-gated) logbook page in the first place -- no separate
+    # username/password step here, see wordpress-plugin/little_endian-index.php.
+    "remarks_button_placeholder": "Opmerking",
+    "remarks_save_button": "Opslaan",
+    "remarks_cancel_button": "Annuleren",
+    # Shown instead of Opslaan/Annuleren for a logged-in visitor who can read but not save (see
+    # the "can_edit" field the REST endpoint returns) -- just a way out of the dialog, since
+    # there's nothing to cancel if nothing can be changed in the first place.
+    "remarks_close_button": "Sluiten",
+    "remarks_save_forbidden": "Je account mag geen opmerkingen opslaan.",
+    "remarks_save_failed": "Opslaan is niet gelukt, probeer het opnieuw.",
+    "remarks_unavailable": "Opmerkingen konden niet worden geladen.",
 }
 
 # strftime's %b is locale-independent (always English month abbreviations) unless the process

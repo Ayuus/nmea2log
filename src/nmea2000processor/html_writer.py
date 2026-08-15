@@ -47,6 +47,12 @@ _LEAFLET_JS = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
 _MAX_MAP_POINTS = 500
 _KNOT_IN_MS = 0.514444
 _DEFAULT_LOG_INTERVAL_MINUTES = 30.0
+# Off by default, like --upload -- the Remarks column needs a matching WordPress REST endpoint
+# (see wordpress-plugin/) to actually work, which isn't there unless you set it up yourself.
+# Typically just "/wp-json/nmea2log/v1/remarks" once set: a relative path resolves against
+# whatever site the logbook is opened from, so it doesn't need a host configured too as long as
+# logbook.html is uploaded (see --upload) to the same site as the WordPress plugin.
+_DEFAULT_REMARKS_API_URL = ""
 
 
 @dataclass
@@ -311,6 +317,33 @@ def _log_cell_html(trip: TripLeg, idx: int, interval_minutes: float, offset_hour
     return f'<button type="button" class="show-log" data-trip="{idx}">{escape(T["log_button"])}</button>{dialog}'
 
 
+def _remarks_cell_html(trip_uid: Optional[str], idx: int, remarks_api_url: str) -> str:
+    """Button + <dialog> popup (same pattern as Log/Map). The remark text itself isn't known at
+    generation time -- unlike everything else in this file, it doesn't come from the decoded
+    NMEA2000 data at all, but from WordPress (see wordpress-plugin/), fetched by the REMARKS_*
+    script after the page loads -- so this only builds the empty shell; JS fills in the button
+    label and textarea once that fetch resolves. Needs a stable trip_uid to key the remark on
+    (see trip_ids.py) -- without one there's nothing to attach a saved remark to, so no button.
+
+    No login form here: reading and saving both ride on the WordPress session that got you past
+    the login-gated logbook page in the first place (see little_endian-index.php), not a
+    separate credential entered in this dialog."""
+    if not remarks_api_url or not trip_uid:
+        return ""
+    dialog = (
+        f'<dialog class="log-dialog remarks-dialog" id="remarks-{idx}" data-trip-uid="{escape(trip_uid)}">'
+        '<textarea class="remarks-textarea" rows="4" cols="40"></textarea>'
+        '<p class="remarks-error" hidden></p>'
+        '<div class="remarks-buttons">'
+        f'<button type="button" class="remarks-save">{escape(T["remarks_save_button"])}</button>'
+        f'<button type="button" class="remarks-cancel">{escape(T["remarks_cancel_button"])}</button>'
+        "</div>"
+        "</dialog>"
+    )
+    placeholder = escape(T["remarks_button_placeholder"])
+    return f'<button type="button" class="show-remarks" data-trip="{idx}">{placeholder}</button>{dialog}'
+
+
 def _totals_html(totals: _Totals) -> str:
     avg_l_per_nm = totals.fuel_liters / totals.distance_nm if totals.distance_nm > 0 else None
     avg_l_per_hour = totals.fuel_liters / totals.moving_hours if totals.moving_hours > 0 else None
@@ -370,6 +403,7 @@ def _trip_row_html(
     battery_warning_voltage: Optional[float] = None,
     log_interval_minutes: float = _DEFAULT_LOG_INTERVAL_MINUTES,
     seq: Optional[int] = None,
+    remarks_api_url: str = _DEFAULT_REMARKS_API_URL,
 ) -> str:
     offset = _trip_utc_offset_hours(trip, utc_offset_hours)
     depart_local = _to_local(trip.depart_time, offset)
@@ -403,13 +437,15 @@ def _trip_row_html(
         map_cell,
         _log_cell_html(trip, idx, log_interval_minutes, offset),
     ]
+    if remarks_api_url:
+        cells.append(_remarks_cell_html(trip_uid, idx, remarks_api_url))
     row = "".join(f"<td>{cell}</td>" for cell in cells)
     map_row = ""
     if trip.track:
         title = escape(f"{depart_local:%Y-%m-%d %H:%M} {trip.depart_place} -> {trip.arrive_place}")
         map_row = (
             f'<tr class="trip-map-row" data-trip="{idx}" style="display:none">'
-            f'<td colspan="{len(_HEADERS)}"><div class="trip-map-title">{title}</div>'
+            f'<td colspan="{len(_headers_for(remarks_api_url))}"><div class="trip-map-title">{title}</div>'
             f'<div class="map" id="map-{idx}"></div></td></tr>'
         )
     uid_attr = f' data-uid="{escape(trip_uid)}"' if trip_uid else ""
@@ -473,6 +509,15 @@ _HEADERS = [
 ]
 
 
+def _headers_for(remarks_api_url: str) -> List[str]:
+    """The Remarks column only exists at all when the feature is configured (see
+    _DEFAULT_REMARKS_API_URL) -- unlike Map/Log/Route, whose *column* always exists even though
+    individual trips without track data leave that cell empty, "remarks enabled" is a whole-
+    document setting, not a per-trip one, so an unused column isn't shown at all rather than
+    always being present-but-empty."""
+    return _HEADERS + [T["header_remarks"]] if remarks_api_url else _HEADERS
+
+
 def write_html_logbook(
     trips: Iterable[TripLeg],
     path: Path,
@@ -484,15 +529,19 @@ def write_html_logbook(
     battery_warning_voltage: Optional[float] = None,
     generated_at: Optional[datetime] = None,
     log_interval_minutes: float = _DEFAULT_LOG_INTERVAL_MINUTES,
+    remarks_api_url: str = _DEFAULT_REMARKS_API_URL,
 ) -> None:
     """``trip_uids``: one id per trip, in the same order as ``trips`` *before* sorting -- e.g.
     from ``trip_ids.assign_trip_ids(trips)``. Embedded as an invisible ``data-uid`` attribute on
-    each trip row so a future feature could key off it instead of a timestamp that could shift
-    with a trip-recognition fix. Not used by anything else yet.
+    each trip row, and used to key the Remarks feature (see ``remarks_api_url``) -- a uid that
+    survives a trip-recognition fix reshuffling exact timestamps is the whole reason it exists.
 
     ``generated_at``: shown as "Laatst bijgewerkt" under the heading, in the local time of
     whoever generates the file. Defaults to now; a caller passes a fixed value only for
-    testing."""
+    testing.
+
+    ``remarks_api_url``: URL of the WordPress REST endpoint that stores per-trip remarks (see
+    ``wordpress-plugin/``). Empty (default) disables the whole Remarks column."""
     if generated_at is None:
         generated_at = datetime.now()
     trips = list(trips)
@@ -506,7 +555,8 @@ def write_html_logbook(
         iso_year, iso_week, _ = local_date.isocalendar()
         by_week[(iso_year, iso_week)].append(idx)
 
-    header_html = "".join(f"<th>{_header_cell_html(h)}</th>" for h in _HEADERS)
+    headers = _headers_for(remarks_api_url)
+    header_html = "".join(f"<th>{_header_cell_html(h)}</th>" for h in headers)
 
     sections: List[str] = []
     for iso_year in sorted({y for y, _ in by_week}, reverse=True):
@@ -527,7 +577,7 @@ def write_html_logbook(
         for iso_week in weeks_in_year:
             indices = by_week[(iso_year, iso_week)]
             body_rows.append(
-                f'<tr class="week-row"><td colspan="{len(_HEADERS)}">'
+                f'<tr class="week-row"><td colspan="{len(headers)}">'
                 f"{escape(_week_label(iso_year, iso_week))}</td></tr>"
             )
             body_rows.extend(
@@ -539,6 +589,7 @@ def write_html_logbook(
                     battery_warning_voltage,
                     log_interval_minutes,
                     seq_by_index[i],
+                    remarks_api_url,
                 )
                 for i in indices
             )
@@ -638,6 +689,14 @@ def write_html_logbook(
     background: #fff3cd; color: #664d03; border: 1px solid #ffe69c; border-radius: 8px;
     padding: 0.8em 1.2em; margin-bottom: 1.5em;
   }}
+  .show-remarks {{ cursor: pointer; border: 1px solid #1a6ecc; background: white; color: #1a6ecc; border-radius: 4px; padding: 0.2em 0.6em; white-space: nowrap; }}
+  .show-remarks:hover {{ background: #1a6ecc; color: white; }}
+  .remarks-dialog {{ width: 24em; max-width: 90vw; }}
+  .remarks-textarea {{ width: 100%; box-sizing: border-box; font: inherit; margin-bottom: 0.8em; }}
+  .remarks-error {{ color: #c0392b; font-size: 0.85em; margin: 0 0 0.6em; }}
+  .remarks-buttons {{ display: flex; gap: 0.5em; }}
+  .remarks-save {{ cursor: pointer; border: 1px solid #1a6ecc; background: #1a6ecc; color: white; border-radius: 4px; padding: 0.3em 0.8em; }}
+  .remarks-cancel {{ cursor: pointer; border: 1px solid #ccc; background: white; border-radius: 4px; padding: 0.3em 0.8em; }}
 </style>
 </head>
 <body>
@@ -656,6 +715,20 @@ const MAP_SHOW = {json.dumps(T["map_button_show"])};
 const MAP_HIDE = {json.dumps(T["map_button_hide"])};
 const MAP_MARKER_DEPARTURE = {json.dumps(T["map_marker_departure"])};
 const MAP_MARKER_ARRIVAL = {json.dumps(T["map_marker_arrival"])};
+const REMARKS_API_URL = {json.dumps(remarks_api_url)};
+const REMARKS_BUTTON_PLACEHOLDER = {json.dumps(T["remarks_button_placeholder"])};
+const REMARKS_CLOSE_BUTTON = {json.dumps(T["remarks_close_button"])};
+const REMARKS_SAVE_FORBIDDEN = {json.dumps(T["remarks_save_forbidden"])};
+const REMARKS_SAVE_FAILED = {json.dumps(T["remarks_save_failed"])};
+const REMARKS_UNAVAILABLE = {json.dumps(T["remarks_unavailable"])};
+// Filled in by the server (see wordpress-plugin/little_endian-index.php) when this file is
+// served through the login gate, which -- unlike this Python-generated static file -- can call
+// WordPress's own wp_create_nonce('wp_rest'). A POST to the REST API needs this even though the
+// browser already sends the WordPress login cookie automatically (same-origin): the nonce is
+// WordPress's CSRF protection on top of that cookie, required for any state-changing (non-GET)
+// REST request. If this file is opened some other way (not through the gate, or locally), the
+// placeholder never gets replaced and saving fails cleanly with REMARKS_SAVE_FAILED below.
+const WP_REST_NONCE = "%%WP_REST_NONCE%%";
 // position: fixed + JS placement (instead of position: absolute anchored to the cell) so a
 // tooltip on the last row of a table never gets clipped by .table-scroll's overflow-x: auto --
 // setting only one overflow axis makes the browser clip the other one too, cutting off anything
@@ -712,6 +785,74 @@ document.querySelectorAll('.show-log').forEach(function(btn) {{
     if (e.target === dialog) dialog.close();
   }});
 }});
+if (REMARKS_API_URL) {{
+  var remarksButtonsByUid = {{}};
+  document.querySelectorAll('.show-remarks').forEach(function(btn) {{
+    var dialog = document.getElementById('remarks-' + btn.dataset.trip);
+    var tripUid = dialog.dataset.tripUid;
+    var textarea = dialog.querySelector('.remarks-textarea');
+    var errorEl = dialog.querySelector('.remarks-error');
+    remarksButtonsByUid[tripUid] = btn;
+
+    btn.addEventListener('click', function() {{
+      errorEl.hidden = true;
+      dialog.showModal();
+      textarea.focus();
+    }});
+    dialog.querySelector('.remarks-cancel').addEventListener('click', function() {{ dialog.close(); }});
+    dialog.addEventListener('click', function(e) {{
+      if (e.target === dialog) dialog.close();
+    }});
+    dialog.querySelector('.remarks-save').addEventListener('click', function() {{
+      var text = textarea.value;
+      // credentials: 'same-origin' sends the WordPress login cookie automatically (this page and
+      // the REST API are the same site); X-WP-Nonce is WordPress's separate CSRF check on top of
+      // that cookie for any state-changing request (see the WP_REST_NONCE comment above).
+      fetch(REMARKS_API_URL, {{
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {{'Content-Type': 'application/json', 'X-WP-Nonce': WP_REST_NONCE}},
+        body: JSON.stringify({{trip_uid: tripUid, text: text}})
+      }}).then(function(response) {{
+        if (!response.ok) {{
+          errorEl.textContent = response.status === 403 ? REMARKS_SAVE_FORBIDDEN : REMARKS_SAVE_FAILED;
+          errorEl.hidden = false;
+          return;
+        }}
+        dialog.close();
+      }}).catch(function() {{
+        errorEl.textContent = REMARKS_SAVE_FAILED;
+        errorEl.hidden = false;
+      }});
+    }});
+  }});
+
+  fetch(REMARKS_API_URL, {{credentials: 'same-origin'}})
+    .then(function(response) {{ return response.ok ? response.json() : Promise.reject(); }})
+    .then(function(data) {{
+      Object.keys(data.remarks).forEach(function(tripUid) {{
+        var btn = remarksButtonsByUid[tripUid];
+        if (!btn) return;
+        document.getElementById('remarks-' + btn.dataset.trip).querySelector('.remarks-textarea').value = data.remarks[tripUid];
+      }});
+      // can_edit is a property of the logged-in visitor, not of any one trip, so it applies the
+      // same way to every dialog: a "Logboek lezer" account (or anyone else without the
+      // edit_logboek_remarks capability) gets a read-only textarea and just a Sluiten (Close)
+      // button, having only found out they *can't* save by trying it otherwise.
+      if (!data.can_edit) {{
+        document.querySelectorAll('.remarks-dialog').forEach(function(dialog) {{
+          dialog.querySelector('.remarks-textarea').readOnly = true;
+          dialog.querySelector('.remarks-save').hidden = true;
+          dialog.querySelector('.remarks-cancel').textContent = REMARKS_CLOSE_BUTTON;
+        }});
+      }}
+    }})
+    .catch(function() {{
+      Object.keys(remarksButtonsByUid).forEach(function(tripUid) {{
+        remarksButtonsByUid[tripUid].title = REMARKS_UNAVAILABLE;
+      }});
+    }});
+}}
 </script>
 </body>
 </html>

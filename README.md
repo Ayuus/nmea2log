@@ -322,6 +322,43 @@ nmea2log --upload --upload-host ssh.example.transip.nl --upload-user my-user \
   --upload-remote-path logboek/logbook.html --upload-key-file ~/.ssh/id_ed25519 -o logbook.csv
 ```
 
+### Per-trip remarks, login-gated, via WordPress
+
+Pass `--remarks-api-url` to add a "Remarks" button+popup (save/cancel) to each trip, backed by a
+small WordPress plugin (`wordpress-plugin/nmea2log-remarks.php`) instead of a database or server
+of this tool's own. This also login-gates the whole logbook, not just remarks: the uploaded file
+goes to a `private/` directory outside the public web root, and `wordpress-plugin/little_endian-
+index.php` (deployed as e.g. `www/little_endian/index.php`) checks the visitor is both logged in
+and specifically allowed to view the logbook, redirecting to the WordPress login page (not logged
+in) or showing a plain access-denied message (logged in as some unrelated account, e.g. a
+webshop customer) otherwise.
+
+One-time setup on the WordPress site:
+
+1. Upload `wordpress-plugin/nmea2log-remarks.php` to `wp-content/plugins/nmea2log-remarks/` and
+   activate it in wp-admin → Plugins. It registers two purpose-built roles -- deliberately not
+   reusing any built-in WordPress role, since those can already be in use for unrelated things on
+   an existing site (webshop customers, existing contributors, ...): "Logbook Writer" (can view
+   and save remarks) and "Logbook Reader" (can only view). A site Administrator can always do
+   both, without needing either role.
+2. Create the accounts that should have access, in wp-admin → Users, with one of those two roles.
+3. Upload `wordpress-plugin/little_endian-index.php` as `index.php` into the same web directory
+   your uploaded logbook lives under (adjust the two relative paths inside it -- to `wp-load.php`
+   and to the `private/...` file -- if your directory layout differs).
+4. Point `--upload-remote-path` at a location *outside* the public web root (e.g. `private/` on
+   TransIP webhosting, which already isn't served over HTTP), not under `www/` directly -- a file
+   under `www/` is reachable by its URL alone, login or not.
+
+```bash
+nmea2log --upload --remarks-api-url /wp-json/nmea2log/v1/remarks -o logbook.csv
+```
+
+A relative URL resolves against whatever site the page is opened from, so no separate host needs
+configuring as long as the logbook is uploaded to the same site as the plugin. Reading and saving
+both ride on the visitor's existing WordPress login session (cookie + a nonce the login-gate
+script patches into the page at serve time) -- there's no separate username/password entered in
+the popup itself.
+
 ### Useful options
 
 | Option | Meaning |
@@ -347,6 +384,7 @@ nmea2log --upload --upload-host ssh.example.transip.nl --upload-user my-user \
 | `--log-interval-minutes` | Interval between periodic course/speed/position entries in each trip's "Log" table (default 30) |
 | `--upload` | Upload the HTML logbook over SFTP after writing it (see "Uploading the logbook" above) |
 | `--upload-host` / `--upload-user` / `--upload-remote-path` / `--upload-key-file` / `--upload-port` | SFTP connection details (only with `--upload`; default port 22) |
+| `--remarks-api-url` | URL of a WordPress REST endpoint storing per-trip remarks (see "Per-trip remarks" above). Default: disabled |
 | `--engine-count N` | Number of physical engines. With `1`, any extra engine instance in the data is ignored as noise (same idea as the GPS source-dominance filtering) |
 | `--ebl-dir DIR` | Folder to search recursively for `.ebl` files when no logfiles are given and `--live` isn't used either. Default: not set, or the `ebl_dir` setting from the config file |
 | `--battery-warning-voltage V` | Flags a trip's battery voltage as low in the 'Warnings' column if it drops below this at any point (default 12.2 V; a common threshold for a 12V lead-acid battery -- adjust for a 24V system or a different chemistry) |

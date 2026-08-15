@@ -12,7 +12,7 @@ from .config import load_section
 from .ebl_reader import iter_frames as iter_frames_ebl
 from .geocode import Geocoder, NoGeocoder
 from .gpx_writer import write_gpx
-from .html_writer import _DEFAULT_LOG_INTERVAL_MINUTES, write_html_logbook
+from .html_writer import _DEFAULT_LOG_INTERVAL_MINUTES, _DEFAULT_REMARKS_API_URL, write_html_logbook
 from .log import log
 from .logbook_writer import write_csv
 from .model import (
@@ -419,6 +419,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         f"trip's 'Log' table in the HTML logbook (default {_DEFAULT_LOG_INTERVAL_MINUTES:g})",
     )
     parser.add_argument(
+        "--remarks-api-url",
+        type=str,
+        default=_DEFAULT_REMARKS_API_URL,
+        help="URL of a WordPress REST endpoint (see wordpress-plugin/) that stores per-trip "
+        "remarks, shown as a 'Remarks' button+popup per trip in the HTML logbook. Default: "
+        "disabled (empty). Typically '/wp-json/nmea2log/v1/remarks' -- a relative path resolves "
+        "against whatever site the logbook is opened from, so it works without also configuring "
+        "a host as long as the logbook is uploaded (see --upload) to the same site as the plugin.",
+    )
+    parser.add_argument(
         "--engine-count",
         type=int,
         default=None,
@@ -513,6 +523,7 @@ def _apply_config_defaults(parser: argparse.ArgumentParser) -> None:
         ("mmsi", str),
         ("call_sign", str),
         ("log_interval_minutes", float),
+        ("remarks_api_url", str),
         ("engine_count", int),
         ("battery_warning_voltage", float),
         ("ebl_dir", Path),
@@ -721,6 +732,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         trip_uids=trip_uids,
         battery_warning_voltage=args.battery_warning_voltage,
         log_interval_minutes=args.log_interval_minutes,
+        remarks_api_url=args.remarks_api_url,
     )
     log(f"HTML logbook written: {html_path} ({len(trips)} trip(s))")
 
