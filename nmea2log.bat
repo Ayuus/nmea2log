@@ -9,6 +9,7 @@ rem -- silently switching to a different/empty trip_ids.json between runs and or
 rem trip's uid, and with it any remark already saved against the old one (found in practice).
 cd /d "%~dp0"
 
+set "DOWNLOAD_FAILED_FLAG="
 if "%~1"=="" (
     set "OUTPUT=%~dp0logbook.csv"
     py -m nmea2000processor.w2k2_download
@@ -16,12 +17,13 @@ if "%~1"=="" (
         echo.
         echo Download failed or the boat wasn't reachable -- continuing with whatever is
         echo already downloaded. Use nmea2log-no-download.bat to skip this step entirely.
+        set "DOWNLOAD_FAILED_FLAG=--download-failed"
     )
 ) else (
     set "OUTPUT=%~dp1logbook.csv"
 )
 
-py -m nmea2000processor %* -o "%OUTPUT%"
+py -m nmea2000processor %* -o "%OUTPUT%" %DOWNLOAD_FAILED_FLAG%
 if errorlevel 1 (
     echo.
     echo Something went wrong -- see the message above.

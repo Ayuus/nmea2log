@@ -385,6 +385,7 @@ the popup itself.
 | `--upload` | Upload the HTML logbook over SFTP after writing it (see "Uploading the logbook" above) |
 | `--upload-host` / `--upload-user` / `--upload-remote-path` / `--upload-key-file` / `--upload-port` | SFTP connection details (only with `--upload`; default port 22) |
 | `--remarks-api-url` | URL of a WordPress REST endpoint storing per-trip remarks (see "Per-trip remarks" above). Default: disabled |
+| `--download-failed` | Marks the "Laatst bijgewerkt" timestamp in the HTML logbook in red -- pass this when a preceding download step failed, so it's visible at a glance that this run didn't get new data (set automatically by `nmea2log.bat`) |
 | `--engine-count N` | Number of physical engines. With `1`, any extra engine instance in the data is ignored as noise (same idea as the GPS source-dominance filtering) |
 | `--ebl-dir DIR` | Folder to search recursively for `.ebl` files when no logfiles are given and `--live` isn't used either. Default: not set, or the `ebl_dir` setting from the config file |
 | `--battery-warning-voltage V` | Flags a trip's battery voltage as low in the 'Warnings' column if it drops below this at any point (default 12.2 V; a common threshold for a 12V lead-acid battery -- adjust for a 24V system or a different chemistry) |

@@ -527,7 +527,7 @@ def write_html_logbook(
     utc_offset_hours: Optional[float] = None,
     trip_uids: Optional[List[str]] = None,
     battery_warning_voltage: Optional[float] = None,
-    generated_at: Optional[datetime] = None,
+    fetch_failed: bool = False,
     log_interval_minutes: float = _DEFAULT_LOG_INTERVAL_MINUTES,
     remarks_api_url: str = _DEFAULT_REMARKS_API_URL,
 ) -> None:
@@ -536,17 +536,31 @@ def write_html_logbook(
     each trip row, and used to key the Remarks feature (see ``remarks_api_url``) -- a uid that
     survives a trip-recognition fix reshuffling exact timestamps is the whole reason it exists.
 
-    ``generated_at``: shown as "Laatst bijgewerkt" under the heading, in the local time of
-    whoever generates the file. Defaults to now; a caller passes a fixed value only for
-    testing.
+    "Laatst bijgewerkt" shows the most recent trip's own arrival time, not when this file was
+    generated -- a run that couldn't reach the boat (or otherwise turned up no new data) still
+    regenerates the file from whatever's cached, and a fresh-looking generation timestamp would
+    then misleadingly suggest the data itself is current too (found in practice).
+
+    ``fetch_failed``: shows that same timestamp in red, on top of it already reflecting the
+    data's own age -- a second, more visible cue that this run specifically didn't get new data,
+    not just that it happens to have been a while. Not derived from the trip data at all: only
+    the caller (see --download-failed) knows whether the fetch step itself succeeded.
 
     ``remarks_api_url``: URL of the WordPress REST endpoint that stores per-trip remarks (see
     ``wordpress-plugin/``). Empty (default) disables the whole Remarks column."""
-    if generated_at is None:
-        generated_at = datetime.now()
     trips = list(trips)
     uid_by_trip = {id(trip): uid for trip, uid in zip(trips, trip_uids)} if trip_uids is not None else {}
     trips = sorted(trips, key=lambda t: t.depart_time)
+
+    last_updated_html = ""
+    if trips:
+        latest_trip = max(trips, key=lambda t: t.arrive_time)
+        latest_offset = _trip_utc_offset_hours(latest_trip, utc_offset_hours)
+        latest_local = _to_local(latest_trip.arrive_time, latest_offset)
+        last_updated_class = "last-updated fetch-failed" if fetch_failed else "last-updated"
+        last_updated_html = (
+            f'<div class="{last_updated_class}">{escape(T["last_updated"])}: {latest_local:%Y-%m-%d %H:%M}</div>'
+        )
 
     by_week: Dict[Tuple[int, int], List[int]] = defaultdict(list)
     for idx, trip in enumerate(trips):
@@ -636,6 +650,7 @@ def write_html_logbook(
   .header-row {{ display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5em 1.5em; }}
   .vessel-info {{ color: #444; font-size: 1.1em; text-align: right; line-height: 1.4; }}
   .last-updated {{ color: #666; font-size: 0.85em; margin-bottom: 1em; }}
+  .last-updated.fetch-failed {{ color: #c0392b; font-weight: 600; }}
   h2 {{ margin-top: 2em; border-bottom: 2px solid #1a6ecc; padding-bottom: 0.2em; }}
   .totals {{ display: flex; flex-wrap: wrap; gap: 1em; margin: 1em 0 2em; }}
   .stat {{ background: white; border-radius: 8px; padding: 0.8em 1.2em; box-shadow: 0 1px 3px rgba(0,0,0,0.1); min-width: 140px; }}
@@ -706,7 +721,7 @@ def write_html_logbook(
   </div>
 </noscript>
 <div class="header-row"><h1>{heading}</h1>{vessel_info_html}</div>
-<div class="last-updated">{escape(T["last_updated"])}: {generated_at:%Y-%m-%d %H:%M}</div>
+{last_updated_html}
 {_totals_html(_compute_totals(trips))}
 {"".join(sections)}
 <script>

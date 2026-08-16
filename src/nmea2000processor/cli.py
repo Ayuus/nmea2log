@@ -384,6 +384,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--language", type=str, default="nl", help="Language for port names (default nl)")
     parser.add_argument(
+        "--download-failed",
+        action="store_true",
+        help="Marks the 'Laatst bijgewerkt' timestamp in the HTML logbook in red -- pass this "
+        "when a preceding download step (e.g. nmea2log-download) failed, so it's visible at a "
+        "glance that this run couldn't fetch any new data and just regenerated the file from "
+        "what was already cached (set automatically by nmea2log.bat)",
+    )
+    parser.add_argument(
         "--utc-offset",
         type=float,
         default=None,
@@ -731,6 +739,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         utc_offset_hours=args.utc_offset,
         trip_uids=trip_uids,
         battery_warning_voltage=args.battery_warning_voltage,
+        fetch_failed=args.download_failed,
         log_interval_minutes=args.log_interval_minutes,
         remarks_api_url=args.remarks_api_url,
     )

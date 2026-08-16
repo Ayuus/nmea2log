@@ -293,13 +293,38 @@ def test_write_html_logbook_no_log_table_with_a_single_track_point(tmp_path: Pat
     assert 'class="show-log"' not in html
 
 
-def test_write_html_logbook_shows_last_updated_timestamp(tmp_path: Path):
+def test_write_html_logbook_shows_the_latest_trips_arrival_as_last_updated(tmp_path: Path):
+    """Regression test: this used to show *generation* time (datetime.now()), which looked
+    misleadingly fresh on a run that couldn't fetch any new data and just regenerated the file
+    from what was already cached -- found in practice. It must instead reflect how current the
+    data itself is: the most recent trip's own arrival time."""
+    older = _trip(depart_time=datetime(2026, 8, 10, 9, 0), arrive_time=datetime(2026, 8, 10, 10, 0))
+    newest = _trip(depart_time=datetime(2026, 8, 11, 13, 0), arrive_time=datetime(2026, 8, 11, 14, 32))
     out_path = tmp_path / "logbook.html"
 
-    write_html_logbook([_trip()], out_path, generated_at=datetime(2026, 8, 11, 14, 32))
+    write_html_logbook([older, newest], out_path, utc_offset_hours=0)
 
     html = out_path.read_text(encoding="utf-8")
     assert "Laatst bijgewerkt: 2026-08-11 14:32" in html
+
+
+def test_write_html_logbook_marks_last_updated_red_when_fetch_failed(tmp_path: Path):
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([_trip()], out_path, utc_offset_hours=0, fetch_failed=True)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert 'class="last-updated fetch-failed"' in html
+
+
+def test_write_html_logbook_last_updated_not_red_by_default(tmp_path: Path):
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([_trip()], out_path, utc_offset_hours=0)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert 'class="last-updated"' in html
+    assert 'class="last-updated fetch-failed"' not in html
 
 
 def test_write_html_logbook_has_a_noscript_fallback_for_the_map_buttons(tmp_path: Path):
