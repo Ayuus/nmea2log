@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple, TypeVar
 
@@ -625,6 +625,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             all_rpm,
             attitude_by_source,
         ) = _collect_samples(frames, deadline=deadline)
+        # Live is real-time by definition -- there's no equivalent to ebl_time_state's running
+        # "last known System Time" to read back afterwards, but "now" is exactly what that would
+        # have converged to anyway.
+        latest_data_at = datetime.now(timezone.utc).replace(tzinfo=None)
     else:
         start_date = date.fromisoformat(args.start_date) if args.start_date else None
         ebl_time_state: Dict[str, object] = {}
@@ -667,6 +671,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                     f"only re-parsed {len(args.logfiles) - cache_hits}",
                     file=sys.stderr,
                 )
+
+        # The last known absolute time (PGN 126992, System Time) across every processed .ebl
+        # file, not just ones that closed off into a full trip -- so "Laatst bijgewerkt" still
+        # advances while at anchor/idle, instead of lagging behind at the last completed trip's
+        # own arrival time (found in practice).
+        latest_data_at = ebl_time_state.get("current")
 
     all_fixes, all_sogs, primary_gps_source = _select_primary_gps_source(fixes_by_source, sogs_by_source)
     all_depth = _dominant_source_only(depth_by_source)
@@ -739,6 +749,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         utc_offset_hours=args.utc_offset,
         trip_uids=trip_uids,
         battery_warning_voltage=args.battery_warning_voltage,
+        latest_data_at=latest_data_at,
         fetch_failed=args.download_failed,
         log_interval_minutes=args.log_interval_minutes,
         remarks_api_url=args.remarks_api_url,

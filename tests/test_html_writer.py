@@ -308,6 +308,22 @@ def test_write_html_logbook_shows_the_latest_trips_arrival_as_last_updated(tmp_p
     assert "Laatst bijgewerkt: 2026-08-11 14:32" in html
 
 
+def test_write_html_logbook_latest_data_at_overrides_the_last_trips_arrival(tmp_path: Path):
+    """Regression test: even the most recent *completed* trip's arrival can lag behind the
+    latest raw data -- e.g. days spent anchored/idle after the last trip closed off, still
+    logging System Time (PGN 126992) the whole time without ever forming a new trip. The
+    caller's own latest_data_at (see cli.py's ebl_time_state) must win over trip data here."""
+    trip = _trip(depart_time=datetime(2026, 8, 9, 9, 0), arrive_time=datetime(2026, 8, 9, 17, 18))
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook(
+        [trip], out_path, utc_offset_hours=0, latest_data_at=datetime(2026, 8, 16, 8, 5)
+    )
+
+    html = out_path.read_text(encoding="utf-8")
+    assert '<div class="last-updated">Laatst bijgewerkt: 2026-08-16 08:05</div>' in html
+
+
 def test_write_html_logbook_marks_last_updated_red_when_fetch_failed(tmp_path: Path):
     out_path = tmp_path / "logbook.html"
 

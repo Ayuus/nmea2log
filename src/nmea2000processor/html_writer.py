@@ -527,6 +527,7 @@ def write_html_logbook(
     utc_offset_hours: Optional[float] = None,
     trip_uids: Optional[List[str]] = None,
     battery_warning_voltage: Optional[float] = None,
+    latest_data_at: Optional[datetime] = None,
     fetch_failed: bool = False,
     log_interval_minutes: float = _DEFAULT_LOG_INTERVAL_MINUTES,
     remarks_api_url: str = _DEFAULT_REMARKS_API_URL,
@@ -536,10 +537,13 @@ def write_html_logbook(
     each trip row, and used to key the Remarks feature (see ``remarks_api_url``) -- a uid that
     survives a trip-recognition fix reshuffling exact timestamps is the whole reason it exists.
 
-    "Laatst bijgewerkt" shows the most recent trip's own arrival time, not when this file was
-    generated -- a run that couldn't reach the boat (or otherwise turned up no new data) still
-    regenerates the file from whatever's cached, and a fresh-looking generation timestamp would
-    then misleadingly suggest the data itself is current too (found in practice).
+    ``latest_data_at`` (UTC): shown as "Laatst bijgewerkt". The absolute newest timestamp seen
+    anywhere in the decoded data -- e.g. cli.py's own running ``ebl_time_state["current"]``, the
+    last PGN 126992 System Time seen across every .ebl file, not just files that closed off into
+    a full trip -- so it still advances while at anchor/idle, not only between sailing trips
+    (found in practice: a completed trip's own arrival time lagged behind days of anchored
+    logging that never got shown at all). Falls back to the most recent trip's own arrival time
+    if not given (e.g. a caller with only trips, no access to the raw parse-time state).
 
     ``fetch_failed``: shows that same timestamp in red, on top of it already reflecting the
     data's own age -- a second, more visible cue that this run specifically didn't get new data,
@@ -552,11 +556,17 @@ def write_html_logbook(
     uid_by_trip = {id(trip): uid for trip, uid in zip(trips, trip_uids)} if trip_uids is not None else {}
     trips = sorted(trips, key=lambda t: t.depart_time)
 
+    if latest_data_at is None and trips:
+        latest_data_at = max(t.arrive_time for t in trips)
+
     last_updated_html = ""
-    if trips:
-        latest_trip = max(trips, key=lambda t: t.arrive_time)
-        latest_offset = _trip_utc_offset_hours(latest_trip, utc_offset_hours)
-        latest_local = _to_local(latest_trip.arrive_time, latest_offset)
+    if latest_data_at is not None:
+        # No single trip necessarily covers latest_data_at (it can be later than every trip's own
+        # arrival, e.g. while anchored) -- the most recent trip's own offset is still the best
+        # available estimate of the current local timezone, since the boat is very unlikely to
+        # have jumped somewhere wildly different since then.
+        offset = _trip_utc_offset_hours(trips[-1], utc_offset_hours) if trips else (utc_offset_hours or 0.0)
+        latest_local = _to_local(latest_data_at, offset)
         last_updated_class = "last-updated fetch-failed" if fetch_failed else "last-updated"
         last_updated_html = (
             f'<div class="{last_updated_class}">{escape(T["last_updated"])}: {latest_local:%Y-%m-%d %H:%M}</div>'
