@@ -93,7 +93,9 @@ class TripLeg:
     max_speed_kn: Optional[float]
     fuel_liters: float  # calculated by integrating the fuel rate (PGN 127489) over time
     fuel_liters_device: Optional[float]  # engine's own trip meter (PGN 127497), None = not available
-    engine_hours: Dict[int, float]  # engine instance -> hours run during this trip
+    # engine instance -> hours run during this trip, extended by however long that engine ran
+    # continuously right before departure and after arrival (see _extend_engine_window)
+    engine_hours: Dict[int, float]
     engine_hours_total: Dict[int, float]  # engine instance -> absolute hour-meter reading at arrival
     engine_health: Dict[int, EngineHealth]  # engine instance -> health indicators + warnings
     typical_rpm: Dict[int, float]  # engine instance -> most commonly occurring RPM during the trip
@@ -212,6 +214,10 @@ def _engine_on_intervals(engine_samples: List[EngineSample]) -> List[Tuple[datet
     on_times = sorted(
         s.time for s in engine_samples if s.fuel_rate_lph is not None and s.fuel_rate_lph > _ENGINE_IDLE_FUEL_LPH
     )
+    return _merge_on_times(on_times)
+
+
+def _merge_on_times(on_times: List[datetime]) -> List[Tuple[datetime, datetime]]:
     if not on_times:
         return []
     gap = timedelta(seconds=_ENGINE_OFF_GAP_S)
@@ -222,6 +228,22 @@ def _engine_on_intervals(engine_samples: List[EngineSample]) -> List[Tuple[datet
         else:
             intervals.append([t, t])
     return [(start, end) for start, end in intervals]
+
+
+def _engine_on_intervals_by_instance(
+    engine_samples: List[EngineSample],
+) -> Dict[int, List[Tuple[datetime, datetime]]]:
+    """Same as ``_engine_on_intervals``, but kept separate per engine instance -- needed to
+    extend a trip's own logged engine hours by however long that specific engine ran
+    continuously right before departure and after arrival (see ``_engine_hours_delta_extended``),
+    without mixing in a different engine's own on/off timing on a multi-engine boat."""
+    on_times_by_instance: Dict[int, List[datetime]] = {}
+    for s in engine_samples:
+        if s.fuel_rate_lph is not None and s.fuel_rate_lph > _ENGINE_IDLE_FUEL_LPH:
+            on_times_by_instance.setdefault(s.instance, []).append(s.time)
+    return {
+        instance: _merge_on_times(sorted(times)) for instance, times in on_times_by_instance.items()
+    }
 
 
 def _engine_off_span(
@@ -339,6 +361,64 @@ def _engine_hours_delta(
 
     result: Dict[int, float] = {}
     for instance, seq in by_instance.items():
+        window = sorted((s for s in seq if start <= s.time <= end), key=lambda s: s.time)
+        if len(window) < 2:
+            continue
+        delta_s = window[-1].total_hours_s - window[0].total_hours_s
+        result[instance] = max(delta_s, 0) / 3600.0
+    return result
+
+
+def _extend_engine_window(
+    depart_time: datetime,
+    arrive_time: datetime,
+    prev_stay: Optional[Stay],
+    next_stay: Optional[Stay],
+    on_intervals: List[Tuple[datetime, datetime]],
+) -> Tuple[datetime, datetime]:
+    """Widens [depart_time, arrive_time] to also cover however long this engine ran continuously
+    right before departure and after arrival (e.g. warming up at the dock beforehand, or idling
+    afterwards) -- "Gelogde motoruren" was otherwise clipped tightly to the GPS-based trip
+    window, missing real engine time a boat that's essentially always under power would expect
+    it to include, and reading as inconsistent with "Totale vaaruren" as a result (found in
+    practice). Never reaches past the midpoint of an adjacent stay, so two trips sharing one
+    continuously-running stay between them each get a fair half of it instead of double-counting
+    that time in both."""
+    start, end = depart_time, arrive_time
+    for interval_start, interval_end in on_intervals:
+        if interval_start <= depart_time <= interval_end:
+            start = interval_start
+            if prev_stay is not None:
+                start = max(start, prev_stay.start + (prev_stay.end - prev_stay.start) / 2)
+        if interval_start <= arrive_time <= interval_end:
+            end = interval_end
+            if next_stay is not None:
+                end = min(end, next_stay.start + (next_stay.end - next_stay.start) / 2)
+    return min(start, depart_time), max(end, arrive_time)
+
+
+def _engine_hours_delta_extended(
+    engine_samples: List[EngineSample],
+    depart_time: datetime,
+    arrive_time: datetime,
+    prev_stay: Optional[Stay],
+    next_stay: Optional[Stay],
+    on_intervals_by_instance: Dict[int, List[Tuple[datetime, datetime]]],
+) -> Dict[int, float]:
+    """Same core computation as ``_engine_hours_delta``, but widening the window per engine
+    instance first (see ``_extend_engine_window``) -- each instance gets its own window since a
+    multi-engine boat's engines don't necessarily start/stop together."""
+    by_instance: Dict[int, List[EngineSample]] = {}
+    for sample in engine_samples:
+        if sample.total_hours_s is None:
+            continue
+        by_instance.setdefault(sample.instance, []).append(sample)
+
+    result: Dict[int, float] = {}
+    for instance, seq in by_instance.items():
+        start, end = _extend_engine_window(
+            depart_time, arrive_time, prev_stay, next_stay, on_intervals_by_instance.get(instance, [])
+        )
         window = sorted((s for s in seq if start <= s.time <= end), key=lambda s: s.time)
         if len(window) < 2:
             continue
@@ -665,6 +745,11 @@ def build_trips(
     min_stop = timedelta(minutes=min_stop_minutes)
     max_gap = timedelta(minutes=max_gap_minutes)
 
+    # Needed regardless of the lock/bridge settings below -- also used to widen each trip's own
+    # "Gelogde motoruren" with however long its engine ran continuously right before departure
+    # and after arrival (see _extend_engine_window).
+    on_intervals_by_instance = _engine_on_intervals_by_instance(engine_samples)
+
     runs = _classify_runs(samples, speed_threshold_ms)
     runs = _merge_short_stops(runs, min_stop, max_gap)
     if lock_radius_m is not None and lock_max_duration_minutes is not None:
@@ -718,7 +803,9 @@ def build_trips(
                 max_speed_kn=max_speed_kn,
                 fuel_liters=_fuel_liters(engine_samples, depart_time, arrive_time),
                 fuel_liters_device=_device_fuel_delta(trip_fuel_samples, depart_time, arrive_time),
-                engine_hours=_engine_hours_delta(engine_samples, depart_time, arrive_time),
+                engine_hours=_engine_hours_delta_extended(
+                    engine_samples, depart_time, arrive_time, prev_stay, next_stay, on_intervals_by_instance
+                ),
                 engine_hours_total=_engine_hours_total(engine_samples, depart_time, arrive_time),
                 engine_health=_engine_health(engine_samples, depart_time, arrive_time),
                 typical_rpm=_typical_rpm(rpm_samples, depart_time, arrive_time),

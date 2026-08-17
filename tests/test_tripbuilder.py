@@ -828,3 +828,89 @@ def test_small_data_gap_does_not_split_trip():
     )
 
     assert len(trips) == 1  # unchanged behavior: the small gap is ignored
+
+
+def test_engine_hours_extends_into_continuous_running_before_and_after_the_trip():
+    """"Gelogde motoruren" is otherwise clipped tightly to the GPS-based trip window -- but on a
+    boat where the engine is started at the dock before departure and left running for a bit
+    after arrival, that misses real engine time and reads as inconsistent with the engine's own
+    hour-meter total (found in practice). It should extend into however long the engine ran
+    continuously right on either side of the trip."""
+    fixes, sogs, engine_samples = [], [], []
+
+    def add(m, lat, lon, sog, fuel):
+        fixes.append(PositionFix(_dt(m), lat, lon))
+        sogs.append(SogSample(_dt(m), sog))
+        engine_samples.append(EngineSample(_dt(m), 0, fuel, 3600 * 100 + m * 60))
+
+    for m in range(0, 9):  # docked at port A, engine off
+        add(m, 52.30, 4.90, 0.0, 0.0)
+    for m in range(9, 15):  # still docked, but engine started 5 min before departure (at _dt(14))
+        add(m, 52.30, 4.90, 0.0, 8.0)
+    for i, m in enumerate(range(15, 25)):  # underway (the trip itself)
+        frac = i / 9
+        add(m, 52.30 + 0.05 * frac, 4.90 + 0.05 * frac, 3.0, 8.0)
+    for m in range(25, 30):  # docked at port B, engine kept running 5 min after arrival
+        add(m, 52.35, 4.95, 0.0, 8.0)
+    for m in range(30, 40):  # engine stopped, rest of the port B stay
+        add(m, 52.35, 4.95, 0.0, 0.0)
+
+    geocoder = _StubGeocoder()
+    trips = build_trips(
+        fixes, sogs, engine_samples, geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10
+    )
+
+    assert len(trips) == 1
+    trip = trips[0]
+    # depart_time/arrive_time are each the boundary *stationary* sample, one minute off from the
+    # first/last *moving* sample (15/24) -- see build_trips: depart_time=prev_stay.end,
+    # arrive_time=next_stay.start.
+    assert trip.depart_time == _dt(14)
+    assert trip.arrive_time == _dt(25)
+    # 20 minutes of continuous engine running (9..29), not just the 11-minute GPS trip window
+    # (14..25) -- 5 minutes before departure plus 5 minutes after arrival.
+    assert trip.engine_hours[0] == pytest.approx(20 / 60, abs=0.01)
+
+
+def test_engine_hours_extension_splits_a_shared_stay_instead_of_double_counting():
+    """Two trips with only a short stay in between, engine running continuously through the
+    whole stay (never switched off between them) -- each trip's own extension must stop at the
+    stay's midpoint, so the shared time is split fairly between them instead of both trips
+    claiming the same minutes."""
+    fixes, sogs, engine_samples = [], [], []
+
+    def add(m, lat, lon, sog, fuel):
+        fixes.append(PositionFix(_dt(m), lat, lon))
+        sogs.append(SogSample(_dt(m), sog))
+        engine_samples.append(EngineSample(_dt(m), 0, fuel, 3600 * 100 + m * 60))
+
+    for m in range(0, 14):  # port A, engine off
+        add(m, 52.30, 4.90, 0.0, 0.0)
+    for m in range(14, 15):  # engine starts right as trip A departs
+        add(m, 52.30, 4.90, 0.0, 8.0)
+    for i, m in enumerate(range(15, 25)):  # trip A, underway, engine on
+        frac = i / 9
+        add(m, 52.30 + 0.05 * frac, 4.90 + 0.05 * frac, 3.0, 8.0)
+    for m in range(25, 40):  # port B -- the shared stay, engine kept running the whole time
+        add(m, 52.35, 4.95, 0.0, 8.0)
+    for i, m in enumerate(range(40, 50)):  # trip B, underway, engine on
+        frac = i / 9
+        add(m, 52.35 + 0.05 * frac, 4.95 + 0.05 * frac, 3.0, 8.0)
+    for m in range(50, 51):  # engine kept running 1 more minute right as trip B arrives
+        add(m, 52.40, 5.00, 0.0, 8.0)
+    for m in range(51, 65):  # rest of port C, engine off
+        add(m, 52.40, 5.00, 0.0, 0.0)
+
+    geocoder = _StubGeocoder()
+    trips = build_trips(
+        fixes, sogs, engine_samples, geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10
+    )
+
+    assert len(trips) == 2
+    trip_a, trip_b = trips
+    # The engine ran continuously from _dt(14) to _dt(50) (36 minutes) without ever stopping.
+    # Port B (the shared stay) spans _dt(25)..(39), midpoint _dt(32): trip A's extension reaches
+    # forward to that midpoint, trip B's extension reaches back to the same midpoint -- together
+    # accounting for the full 36-minute on-interval exactly once, not twice (18 + 18 = 36).
+    assert trip_a.engine_hours[0] == pytest.approx(18 / 60, abs=0.01)
+    assert trip_b.engine_hours[0] == pytest.approx(18 / 60, abs=0.01)
