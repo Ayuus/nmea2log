@@ -705,6 +705,10 @@ def write_html_logbook(
   .show-map, .show-log {{ cursor: pointer; border: 1px solid #1a6ecc; background: white; color: #1a6ecc; border-radius: 4px; padding: 0.2em 0.6em; white-space: nowrap; }}
   .show-map:hover, .show-log:hover {{ background: #1a6ecc; color: white; }}
   .trip-map-title {{ font-weight: 600; margin-bottom: 0.4em; }}
+  /* Only the Details popup's own title (not the Map's, which reuses .trip-map-title inside a
+     table row rather than a .log-dialog) -- matches the log-table header's background so the
+     popup reads as one consistent header bar on top. */
+  .log-dialog .trip-map-title {{ background: #f0f0f0; padding: 0.4em 0.6em; border-radius: 4px; }}
   /* A popup (like the map) instead of an inline-expanding table on purpose: in a wide, already
      horizontally-scrolled trips table, expanding a table inline pushed the COG/SOG columns off
      the right edge of the same scroll region the button itself was in, making the log look like
