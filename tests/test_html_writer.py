@@ -89,8 +89,8 @@ def test_write_html_logbook_shows_totals(tmp_path: Path):
     html = out_path.read_text(encoding="utf-8")
     assert "16,0 nm" in html  # total distance
     assert "8,0 L" in html  # total fuel
-    assert "Gelogde uren, motor 0" in html
-    assert "Gelogde uren, motor 1" in html
+    assert "Gelogde motoruren, motor 0" in html
+    assert "Gelogde motoruren, motor 1" in html
 
 
 def test_write_html_logbook_shows_hours_underway_and_avg_speed(tmp_path: Path):
@@ -114,8 +114,24 @@ def test_write_html_logbook_totals_omit_engine_label_with_one_engine(tmp_path: P
     write_html_logbook([trip], out_path)
 
     html = out_path.read_text(encoding="utf-8")
-    assert "Gelogde uren</div>" in html
+    assert "Gelogde motoruren</div>" in html
     assert "engine 0" not in html.lower()
+
+
+def test_write_html_logbook_engine_hour_meter_and_logged_hours_have_explanatory_tooltips(tmp_path: Path):
+    """Regression test for a real point of confusion: "Motoruren-teller" is the engine's own
+    lifetime hour meter reading (as of the most recent trip), not a total over the logged period
+    -- so it can be much larger than "Totale uren" or "Gelogde motoruren" right next to it, which
+    only cover this logbook's own trips (found in practice: read as if the numbers didn't add
+    up, without a tooltip explaining that distinction)."""
+    trip = _trip(engine_hours={0: 1.5}, engine_hours_total={0: 500.0})
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([trip], out_path)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert 'title="Actuele stand van de motoruren-teller' in html
+    assert 'title="Som van de motoruren tijdens de gelogde reizen' in html
 
 
 def test_write_html_logbook_shows_current_engine_hour_meter(tmp_path: Path):

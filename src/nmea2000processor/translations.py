@@ -61,8 +61,16 @@ NL: Dict[str, str] = {
     "totals_top_speed": "Topsnelheid",
     "totals_engine_hour_meter": "Motoruren-teller",
     "totals_engine_hour_meter_engine": "Motoruren-teller, motor {instance}",
-    "totals_hours_logged": "Gelogde uren",
-    "totals_hours_logged_engine": "Gelogde uren, motor {instance}",
+    "totals_engine_hour_meter_tooltip": (
+        "Actuele stand van de motoruren-teller van de motor zelf -- een doorlopende teller sinds "
+        "die ooit op nul stond, dus hoger dan de uren die in dit logboek gelogd zijn."
+    ),
+    "totals_hours_logged": "Gelogde motoruren",
+    "totals_hours_logged_engine": "Gelogde motoruren, motor {instance}",
+    "totals_hours_logged_tooltip": (
+        "Som van de motoruren tijdens de gelogde reizen -- kan lager zijn dan de vaaruren als er "
+        "ook gevaren is met de motor uit."
+    ),
     # Motion (roll/pitch) column
     "motion_roll": "slingeren",
     "motion_pitch": "stampen",

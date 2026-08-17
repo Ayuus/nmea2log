@@ -348,46 +348,50 @@ def _totals_html(totals: _Totals) -> str:
     # short trip the same weight as a long one, which isn't representative of the whole period.
     avg_speed_kn = totals.distance_nm / totals.moving_hours if totals.moving_hours > 0 else None
 
+    # (label, value, tooltip) -- tooltip is None for the self-explanatory cards.
     items = [
-        (T["totals_trips"], str(totals.trip_count)),
-        (T["totals_distance"], f"{_nl_num(totals.distance_nm)} nm"),
-        (T["totals_hours"], f"{_nl_num(totals.moving_hours)} h"),
-        (T["totals_fuel_calculated"], f"{_nl_num(totals.fuel_liters)} L"),
+        (T["totals_trips"], str(totals.trip_count), None),
+        (T["totals_distance"], f"{_nl_num(totals.distance_nm)} nm", None),
+        (T["totals_hours"], f"{_nl_num(totals.moving_hours)} h", None),
+        (T["totals_fuel_calculated"], f"{_nl_num(totals.fuel_liters)} L", None),
     ]
     if totals.fuel_liters_device is not None:
-        items.append((T["totals_fuel_engine_meter"], f"{_nl_num(totals.fuel_liters_device)} L"))
+        items.append((T["totals_fuel_engine_meter"], f"{_nl_num(totals.fuel_liters_device)} L", None))
     if avg_l_per_nm is not None:
-        items.append((T["totals_avg_consumption"], f"{_nl_num(avg_l_per_nm, 2)} L/nm"))
+        items.append((T["totals_avg_consumption"], f"{_nl_num(avg_l_per_nm, 2)} L/nm", None))
     if avg_l_per_hour is not None:
-        items.append((T["totals_avg_consumption"], f"{_nl_num(avg_l_per_hour)} L/h"))
+        items.append((T["totals_avg_consumption"], f"{_nl_num(avg_l_per_hour)} L/h", None))
     if avg_speed_kn is not None:
-        items.append((T["totals_avg_speed"], f"{_nl_num(avg_speed_kn)} kn"))
+        items.append((T["totals_avg_speed"], f"{_nl_num(avg_speed_kn)} kn", None))
     if totals.max_speed_kn is not None:
-        items.append((T["totals_top_speed"], f"{_nl_num(totals.max_speed_kn)} kn"))
+        items.append((T["totals_top_speed"], f"{_nl_num(totals.max_speed_kn)} kn", None))
 
     # The engine's own absolute hour meter (for maintenance intervals), as of the most recent
-    # trip -- distinct from "hours logged", which only counts time run during this logbook's
-    # own trips and misses everything the engine ran before logging started.
+    # trip -- distinct from "hours logged" below, which only counts time run during this
+    # logbook's own trips and misses everything the engine ran before logging started (found in
+    # practice: read as inconsistent with "Totale uren"/"Gelogde motoruren" without the tooltip
+    # explaining it's a lifetime counter, not a total over the logged period).
     if len(totals.engine_hours_current) == 1:
         hours = next(iter(totals.engine_hours_current.values()))
-        items.append((T["totals_engine_hour_meter"], f"{_nl_num(hours)} h"))
+        items.append((T["totals_engine_hour_meter"], f"{_nl_num(hours)} h", T["totals_engine_hour_meter_tooltip"]))
     else:
         for instance, hours in sorted(totals.engine_hours_current.items()):
             label = T["totals_engine_hour_meter_engine"].format(instance=instance)
-            items.append((label, f"{_nl_num(hours)} h"))
+            items.append((label, f"{_nl_num(hours)} h", T["totals_engine_hour_meter_tooltip"]))
 
     if len(totals.engine_hours) == 1:
         hours = next(iter(totals.engine_hours.values()))
-        items.append((T["totals_hours_logged"], f"{_nl_num(hours)} h"))
+        items.append((T["totals_hours_logged"], f"{_nl_num(hours)} h", T["totals_hours_logged_tooltip"]))
     else:
         for instance, hours in sorted(totals.engine_hours.items()):
             label = T["totals_hours_logged_engine"].format(instance=instance)
-            items.append((label, f"{_nl_num(hours)} h"))
+            items.append((label, f"{_nl_num(hours)} h", T["totals_hours_logged_tooltip"]))
 
     cards = "".join(
-        f'<div class="stat"><div class="stat-label">{escape(label)}</div>'
+        f'<div class="stat"{f" title=\"{escape(tooltip)}\"" if tooltip else ""}>'
+        f'<div class="stat-label">{escape(label)}</div>'
         f'<div class="stat-value">{escape(value)}</div></div>'
-        for label, value in items
+        for label, value, tooltip in items
     )
     return f'<section class="totals">{cards}</section>'
 
@@ -662,6 +666,7 @@ def write_html_logbook(
   h2 {{ margin-top: 2em; border-bottom: 2px solid #1a6ecc; padding-bottom: 0.2em; }}
   .totals {{ display: flex; flex-wrap: wrap; gap: 1em; margin: 1em 0 2em; }}
   .stat {{ background: white; border-radius: 8px; padding: 0.8em 1.2em; box-shadow: 0 1px 3px rgba(0,0,0,0.1); min-width: 140px; }}
+  .stat[title] {{ cursor: help; }}
   .stat-label {{ font-size: 0.8em; color: #666; }}
   .stat-value {{ font-size: 1.3em; font-weight: 600; }}
   /* One continuous table per year (see write_html_logbook) with natural (auto) column sizing --
