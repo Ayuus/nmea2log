@@ -332,7 +332,7 @@ def _remarks_cell_html(trip_uid: Optional[str], idx: int, remarks_api_url: str) 
         return ""
     dialog = (
         f'<dialog class="log-dialog remarks-dialog" id="remarks-{idx}" data-trip-uid="{escape(trip_uid)}">'
-        '<textarea class="remarks-textarea" rows="4" cols="40"></textarea>'
+        '<textarea class="remarks-textarea" rows="12" cols="60"></textarea>'
         '<p class="remarks-error" hidden></p>'
         '<div class="remarks-buttons">'
         f'<button type="button" class="remarks-save">{escape(T["remarks_save_button"])}</button>'
@@ -599,7 +599,12 @@ def write_html_logbook(
         # a separate table per week, or hand-picked fixed column widths, can't guarantee.
         body_rows: List[str] = []
         for iso_week in weeks_in_year:
-            indices = by_week[(iso_year, iso_week)]
+            # by_week's own indices are chronological (see its construction above); reversed so
+            # a trip's position within its week matches the same "most recent first" order the
+            # weeks themselves are already shown in, instead of alternating direction between the
+            # two levels (found in practice: read as confusing, weeks going newest-to-oldest but
+            # each week's own trips going oldest-to-newest).
+            indices = list(reversed(by_week[(iso_year, iso_week)]))
             body_rows.append(
                 f'<tr class="week-row"><td colspan="{len(headers)}">'
                 f"{escape(_week_label(iso_year, iso_week))}</td></tr>"
@@ -717,7 +722,10 @@ def write_html_logbook(
   .show-remarks {{ cursor: pointer; border: 1px solid #1a6ecc; background: white; color: #1a6ecc; border-radius: 4px; padding: 0.2em 0.6em; white-space: nowrap; }}
   .show-remarks:hover {{ background: #1a6ecc; color: white; }}
   .remarks-dialog {{ width: 24em; max-width: 90vw; }}
-  .remarks-textarea {{ width: 100%; box-sizing: border-box; font: inherit; margin-bottom: 0.8em; }}
+  .remarks-textarea {{
+    width: 100%; box-sizing: border-box; font: inherit; margin-bottom: 0.8em;
+    border: 1px solid #ccc; resize: none;
+  }}
   .remarks-error {{ color: #c0392b; font-size: 0.85em; margin: 0 0 0.6em; }}
   .remarks-buttons {{ display: flex; gap: 0.5em; }}
   .remarks-save {{ cursor: pointer; border: 1px solid #1a6ecc; background: #1a6ecc; color: white; border-radius: 4px; padding: 0.3em 0.8em; }}
@@ -852,7 +860,12 @@ if (REMARKS_API_URL) {{
     }});
   }});
 
-  fetch(REMARKS_API_URL, {{credentials: 'same-origin'}})
+  // X-WP-Nonce is needed here too, not just on the POST below: WordPress's cookie-auth layer
+  // rejects *any* REST request from a logged-in session that lacks a valid nonce with 401 --
+  // before the endpoint's own permission check even runs -- so without it this GET always failed
+  // for logged-in visitors (found in practice: remarks always showing empty on page load even
+  // though saving itself worked fine, since the POST above did send the header).
+  fetch(REMARKS_API_URL, {{credentials: 'same-origin', headers: {{'X-WP-Nonce': WP_REST_NONCE}}}})
     .then(function(response) {{ return response.ok ? response.json() : Promise.reject(); }})
     .then(function(data) {{
       Object.keys(data.remarks).forEach(function(tripUid) {{

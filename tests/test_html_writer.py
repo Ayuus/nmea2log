@@ -169,6 +169,20 @@ def test_write_html_logbook_sequence_number_resets_each_year(tmp_path: Path):
     assert rows == ["1", "2", "1"]
 
 
+def test_write_html_logbook_trips_within_a_week_are_most_recent_first(tmp_path: Path):
+    """Regression test: trips within a week used to show oldest-first while weeks themselves show
+    newest-first, alternating direction between the two levels in a way that read as confusing
+    (found in practice). Both levels now go the same direction."""
+    earlier = _trip(depart_time=datetime(2026, 7, 14, 9, 0), arrive_time=datetime(2026, 7, 14, 10, 0))
+    later = _trip(depart_time=datetime(2026, 7, 16, 9, 0), arrive_time=datetime(2026, 7, 16, 10, 0))
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([earlier, later], out_path)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert html.index("2026-07-16") < html.index("2026-07-14")
+
+
 def test_write_html_logbook_one_table_per_year_with_week_divider_rows(tmp_path: Path):
     """Regression test: weeks used to each get their own <table>, so columns from different
     weeks could end up different widths and not line up. All of a year's trips must now share a
@@ -412,6 +426,23 @@ def test_write_html_logbook_no_remarks_button_without_a_trip_uid(tmp_path: Path)
 
     html = out_path.read_text(encoding="utf-8")
     assert 'class="show-remarks"' not in html
+
+
+def test_write_html_logbook_remarks_prefill_fetch_sends_the_wp_nonce(tmp_path: Path):
+    """Regression test for a real bug: the page-load GET that pre-fills each remark's textarea
+    was sent without the X-WP-Nonce header. WordPress's cookie-auth layer rejects *any* REST
+    request from a logged-in session that lacks a valid nonce with 401 -- even a GET, and even
+    though the endpoint's own permission check would have allowed it -- so remarks always looked
+    empty on page load even though saving (whose POST did send the header) worked fine (found in
+    practice: "opslaan werkt niet, na refresh van pagina is opmerking leeg")."""
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook(
+        [_trip()], out_path, trip_uids=["uid-a"], remarks_api_url="/wp-json/nmea2log/v1/remarks",
+    )
+
+    html = out_path.read_text(encoding="utf-8")
+    assert "fetch(REMARKS_API_URL, {credentials: 'same-origin', headers: {'X-WP-Nonce': WP_REST_NONCE}})" in html
 
 
 def test_write_html_logbook_shows_max_speed_per_trip_and_overall(tmp_path: Path):
