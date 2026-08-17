@@ -582,14 +582,19 @@ def write_html_logbook(
     sections: List[str] = []
     for iso_year in sorted({y for y, _ in by_week}, reverse=True):
         weeks_in_year = sorted((w for y, w in by_week if y == iso_year), reverse=True)
-        year_trips = [trips[i] for w in weeks_in_year for i in by_week[(iso_year, w)]]
-        # ``trips`` is already sorted chronologically (see above), so a trip's own position
-        # within its year's indices, sorted ascending, is exactly its 1-based sequence number
-        # for that year -- resets every year since each year's indices are handled separately.
-        seq_by_index = {
-            i: n + 1
-            for n, i in enumerate(sorted(i for w in weeks_in_year for i in by_week[(iso_year, w)]))
-        }
+        # Chronological (ascending), unlike weeks_in_year/indices below which are ordered for
+        # display (most-recent-first) -- _compute_totals relies on its input being chronological
+        # to pick out the *latest* engine-hour-meter reading (see its own docstring), and feeding
+        # it the display order instead picked up a trip from the year's earliest week rather than
+        # its most recent one, understating "Motoruren-teller" by however many hours the engine
+        # ran since then (found in practice: the year section's own total didn't match the
+        # top-of-page one, which uses the correctly-sorted full trip list).
+        year_indices_chronological = sorted(i for w in weeks_in_year for i in by_week[(iso_year, w)])
+        year_trips = [trips[i] for i in year_indices_chronological]
+        # A trip's own position within its year's indices, sorted ascending, is exactly its
+        # 1-based sequence number for that year -- resets every year since each year's indices
+        # are handled separately.
+        seq_by_index = {i: n + 1 for n, i in enumerate(year_indices_chronological)}
         # One continuous <table> for the whole year (not one per week): a single table lets the
         # browser compute column widths from *all* the year's rows together, so every week lines
         # up automatically and no column ever ends up narrower than its widest content -- which

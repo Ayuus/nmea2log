@@ -93,6 +93,35 @@ def test_write_html_logbook_shows_totals(tmp_path: Path):
     assert "Gelogde motoruren, motor 1" in html
 
 
+def test_write_html_logbook_year_totals_use_the_latest_engine_hour_meter_reading(tmp_path: Path):
+    """Regression test for a real bug: the per-year totals were computed from a trip list built
+    in "weeks descending" (display) order, not chronological order, so _compute_totals -- which
+    relies on its input being chronological to pick out the *latest* engine-hour-meter reading --
+    picked up a trip from the year's *earliest* week instead, understating "Motoruren-teller"
+    (found in practice: the year section's own total didn't match the correct one shown at the
+    top of the page, which uses the full, correctly-sorted trip list)."""
+    early = _trip(
+        depart_time=datetime(2026, 1, 5, 9, 0), arrive_time=datetime(2026, 1, 5, 10, 0),
+        engine_hours_total={0: 100.0},
+    )
+    middle = _trip(
+        depart_time=datetime(2026, 4, 1, 9, 0), arrive_time=datetime(2026, 4, 1, 10, 0),
+        engine_hours_total={0: 150.0},
+    )
+    latest = _trip(
+        depart_time=datetime(2026, 7, 15, 9, 0), arrive_time=datetime(2026, 7, 15, 10, 0),
+        engine_hours_total={0: 200.0},
+    )
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([early, middle, latest], out_path, utc_offset_hours=0)
+
+    html = out_path.read_text(encoding="utf-8")
+    # Appears twice: once in the top-of-page totals (all years), once in the 2026 section's own
+    # totals -- both must reflect the truly latest trip's reading, not the earliest week's.
+    assert html.count("200,0 h") == 2
+
+
 def test_write_html_logbook_shows_hours_underway_and_avg_speed(tmp_path: Path):
     trip_a = _trip(distance_nm=10.0, duration=timedelta(hours=2))
     trip_b = _trip(distance_nm=6.0, duration=timedelta(hours=2))
