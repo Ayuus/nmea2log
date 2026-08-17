@@ -355,9 +355,25 @@ def _totals_html(totals: _Totals) -> str:
     items = [
         (T["totals_trips"], str(totals.trip_count)),
         (T["totals_distance"], f"{_nl_num(totals.distance_nm)} nm"),
-        (T["totals_hours"], f"{_nl_num(totals.moving_hours)} h"),
-        (T["totals_fuel_calculated"], f"{_nl_num(totals.fuel_liters)} L"),
     ]
+    # In 3rd/4th place specifically (found in practice: wanted near the top, not buried after
+    # every fuel/speed stat).
+    if len(totals.engine_hours_current) == 1:
+        hours = next(iter(totals.engine_hours_current.values()))
+        items.append((T["totals_engine_hour_meter"], f"{_nl_num(hours)} h"))
+    else:
+        for instance, hours in sorted(totals.engine_hours_current.items()):
+            label = T["totals_engine_hour_meter_engine"].format(instance=instance)
+            items.append((label, f"{_nl_num(hours)} h"))
+    if len(totals.engine_hours) == 1:
+        hours = next(iter(totals.engine_hours.values()))
+        items.append((T["totals_hours_logged"], f"{_nl_num(hours)} h"))
+    else:
+        for instance, hours in sorted(totals.engine_hours.items()):
+            label = T["totals_hours_logged_engine"].format(instance=instance)
+            items.append((label, f"{_nl_num(hours)} h"))
+    items.append((T["totals_hours"], f"{_nl_num(totals.moving_hours)} h"))
+    items.append((T["totals_fuel_calculated"], f"{_nl_num(totals.fuel_liters)} L"))
     if totals.fuel_liters_device is not None:
         items.append((T["totals_fuel_engine_meter"], f"{_nl_num(totals.fuel_liters_device)} L"))
     if avg_l_per_nm is not None:
@@ -369,27 +385,17 @@ def _totals_html(totals: _Totals) -> str:
     if totals.max_speed_kn is not None:
         items.append((T["totals_top_speed"], f"{_nl_num(totals.max_speed_kn)} kn"))
 
-    if len(totals.engine_hours_current) == 1:
-        hours = next(iter(totals.engine_hours_current.values()))
-        items.append((T["totals_engine_hour_meter"], f"{_nl_num(hours)} h"))
-    else:
-        for instance, hours in sorted(totals.engine_hours_current.items()):
-            label = T["totals_engine_hour_meter_engine"].format(instance=instance)
-            items.append((label, f"{_nl_num(hours)} h"))
-
-    if len(totals.engine_hours) == 1:
-        hours = next(iter(totals.engine_hours.values()))
-        items.append((T["totals_hours_logged"], f"{_nl_num(hours)} h"))
-    else:
-        for instance, hours in sorted(totals.engine_hours.items()):
-            label = T["totals_hours_logged_engine"].format(instance=instance)
-            items.append((label, f"{_nl_num(hours)} h"))
-
     cards = "".join(
         f'<div class="stat"><div class="stat-label">{escape(label)}</div>'
         f'<div class="stat-value">{escape(value)}</div></div>'
         for label, value in items
     )
+    # Column count is set by JS (see layoutTotals in the <script> below) to exactly however many
+    # cards fit the trips table's own width -- one row whenever that's enough room, wrapping to
+    # more (equal-width, unlike flex-wrap) only once it isn't. A pure-CSS column count can't do
+    # this: a fixed number wraps at the wrong item counts, and auto-fill's own per-column minimum
+    # can't be tied to the table's actual (data-dependent) width. This static fallback (used
+    # without JS, e.g. an emailed attachment) just wraps at a sensible fixed card width instead.
     return f'<section class="totals">{cards}</section>'
 
 
@@ -678,8 +684,17 @@ def write_html_logbook(
   .last-updated {{ color: #666; font-size: 0.85em; margin-bottom: 1em; }}
   .last-updated.fetch-failed {{ color: #c0392b; font-weight: 600; }}
   h2 {{ margin-top: 2em; border-bottom: 2px solid #1a6ecc; padding-bottom: 0.2em; }}
-  .totals {{ display: flex; flex-wrap: wrap; gap: 1em; margin: 1em 0 2em; }}
-  .stat {{ background: white; border-radius: 8px; padding: 0.8em 1.2em; box-shadow: 0 1px 3px rgba(0,0,0,0.1); min-width: 140px; }}
+  /* A grid, not flex-wrap: flex-wrap gives each wrapped *row* its own independent flex-grow
+     distribution, so a short last row (fewer cards) stretched those few cards much wider than
+     the same cards on a fuller row above (found in practice). Grid's columns are shared by every
+     row, so cards stay the same width everywhere; a short last row just leaves its unused
+     columns empty instead of stretching into them. The column *count* is set by JS (see
+     layoutTotals below) to whatever fits the trips table's own width in one row, wrapping only
+     once it doesn't -- auto-fill's own fixed per-column minimum can't do that, since it has no
+     way to know the table's actual (data-dependent) width. This fallback is only for when JS
+     isn't available (e.g. an emailed attachment). */
+  .totals {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.6em; margin: 1em 0 2em; }}
+  .stat {{ background: white; border-radius: 8px; padding: 0.6em 0.9em; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }}
   .stat-label {{ font-size: 0.8em; color: #666; }}
   .stat-value {{ font-size: 1.3em; font-weight: 600; }}
   /* One continuous table per year (see write_html_logbook) with natural (auto) column sizing --
@@ -788,6 +803,36 @@ const REMARKS_UNAVAILABLE = {json.dumps(T["remarks_unavailable"])};
 // REST request. If this file is opened some other way (not through the gate, or locally), the
 // placeholder never gets replaced and saving fails cleanly with REMARKS_SAVE_FAILED below.
 const WP_REST_NONCE = "%%WP_REST_NONCE%%";
+// Picks however many columns fit the trips table's own width in one row (matching it exactly,
+// since 1fr columns divide a grid's width evenly), wrapping to more only once that stops fitting
+// -- see the .totals CSS rule above for why this can't just be done with auto-fill in CSS alone.
+// Re-run on resize so it stays right if the window (or table width, e.g. a name resolving to a
+// longer place name after the page already loaded) changes.
+function layoutTotals() {{
+  // Each year section has its own .table-scroll (content, so width, can differ per year); the
+  // one totals block at the very top (spanning every year) isn't inside a .year section at all,
+  // so it falls back to the first table on the page as a reasonable stand-in.
+  var firstTableScroll = document.querySelector('.table-scroll');
+  document.querySelectorAll('.totals').forEach(function(totals) {{
+    var count = totals.querySelectorAll('.stat').length;
+    if (!count) return;
+    var yearSection = totals.closest('.year');
+    var tableScroll = (yearSection && yearSection.querySelector('.table-scroll')) || firstTableScroll;
+    if (!tableScroll) {{
+      totals.style.gridTemplateColumns = '';  // fall back to the CSS auto-fill rule
+      return;
+    }}
+    var gapPx = parseFloat(getComputedStyle(totals).columnGap) || 0;
+    // Below this, a longer label ("Motoruren-teller", "Gelogde motoruren") wraps onto 2 lines
+    // itself, making 3 total with the value line underneath (found in practice).
+    var minCardWidth = 140;
+    var maxColumns = Math.max(1, Math.floor((tableScroll.clientWidth + gapPx) / (minCardWidth + gapPx)));
+    var columns = Math.min(count, maxColumns);
+    totals.style.gridTemplateColumns = 'repeat(' + columns + ', 1fr)';
+  }});
+}}
+layoutTotals();
+window.addEventListener('resize', layoutTotals);
 // position: fixed + JS placement (instead of position: absolute anchored to the cell) so a
 // tooltip on the last row of a table never gets clipped by .table-scroll's overflow-x: auto --
 // setting only one overflow axis makes the browser clip the other one too, cutting off anything

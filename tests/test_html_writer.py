@@ -93,6 +93,18 @@ def test_write_html_logbook_shows_totals(tmp_path: Path):
     assert "Gelogde motoruren, motor 1" in html
 
 
+def test_write_html_logbook_engine_hour_totals_are_3rd_and_4th_cards(tmp_path: Path):
+    trip = _trip(engine_hours={0: 1.0}, engine_hours_total={0: 42.0})
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([trip], out_path)
+
+    html = out_path.read_text(encoding="utf-8")
+    stat_labels = re.findall(r'<div class="stat-label">([^<]*)</div>', html)
+    assert stat_labels[2] == "Motoruren-teller"
+    assert stat_labels[3] == "Gelogde motoruren"
+
+
 def test_write_html_logbook_year_totals_use_the_latest_engine_hour_meter_reading(tmp_path: Path):
     """Regression test for a real bug: the per-year totals were computed from a trip list built
     in "weeks descending" (display) order, not chronological order, so _compute_totals -- which
