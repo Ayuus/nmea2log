@@ -726,6 +726,11 @@ def write_html_logbook(
     width: 100%; box-sizing: border-box; font: inherit; margin-bottom: 0.8em;
     border: 1px solid #ccc; resize: none;
   }}
+  /* Without this, the browser's own default focus outline (thick and near-black in some
+  browsers) frames the field instead -- shown every time the dialog opens, since JS focuses the
+  textarea right away (found in practice: the intentionally thin #ccc border above was there all
+  along, but got visually replaced by this outline as soon as the dialog opened). */
+  .remarks-textarea:focus {{ outline: 1px solid #1a6ecc; }}
   .remarks-error {{ color: #c0392b; font-size: 0.85em; margin: 0 0 0.6em; }}
   .remarks-buttons {{ display: flex; gap: 0.5em; }}
   .remarks-save {{ cursor: pointer; border: 1px solid #1a6ecc; background: #1a6ecc; color: white; border-radius: 4px; padding: 0.3em 0.8em; }}
