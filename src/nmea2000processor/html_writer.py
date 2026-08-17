@@ -585,19 +585,29 @@ def write_html_logbook(
             f'<div class="{last_updated_class}">{escape(T["last_updated"])}: {latest_local:%Y-%m-%d %H:%M}</div>'
         )
 
-    by_week: Dict[Tuple[int, int], List[int]] = defaultdict(list)
+    # Keyed by (calendar_year, iso_year, iso_week) -- calendar_year decides which year *section*
+    # (and whose totals) a trip belongs to, deliberately kept separate from the ISO week's own
+    # year: near a year boundary those two can disagree (e.g. 2025-12-31 falls in ISO week 1 of
+    # *2026*; 2027-01-01..03 fall in ISO week 53 of *2026*) -- grouping by the ISO year instead
+    # would silently fold a few days of one calendar year's trips into the *other* year's
+    # section, corrupting an already-reported total for a year that's otherwise done (found in
+    # practice: a trip on New Year's Day would have updated the *previous* year's own
+    # Motoruren-teller). iso_year/iso_week are kept alongside purely so _week_label can still
+    # compute that week's real date range -- date.fromisocalendar needs the true ISO year, not
+    # the calendar one.
+    by_week: Dict[Tuple[int, int, int], List[int]] = defaultdict(list)
     for idx, trip in enumerate(trips):
         offset = _trip_utc_offset_hours(trip, utc_offset_hours)
         local_date = _to_local(trip.depart_time, offset).date()
         iso_year, iso_week, _ = local_date.isocalendar()
-        by_week[(iso_year, iso_week)].append(idx)
+        by_week[(local_date.year, iso_year, iso_week)].append(idx)
 
     headers = _headers_for(remarks_api_url)
     header_html = "".join(f"<th>{_header_cell_html(h)}</th>" for h in headers)
 
     sections: List[str] = []
-    for iso_year in sorted({y for y, _ in by_week}, reverse=True):
-        weeks_in_year = sorted((w for y, w in by_week if y == iso_year), reverse=True)
+    for calendar_year in sorted({y for y, _, _ in by_week}, reverse=True):
+        weeks_in_year = sorted({(iy, iw) for y, iy, iw in by_week if y == calendar_year}, reverse=True)
         # Chronological (ascending), unlike weeks_in_year/indices below which are ordered for
         # display (most-recent-first) -- _compute_totals relies on its input being chronological
         # to pick out the *latest* engine-hour-meter reading (see its own docstring), and feeding
@@ -605,7 +615,9 @@ def write_html_logbook(
         # its most recent one, understating "Motoruren-teller" by however many hours the engine
         # ran since then (found in practice: the year section's own total didn't match the
         # top-of-page one, which uses the correctly-sorted full trip list).
-        year_indices_chronological = sorted(i for w in weeks_in_year for i in by_week[(iso_year, w)])
+        year_indices_chronological = sorted(
+            i for iso_year, iso_week in weeks_in_year for i in by_week[(calendar_year, iso_year, iso_week)]
+        )
         year_trips = [trips[i] for i in year_indices_chronological]
         # A trip's own position within its year's indices, sorted ascending, is exactly its
         # 1-based sequence number for that year -- resets every year since each year's indices
@@ -616,13 +628,13 @@ def write_html_logbook(
         # up automatically and no column ever ends up narrower than its widest content -- which
         # a separate table per week, or hand-picked fixed column widths, can't guarantee.
         body_rows: List[str] = []
-        for iso_week in weeks_in_year:
+        for iso_year, iso_week in weeks_in_year:
             # by_week's own indices are chronological (see its construction above); reversed so
             # a trip's position within its week matches the same "most recent first" order the
             # weeks themselves are already shown in, instead of alternating direction between the
             # two levels (found in practice: read as confusing, weeks going newest-to-oldest but
             # each week's own trips going oldest-to-newest).
-            indices = list(reversed(by_week[(iso_year, iso_week)]))
+            indices = list(reversed(by_week[(calendar_year, iso_year, iso_week)]))
             body_rows.append(
                 f'<tr class="week-row"><td colspan="{len(headers)}">'
                 f"{escape(_week_label(iso_year, iso_week))}</td></tr>"
@@ -641,7 +653,7 @@ def write_html_logbook(
                 for i in indices
             )
         sections.append(
-            f'<section class="year"><h2>{iso_year}</h2>'
+            f'<section class="year"><h2>{calendar_year}</h2>'
             f"{_totals_html(_compute_totals(year_trips))}"
             f'<div class="table-scroll"><table class="trips"><thead><tr>{header_html}</tr></thead>'
             f'<tbody>{"".join(body_rows)}</tbody></table></div></section>'

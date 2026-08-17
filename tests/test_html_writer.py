@@ -220,6 +220,39 @@ def test_write_html_logbook_groups_by_year_and_week(tmp_path: Path):
     assert html.index("<h2>2026</h2>") < html.index("<h2>2025</h2>")
 
 
+def test_write_html_logbook_year_sections_use_calendar_year_not_iso_week_year(tmp_path: Path):
+    """Regression test for a real bug: year sections used to group by the ISO *week's* year
+    (date.isocalendar()[0]), not the trip's own calendar year -- those disagree for a few days
+    every year (e.g. 2025-12-31 falls in ISO week 1 of *2026*; 2027-01-01 falls in ISO week 53 of
+    *2026*), so a trip right at a year boundary could silently land in the wrong year's section
+    and update that year's totals (e.g. "Motoruren-teller") even though that year was otherwise
+    already done (found in practice: a New Year's Day trip would have changed the *previous*
+    year's engine-hour-meter reading). Both trips below fall in the exact same ISO (year, week)
+    -- (2026, 1) -- but on either side of the calendar year boundary, and must end up in their
+    own, separate year sections."""
+    new_years_eve = _trip(
+        depart_time=datetime(2025, 12, 31, 9, 0), arrive_time=datetime(2025, 12, 31, 10, 0),
+        engine_hours_total={0: 100.0},
+    )
+    new_years_day = _trip(
+        depart_time=datetime(2026, 1, 2, 9, 0), arrive_time=datetime(2026, 1, 2, 10, 0),
+        engine_hours_total={0: 5.0},
+    )
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([new_years_eve, new_years_day], out_path, utc_offset_hours=0)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert "<h2>2025</h2>" in html
+    assert "<h2>2026</h2>" in html
+    # each year's own "Motoruren-teller" must reflect only its own trip's reading, not whichever
+    # trip happens to be chronologically last overall
+    section_2025 = html[html.index("<h2>2025</h2>") : html.index("<h2>2025</h2>") + 2000]
+    section_2026 = html[html.index("<h2>2026</h2>") : html.index("<h2>2026</h2>") + 2000]
+    assert "100,0 h" in section_2025
+    assert "5,0 h" in section_2026
+
+
 def test_write_html_logbook_sequence_number_resets_each_year(tmp_path: Path):
     """Volgnummer counts trips chronologically within a year (1, 2, 3, ...), independent of the
     display order (most recent week first) -- and starts back at 1 for the next year."""
