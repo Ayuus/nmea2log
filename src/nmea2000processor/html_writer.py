@@ -392,12 +392,24 @@ def _totals_html(totals: _Totals) -> str:
             items.append((label, f"{_nl_num(hours)} h", T["totals_hours_logged_tooltip"]))
 
     cards = "".join(
-        f'<div class="stat"{f" title=\"{escape(tooltip)}\"" if tooltip else ""}>'
-        f'<div class="stat-label">{escape(label)}</div>'
+        f'<div class="stat"><div class="stat-label">{_stat_label_html(label, tooltip)}</div>'
         f'<div class="stat-value">{escape(value)}</div></div>'
         for label, value, tooltip in items
     )
     return f'<section class="totals">{cards}</section>'
+
+
+def _stat_label_html(label: str, tooltip: Optional[str]) -> str:
+    """A native title="" tooltip is easy to never discover (no visual cue besides the cursor, and
+    forgotten again just as easily even after finding it once -- found in practice). The dotted
+    underline + colored hover box used everywhere else in this table for exactly this purpose
+    (Beweging, Watertemperatuur, Toerental, Alarm) is a cue the reader already recognizes."""
+    if tooltip is None:
+        return escape(label)
+    return (
+        f'<span class="temp-hover">{escape(label)}'
+        f'<span class="temp-tooltip" style="background:#eef4fb;color:#1a4a7a;">{escape(tooltip)}</span></span>'
+    )
 
 
 def _trip_row_html(
@@ -675,7 +687,6 @@ def write_html_logbook(
   h2 {{ margin-top: 2em; border-bottom: 2px solid #1a6ecc; padding-bottom: 0.2em; }}
   .totals {{ display: flex; flex-wrap: wrap; gap: 1em; margin: 1em 0 2em; }}
   .stat {{ background: white; border-radius: 8px; padding: 0.8em 1.2em; box-shadow: 0 1px 3px rgba(0,0,0,0.1); min-width: 140px; }}
-  .stat[title] {{ cursor: help; }}
   .stat-label {{ font-size: 0.8em; color: #666; }}
   .stat-value {{ font-size: 1.3em; font-weight: 600; }}
   /* One continuous table per year (see write_html_logbook) with natural (auto) column sizing --

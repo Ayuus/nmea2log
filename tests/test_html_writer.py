@@ -161,24 +161,29 @@ def test_write_html_logbook_totals_omit_engine_label_with_one_engine(tmp_path: P
     write_html_logbook([trip], out_path)
 
     html = out_path.read_text(encoding="utf-8")
-    assert "Gelogde motoruren</div>" in html
+    assert '<span class="temp-hover">Gelogde motoruren' in html
     assert "engine 0" not in html.lower()
 
 
 def test_write_html_logbook_engine_hour_meter_and_logged_hours_have_explanatory_tooltips(tmp_path: Path):
     """Regression test for a real point of confusion: "Motoruren-teller" is the engine's own
     lifetime hour meter reading (as of the most recent trip), not a total over the logged period
-    -- so it can be much larger than "Totale vaaruren" or "Gelogde motoruren" right next to it, which
-    only cover this logbook's own trips (found in practice: read as if the numbers didn't add
-    up, without a tooltip explaining that distinction)."""
+    -- so it can be much larger than "Totale vaaruren" or "Gelogde motoruren" right next to it,
+    which only cover this logbook's own trips. A first pass explained this with a native
+    title="" tooltip, which turned out easy to never notice (no visual cue besides the cursor)
+    and just as easy to forget about even after finding it once (found in practice) -- so it now
+    uses the same visible dotted-underline + colored hover box already used everywhere else in
+    this table for exactly this purpose."""
     trip = _trip(engine_hours={0: 1.5}, engine_hours_total={0: 500.0})
     out_path = tmp_path / "logbook.html"
 
     write_html_logbook([trip], out_path)
 
     html = out_path.read_text(encoding="utf-8")
-    assert 'title="Actuele stand van de motoruren-teller' in html
-    assert 'title="Som van de motoruren tijdens de gelogde reizen' in html
+    assert '<span class="temp-hover">Motoruren-teller' in html
+    assert "Actuele stand van de motoruren-teller" in html
+    assert '<span class="temp-hover">Gelogde motoruren' in html
+    assert "deze teller wordt maar om de paar minuten bijgewerkt" in html
 
 
 def test_write_html_logbook_shows_current_engine_hour_meter(tmp_path: Path):
@@ -196,7 +201,7 @@ def test_write_html_logbook_shows_current_engine_hour_meter(tmp_path: Path):
     write_html_logbook([trip_a, trip_b], out_path)
 
     html = out_path.read_text(encoding="utf-8")
-    assert "Motoruren-teller</div>" in html
+    assert '<span class="temp-hover">Motoruren-teller' in html
     assert "102,5 h" in html
     assert "100,0 h" not in html
 

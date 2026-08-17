@@ -68,8 +68,9 @@ NL: Dict[str, str] = {
     "totals_hours_logged": "Gelogde motoruren",
     "totals_hours_logged_engine": "Gelogde motoruren, motor {instance}",
     "totals_hours_logged_tooltip": (
-        "Som van de motoruren tijdens de gelogde reizen -- kan lager zijn dan de vaaruren als er "
-        "ook gevaren is met de motor uit."
+        "Som van de toename van de motoruren-teller tijdens elke gelogde reis -- deze teller "
+        "wordt maar om de paar minuten bijgewerkt (niet continu, zoals de positie), dus een "
+        "verschil van een paar minuten met de vaaruren is normaal."
     ),
     # Motion (roll/pitch) column
     "motion_roll": "slingeren",
