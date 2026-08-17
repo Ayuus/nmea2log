@@ -504,16 +504,19 @@ def test_write_html_logbook_no_warnings_cell_without_warnings(tmp_path: Path):
     assert 'class="temp-hover warning-count"' not in html
 
 
-def test_write_html_logbook_shows_water_temp_badge(tmp_path: Path):
+def test_write_html_logbook_details_popup_shows_water_temperature(tmp_path: Path):
+    """Water temperature moved from its own always-visible column into the shared Details popup
+    (alongside motion and the periodic log) to keep the trips table narrow (found in practice:
+    one column each for these blew the table width out badly)."""
     trip = _trip(avg_water_temp_c=21.8, min_water_temp_c=21.7, max_water_temp_c=21.9)
     out_path = tmp_path / "logbook.html"
 
     write_html_logbook([trip], out_path)
 
     html = out_path.read_text(encoding="utf-8")
-    assert "temp-hover" in html
+    assert 'class="show-log"' in html  # the "Details" button
+    assert "Watertemperatuur" in html
     assert "21,8°C" in html
-    assert "#EAF3DE" in html  # green bucket for 18-22°C
 
 
 def test_write_html_logbook_shows_speed_at_typical_rpm_tooltip(tmp_path: Path):
@@ -527,48 +530,35 @@ def test_write_html_logbook_shows_speed_at_typical_rpm_tooltip(tmp_path: Path):
     assert "gem. 13,0 kn bij dat toerental (12,6-13,4 kn)" in html
 
 
-def test_write_html_logbook_shows_motion_variation(tmp_path: Path):
-    """The visible cell shows just the numbers (roll, then pitch) so the column stays narrow --
-    which of the two is which is explained by the "Beweging" column header's own tooltip, and
-    spelled out again here in this cell's tooltip."""
+def test_write_html_logbook_details_popup_shows_motion(tmp_path: Path):
+    """Motion (roll/pitch) moved from its own always-visible column into the shared Details
+    popup, which has room to spell out which number is which directly instead of needing a
+    numbers-only cell plus a hover tooltip to explain it."""
     trip = _trip(roll_variation_deg=2.5, pitch_variation_deg=0.7)
     out_path = tmp_path / "logbook.html"
 
     write_html_logbook([trip], out_path)
 
     html = out_path.read_text(encoding="utf-8")
-    assert "±2,5°, ±0,7°" in html  # the visible, numbers-only cell content
+    assert "Beweging" in html
     assert "slingeren ±2,5°" in html
     assert "stampen ±0,7°" in html
 
 
-def test_write_html_logbook_motion_header_tooltip_has_no_ordinal_prefixes(tmp_path: Path):
-    out_path = tmp_path / "logbook.html"
-
-    write_html_logbook([_trip()], out_path)
-
-    html = out_path.read_text(encoding="utf-8")
-    assert "slingeren (roll), stampen (pitch)" in html
-    assert "1e getal" not in html
-    assert "2e:" not in html
-
-
-def test_write_html_logbook_shows_motion_peak_in_tooltip(tmp_path: Path):
+def test_write_html_logbook_shows_motion_peak_in_the_details_popup(tmp_path: Path):
     """The standard deviation alone can look deceptively small for a trip that's mostly calm
-    with one rough patch, so the peak-to-peak range shows up too (in a hover tooltip, same
-    pattern as the water-temp badge, to keep the visible cell compact)."""
+    with one rough patch, so the peak-to-peak range shows up too, right alongside it."""
     trip = _trip(roll_variation_deg=2.5, pitch_variation_deg=0.7, roll_range_deg=23.0, pitch_range_deg=5.3)
     out_path = tmp_path / "logbook.html"
 
     write_html_logbook([trip], out_path)
 
     html = out_path.read_text(encoding="utf-8")
-    assert "slingeren ±2,5°" in html
-    assert "slingeren piek 23,0°" in html
-    assert "stampen piek 5,3°" in html
+    assert "slingeren ±2,5° (piek 23,0°)" in html
+    assert "stampen ±0,7° (piek 5,3°)" in html
 
 
-def test_write_html_logbook_water_temp_badge_shows_range_when_notable(tmp_path: Path):
+def test_write_html_logbook_water_temp_shows_range_when_notable(tmp_path: Path):
     trip = _trip(avg_water_temp_c=17.0, min_water_temp_c=15.0, max_water_temp_c=19.0)
     out_path = tmp_path / "logbook.html"
 
@@ -578,16 +568,18 @@ def test_write_html_logbook_water_temp_badge_shows_range_when_notable(tmp_path: 
     assert "15,0" in html and "19,0" in html
 
 
-def test_write_html_logbook_no_water_temp_badge_without_data(tmp_path: Path):
-    """The "Beweging" column header always carries its own explanatory temp-hover tooltip
-    (regardless of trip data), so this checks for the water-temp badge's own tooltip content
-    specifically, not just the shared temp-hover class."""
+def test_write_html_logbook_no_details_button_without_any_data(tmp_path: Path):
+    """No water temperature, no motion data, and (with the default empty track) no periodic log
+    either -- there's nothing for a Details popup to show, so the button shouldn't appear at
+    all."""
     out_path = tmp_path / "logbook.html"
 
     write_html_logbook([_trip()], out_path)
 
     html = out_path.read_text(encoding="utf-8")
-    assert "🌡️" not in html
+    assert 'class="show-log"' not in html
+    assert "Watertemperatuur" not in html
+    assert "Beweging" not in html
 
 
 def test_write_html_logbook_escapes_place_names(tmp_path: Path):

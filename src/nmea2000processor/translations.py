@@ -19,7 +19,7 @@ NL: Dict[str, str] = {
     "vessel_call_sign": "Roepnaam",
     # <noscript> banner
     "noscript_warning": (
-        'De knoppen "Kaart", "Log" en "Opmerking" in dit logboek hebben JavaScript nodig om te '
+        'De knoppen "Kaart", "Details" en "Opmerking" in dit logboek hebben JavaScript nodig om te '
         "openen. De meeste e-mailprogramma's verwijderen dat uit bijlagen -- open dit bestand in "
         "dat geval in een webbrowser (Chrome, Edge, Firefox, Safari, ...) in plaats van het "
         "rechtstreeks vanuit de e-mail te bekijken."
@@ -42,12 +42,12 @@ NL: Dict[str, str] = {
     "header_l_per_nm": "L/nm",
     "header_engine_hours": "Motoruren",
     "header_rpm": "Toerental",
+    "header_warnings_abbr": "Meld.",
     "header_warnings": "Meldingen",
-    "header_water_temp": "Watertemp.",
+    "header_water_temp": "Watertemperatuur",
     "header_motion": "Beweging",
-    "header_motion_tooltip": "slingeren (roll), stampen (pitch)",
     "header_route": "Route",
-    "header_log": "Log",
+    "header_details": "Details",
     "header_remarks": "Opmerkingen",
     # Week divider row, e.g. "Week 32 (11 aug - 17 aug)"
     "week_label_prefix": "Week",
@@ -76,8 +76,8 @@ NL: Dict[str, str] = {
     "map_button_hide": "Kaart verbergen",
     "map_marker_departure": "Vertrek",
     "map_marker_arrival": "Aankomst",
-    # Periodic log button + popup
-    "log_button": "Log",
+    # Details popup (water temperature, motion, periodic log)
+    "details_button": "Details",
     "log_close_button": "Sluiten",
     "log_header_time": "Tijd",
     "log_header_position": "Positie",

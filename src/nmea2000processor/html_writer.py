@@ -1,8 +1,10 @@
 """Writes the whole logbook out as a single, self-contained HTML file: a boat name header,
 overall totals (trip count, distance, fuel, engine hours, average consumption), trips grouped
 by year and ISO week, a per-trip route map (Leaflet + OpenStreetMap) that opens in a popup when
-you click a trip's "Kaart" button, and a per-trip periodic course/speed/position log (like a
-traditional paper logbook) that opens the same way via a "Log" button.
+you click a trip's "Kaart" button, and a "Details" button/popup bundling water temperature,
+motion (roll/pitch), and a periodic course/speed/position log (like a traditional paper logbook)
+-- these each used to be their own always-visible column, which made the table too wide to
+usefully fit a screen (found in practice).
 
 All UI text lives in translations.py, not here -- see that module's docstring for why.
 
@@ -121,16 +123,6 @@ def _decimated_points(trip: TripLeg) -> List[Tuple[float, float]]:
     return [(round(s.lat, 6), round(s.lon, 6)) for s in decimated]
 
 
-# (background, text) hex pairs for the water-temp badge, cold to warm.
-_TEMP_COLORS = (
-    (14, "#E6F1FB", "#0C447C"),
-    (18, "#E1F5EE", "#085041"),
-    (22, "#EAF3DE", "#27500A"),
-    (26, "#FAEEDA", "#633806"),
-)
-_TEMP_COLOR_HOT = ("#FCEBEB", "#791F1F")
-
-
 def _warnings_count(trip: TripLeg, battery_warning_voltage: Optional[float]) -> int:
     """Counts individual warnings (not text segments) directly from the underlying data instead
     of parsing _all_warnings_text's semicolon-joined string, since one engine's segment can
@@ -159,61 +151,35 @@ def _warnings_html(trip: TripLeg, battery_warning_voltage: Optional[float]) -> s
     )
 
 
-def _water_temp_badge_html(trip: TripLeg) -> str:
-    """Plain text in the table cell (so it doesn't blow up the column width); hovering over it
-    shows the colored thermometer badge (with the min-max range, if notable) as a CSS-only
-    tooltip -- a native title="" tooltip can't be styled/colored."""
+def _water_temp_detail_text(trip: TripLeg) -> str:
+    """Full text (not a hover badge) since this now lives inside the Details popup (see
+    _details_cell_html), which has room to just show it directly instead of needing a compact,
+    hover-only cell."""
     if trip.avg_water_temp_c is None:
         return ""
-    for threshold, bg, text in _TEMP_COLORS:
-        if trip.avg_water_temp_c < threshold:
-            break
-    else:
-        bg, text = _TEMP_COLOR_HOT
-    range_text = ""
+    text = f"{_nl_num(trip.avg_water_temp_c)}°C"
     if trip.max_water_temp_c - trip.min_water_temp_c > 0.5:
-        range_text = f" ({_nl_num(trip.min_water_temp_c)}–{_nl_num(trip.max_water_temp_c)}°C)"
-    return (
-        f'<span class="temp-hover">{_nl_num(trip.avg_water_temp_c)}°C'
-        f'<span class="temp-tooltip" style="background:{bg};color:{text};">'
-        f"🌡️ {_nl_num(trip.avg_water_temp_c)}°C{range_text}</span></span>"
-    )
+        text += f" ({_nl_num(trip.min_water_temp_c)}–{_nl_num(trip.max_water_temp_c)}°C)"
+    return text
 
 
-def _motion_variation_html(trip: TripLeg) -> str:
-    """Just the numbers (roll, then pitch standard deviation, in that order) in the table cell so
-    the column stays narrow; hovering shows which is which (slingeren/stampen) plus the
-    peak-to-peak range -- a trip that's mostly calm with one rough patch still averages out to a
-    small standard deviation, so the single worst swing is worth surfacing separately rather than
-    only showing the diluted average. The column header itself also explains the number order
-    (see _HEADER_TOOLTIPS) since a bare "±2,5°, ±0,7°" means nothing without that context."""
-    visible_parts = []
-    tooltip_avg_parts = []
+def _motion_detail_text(trip: TripLeg) -> str:
+    """Full text, spelling out which number is roll vs. pitch (slingeren/stampen) and the
+    peak-to-peak range directly -- this now lives inside the Details popup (see
+    _details_cell_html), which has room for that instead of needing a numbers-only cell plus a
+    hover tooltip to explain it."""
+    parts = []
     if trip.roll_variation_deg is not None:
-        visible_parts.append(f"±{_nl_num(trip.roll_variation_deg)}°")
-        tooltip_avg_parts.append(f"{T['motion_roll']} ±{_nl_num(trip.roll_variation_deg)}°")
+        text = f"{T['motion_roll']} ±{_nl_num(trip.roll_variation_deg)}°"
+        if trip.roll_range_deg is not None:
+            text += f" ({T['motion_peak']} {_nl_num(trip.roll_range_deg)}°)"
+        parts.append(text)
     if trip.pitch_variation_deg is not None:
-        visible_parts.append(f"±{_nl_num(trip.pitch_variation_deg)}°")
-        tooltip_avg_parts.append(f"{T['motion_pitch']} ±{_nl_num(trip.pitch_variation_deg)}°")
-    if not visible_parts:
-        return ""
-    visible = escape(", ".join(visible_parts))
-
-    peak_parts = []
-    if trip.roll_range_deg is not None:
-        peak_parts.append(f"{T['motion_roll']} {T['motion_peak']} {_nl_num(trip.roll_range_deg)}°")
-    if trip.pitch_range_deg is not None:
-        peak_parts.append(f"{T['motion_pitch']} {T['motion_peak']} {_nl_num(trip.pitch_range_deg)}°")
-
-    tooltip_text = ", ".join(tooltip_avg_parts)
-    if peak_parts:
-        tooltip_text += " (" + ", ".join(peak_parts) + ")"
-    tooltip = escape(tooltip_text)
-    return (
-        f'<span class="temp-hover">{visible}'
-        f'<span class="temp-tooltip" style="background:#eef4fb;color:#1a4a7a;">'
-        f"〰️ {tooltip}</span></span>"
-    )
+        text = f"{T['motion_pitch']} ±{_nl_num(trip.pitch_variation_deg)}°"
+        if trip.pitch_range_deg is not None:
+            text += f" ({T['motion_peak']} {_nl_num(trip.pitch_range_deg)}°)"
+        parts.append(text)
+    return ", ".join(parts)
 
 
 def _typical_rpm_html(trip: TripLeg) -> str:
@@ -285,40 +251,57 @@ def _periodic_log_entries(
     return entries
 
 
-def _log_cell_html(trip: TripLeg, idx: int, interval_minutes: float, offset_hours: float) -> str:
-    """Button + <dialog> popup (like the map, not an inline-expanding table) so opening the log
-    doesn't push the rest of a possibly very wide, already horizontally-scrolled trips table
-    around -- found in practice: with an inline table, the COG/SOG columns could end up scrolled
-    out of view off the right edge of the same .table-scroll region the button itself was in,
-    making it look like the log only ever had a time and position column."""
+def _details_row_html(label: str, value: str) -> str:
+    return f'<div class="detail-row"><span class="detail-label">{escape(label)}:</span> {value}</div>'
+
+
+def _details_cell_html(trip: TripLeg, idx: int, interval_minutes: float, offset_hours: float) -> str:
+    """Button + <dialog> popup (like the map, not inline) bundling water temperature, motion
+    (roll/pitch), and the periodic course/speed/position log together -- these each used to be
+    their own always-visible column, which blew the trips table's width out badly (found in
+    practice). A popup for this also doesn't push the rest of a possibly very wide, already
+    horizontally-scrolled table around when opened, the same reason the log itself was already a
+    popup rather than an inline-expanding table: with an inline table, the COG/SOG columns could
+    end up scrolled out of view off the right edge of the same .table-scroll region the button
+    itself was in. More columns may move in here later."""
+    sections = []
+    water_temp = _water_temp_detail_text(trip)
+    if water_temp:
+        sections.append(_details_row_html(T["header_water_temp"], escape(water_temp)))
+    motion = _motion_detail_text(trip)
+    if motion:
+        sections.append(_details_row_html(T["header_motion"], escape(motion)))
+
     entries = _periodic_log_entries(trip.track, interval_minutes, offset_hours)
-    if len(entries) < 2:
-        return ""
-    rows = []
-    for entry in entries:
-        local_time = _to_local(entry.time, offset_hours)
-        cog_text = f"{_nl_num(entry.cog_deg, 0)}&deg;" if entry.cog_deg is not None else ""
-        sog_text = f"{_nl_num(entry.sog_ms / _KNOT_IN_MS)} kn"
-        position_text = f"{entry.lat:.4f}, {entry.lon:.4f}"
-        rows.append(
-            f"<tr><td>{local_time:%H:%M}</td><td>{position_text}</td>"
-            f"<td>{cog_text}</td><td>{sog_text}</td></tr>"
+    if len(entries) >= 2:
+        rows = []
+        for entry in entries:
+            local_time = _to_local(entry.time, offset_hours)
+            cog_text = f"{_nl_num(entry.cog_deg, 0)}&deg;" if entry.cog_deg is not None else ""
+            sog_text = f"{_nl_num(entry.sog_ms / _KNOT_IN_MS)} kn"
+            position_text = f"{entry.lat:.4f}, {entry.lon:.4f}"
+            rows.append(
+                f"<tr><td>{local_time:%H:%M}</td><td>{position_text}</td>"
+                f"<td>{cog_text}</td><td>{sog_text}</td></tr>"
+            )
+        sections.append(
+            "<table class=\"log-table\"><thead><tr>"
+            f"<th>{escape(T['log_header_time'])}</th><th>{escape(T['log_header_position'])}</th>"
+            f"<th>{escape(T['log_header_cog'])}</th><th>{escape(T['log_header_sog'])}</th>"
+            f'</tr></thead><tbody>{"".join(rows)}</tbody></table>'
         )
-    table = (
-        "<table class=\"log-table\"><thead><tr>"
-        f"<th>{escape(T['log_header_time'])}</th><th>{escape(T['log_header_position'])}</th>"
-        f"<th>{escape(T['log_header_cog'])}</th><th>{escape(T['log_header_sog'])}</th>"
-        f'</tr></thead><tbody>{"".join(rows)}</tbody></table>'
-    )
+
+    if not sections:
+        return ""
     dialog = (
-        f'<dialog class="log-dialog" id="log-{idx}">{table}'
+        f'<dialog class="log-dialog" id="log-{idx}">{"".join(sections)}'
         f'<button type="button" class="close-log">{escape(T["log_close_button"])}</button></dialog>'
     )
-    return f'<button type="button" class="show-log" data-trip="{idx}">{escape(T["log_button"])}</button>{dialog}'
+    return f'<button type="button" class="show-log" data-trip="{idx}">{escape(T["details_button"])}</button>{dialog}'
 
 
 def _remarks_cell_html(trip_uid: Optional[str], idx: int, remarks_api_url: str) -> str:
-    """Button + <dialog> popup (same pattern as Log/Map). The remark text itself isn't known at
+    """Button + <dialog> popup (same pattern as Details/Map). The remark text itself isn't known at
     generation time -- unlike everything else in this file, it doesn't come from the decoded
     NMEA2000 data at all, but from WordPress (see wordpress-plugin/), fetched by the REMARKS_*
     script after the page loads -- so this only builds the empty shell; JS fills in the button
@@ -432,10 +415,8 @@ def _trip_row_html(
         escape(_engine_hours_text(trip)),
         _typical_rpm_html(trip),
         _warnings_html(trip, battery_warning_voltage),
-        _water_temp_badge_html(trip),
-        _motion_variation_html(trip),
         map_cell,
-        _log_cell_html(trip, idx, log_interval_minutes, offset),
+        _details_cell_html(trip, idx, log_interval_minutes, offset),
     ]
     if remarks_api_url:
         cells.append(_remarks_cell_html(trip_uid, idx, remarks_api_url))
@@ -460,10 +441,13 @@ _HEADER_FULL_NAMES = {
 # above, expanding this one on a wide viewport isn't worth it: with this many columns the table
 # needs horizontal scrolling regardless of viewport width anyway (found in practice), so it would
 # only ever waste column width without actually helping anyone see more of the table at once.
-_HEADER_ABBR_TITLES = {T["header_seq_abbr"]: T["header_seq_full"]}
+_HEADER_ABBR_TITLES = {
+    T["header_seq_abbr"]: T["header_seq_full"],
+    T["header_warnings_abbr"]: T["header_warnings"],
+}
 # Headers whose meaning isn't obvious from the label alone get a hover tooltip (same CSS-only
 # mechanism as the table cells, see .temp-hover/.temp-tooltip) instead of a longer header.
-_HEADER_TOOLTIPS = {T["header_motion"]: T["header_motion_tooltip"]}
+_HEADER_TOOLTIPS: Dict[str, str] = {}
 
 
 def _header_cell_html(label: str) -> str:
@@ -501,17 +485,15 @@ _HEADERS = [
     T["header_l_per_nm"],
     T["header_engine_hours"],
     T["header_rpm"],
-    T["header_warnings"],
-    T["header_water_temp"],
-    T["header_motion"],
+    T["header_warnings_abbr"],
     T["header_route"],
-    T["header_log"],
+    T["header_details"],
 ]
 
 
 def _headers_for(remarks_api_url: str) -> List[str]:
     """The Remarks column only exists at all when the feature is configured (see
-    _DEFAULT_REMARKS_API_URL) -- unlike Map/Log/Route, whose *column* always exists even though
+    _DEFAULT_REMARKS_API_URL) -- unlike Route/Details, whose *column* always exists even though
     individual trips without track data leave that cell empty, "remarks enabled" is a whole-
     document setting, not a per-trip one, so an unused column isn't shown at all rather than
     always being present-but-empty."""
@@ -704,6 +686,8 @@ def write_html_logbook(
   .log-table {{ border-collapse: collapse; white-space: nowrap; margin-bottom: 0.8em; }}
   .log-table th, .log-table td {{ padding: 0.2em 0.6em; border-bottom: 1px solid #eee; text-align: left; font-size: 0.9em; }}
   .log-table th {{ background: #f0f0f0; }}
+  .detail-row {{ margin-bottom: 0.4em; }}
+  .detail-label {{ font-weight: 600; }}
   .close-log {{ cursor: pointer; border: 1px solid #ccc; background: white; border-radius: 4px; padding: 0.3em 0.8em; }}
   .close-log:hover {{ background: #f0f0f0; }}
   .temp-hover {{ cursor: default; border-bottom: 1px dotted #999; }}
