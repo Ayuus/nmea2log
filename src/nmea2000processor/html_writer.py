@@ -251,8 +251,18 @@ def _periodic_log_entries(
     return entries
 
 
-def _details_row_html(label: str, value: str) -> str:
-    return f'<div class="detail-row"><span class="detail-label">{escape(label)}:</span> {value}</div>'
+def _trip_title(trip: TripLeg, depart_local: datetime) -> str:
+    """Shared with the map popup's own title (see _trip_row_html) -- the Details popup needs the
+    same "which trip is this" context, since unlike the always-visible table row it replaces a
+    cell of, a popup can be scrolled away from the row that opened it."""
+    return f"{depart_local:%Y-%m-%d %H:%M} {trip.depart_place} -> {trip.arrive_place}"
+
+
+def _details_row_html(icon: str, label: str, value: str) -> str:
+    return (
+        f'<div class="detail-row"><span class="detail-icon">{icon}</span>'
+        f'<span class="detail-label">{escape(label)}:</span> {value}</div>'
+    )
 
 
 def _details_cell_html(trip: TripLeg, idx: int, interval_minutes: float, offset_hours: float) -> str:
@@ -267,10 +277,10 @@ def _details_cell_html(trip: TripLeg, idx: int, interval_minutes: float, offset_
     sections = []
     water_temp = _water_temp_detail_text(trip)
     if water_temp:
-        sections.append(_details_row_html(T["header_water_temp"], escape(water_temp)))
+        sections.append(_details_row_html("🌡️", T["header_water_temp"], escape(water_temp)))
     motion = _motion_detail_text(trip)
     if motion:
-        sections.append(_details_row_html(T["header_motion"], escape(motion)))
+        sections.append(_details_row_html("〰️", T["header_motion"], escape(motion)))
 
     entries = _periodic_log_entries(trip.track, interval_minutes, offset_hours)
     if len(entries) >= 2:
@@ -285,6 +295,8 @@ def _details_cell_html(trip: TripLeg, idx: int, interval_minutes: float, offset_
                 f"<td>{cog_text}</td><td>{sog_text}</td></tr>"
             )
         sections.append(
+            f'<div class="detail-row"><span class="detail-icon">🧭</span>'
+            f'<span class="detail-label">{escape(T["details_log_heading"])}</span></div>'
             "<table class=\"log-table\"><thead><tr>"
             f"<th>{escape(T['log_header_time'])}</th><th>{escape(T['log_header_position'])}</th>"
             f"<th>{escape(T['log_header_cog'])}</th><th>{escape(T['log_header_sog'])}</th>"
@@ -293,8 +305,10 @@ def _details_cell_html(trip: TripLeg, idx: int, interval_minutes: float, offset_
 
     if not sections:
         return ""
+    depart_local = _to_local(trip.depart_time, offset_hours)
+    title = f'<div class="trip-map-title">{escape(_trip_title(trip, depart_local))}</div>'
     dialog = (
-        f'<dialog class="log-dialog" id="log-{idx}">{"".join(sections)}'
+        f'<dialog class="log-dialog" id="log-{idx}">{title}{"".join(sections)}'
         f'<button type="button" class="close-log">{escape(T["log_close_button"])}</button></dialog>'
     )
     return f'<button type="button" class="show-log" data-trip="{idx}">{escape(T["details_button"])}</button>{dialog}'
@@ -423,7 +437,7 @@ def _trip_row_html(
     row = "".join(f"<td>{cell}</td>" for cell in cells)
     map_row = ""
     if trip.track:
-        title = escape(f"{depart_local:%Y-%m-%d %H:%M} {trip.depart_place} -> {trip.arrive_place}")
+        title = escape(_trip_title(trip, depart_local))
         map_row = (
             f'<tr class="trip-map-row" data-trip="{idx}" style="display:none">'
             f'<td colspan="{len(_headers_for(remarks_api_url))}"><div class="trip-map-title">{title}</div>'
@@ -681,12 +695,16 @@ def write_html_logbook(
      the right edge of the same scroll region the button itself was in, making the log look like
      it only ever had a time and position column (found in practice). A dialog isn't constrained
      by that scroll position at all. */
-  .log-dialog {{ border: none; border-radius: 8px; padding: 1em 1.2em; box-shadow: 0 4px 20px rgba(0,0,0,0.25); }}
+  .log-dialog {{ border: none; border-radius: 8px; padding: 1em 1.2em; box-shadow: 0 4px 20px rgba(0,0,0,0.25); min-width: 20em; max-width: 90vw; }}
   .log-dialog::backdrop {{ background: rgba(0,0,0,0.4); }}
-  .log-table {{ border-collapse: collapse; white-space: nowrap; margin-bottom: 0.8em; }}
+  .log-table {{ width: 100%; border-collapse: collapse; white-space: nowrap; margin-bottom: 0.8em; }}
   .log-table th, .log-table td {{ padding: 0.2em 0.6em; border-bottom: 1px solid #eee; text-align: left; font-size: 0.9em; }}
   .log-table th {{ background: #f0f0f0; }}
-  .detail-row {{ margin-bottom: 0.4em; }}
+  .detail-row {{
+    display: flex; align-items: baseline; gap: 0.5em; background: #f5f7fa; border-radius: 6px;
+    padding: 0.5em 0.7em; margin-bottom: 0.5em;
+  }}
+  .detail-icon {{ flex: none; }}
   .detail-label {{ font-weight: 600; }}
   .close-log {{ cursor: pointer; border: 1px solid #ccc; background: white; border-radius: 4px; padding: 0.3em 0.8em; }}
   .close-log:hover {{ background: #f0f0f0; }}

@@ -78,6 +78,7 @@ NL: Dict[str, str] = {
     "map_marker_arrival": "Aankomst",
     # Details popup (water temperature, motion, periodic log)
     "details_button": "Details",
+    "details_log_heading": "Log",
     "log_close_button": "Sluiten",
     "log_header_time": "Tijd",
     "log_header_position": "Positie",
