@@ -8,7 +8,6 @@ build/
 dist/
 .geocode_cache.json
 .ebl_sample_cache.pkl
-trip_ids.json
 logbook.csv
 logbook.gpx
 logbook.html
