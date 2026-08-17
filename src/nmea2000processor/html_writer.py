@@ -455,10 +455,7 @@ _HEADER_FULL_NAMES = {
 # above, expanding this one on a wide viewport isn't worth it: with this many columns the table
 # needs horizontal scrolling regardless of viewport width anyway (found in practice), so it would
 # only ever waste column width without actually helping anyone see more of the table at once.
-_HEADER_ABBR_TITLES = {
-    T["header_seq_abbr"]: T["header_seq_full"],
-    T["header_warnings_abbr"]: T["header_warnings"],
-}
+_HEADER_ABBR_TITLES = {T["header_seq_abbr"]: T["header_seq_full"]}
 # Headers whose meaning isn't obvious from the label alone get a hover tooltip (same CSS-only
 # mechanism as the table cells, see .temp-hover/.temp-tooltip) instead of a longer header.
 _HEADER_TOOLTIPS: Dict[str, str] = {}
@@ -499,7 +496,7 @@ _HEADERS = [
     T["header_l_per_nm"],
     T["header_engine_hours"],
     T["header_rpm"],
-    T["header_warnings_abbr"],
+    T["header_warnings"],
     T["header_route"],
     T["header_details"],
 ]
