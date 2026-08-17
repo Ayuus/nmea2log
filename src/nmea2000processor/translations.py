@@ -53,7 +53,7 @@ NL: Dict[str, str] = {
     # Totals cards
     "totals_trips": "Reizen",
     "totals_distance": "Totale afstand",
-    "totals_hours": "Totale uren",
+    "totals_hours": "Totale vaaruren",
     "totals_fuel_calculated": "Totale brandstof (berekend)",
     "totals_fuel_engine_meter": "Totale brandstof (motormeter)",
     "totals_avg_consumption": "Gem. verbruik",

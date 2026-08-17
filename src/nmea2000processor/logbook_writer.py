@@ -45,9 +45,17 @@ def _nl_num(value: float, decimals: int = 1) -> str:
     return f"{value:.{decimals}f}".replace(".", ",")
 
 
+def _duration_minutes(duration: timedelta) -> int:
+    """Rounded to the nearest minute -- shared with html_writer's totals computation so the
+    displayed "Totale uren" always exactly equals the sum of the individual "Duur" column values
+    a user would get by adding them up by hand (found in practice: floor-rounding each trip's own
+    display value while summing the *unrounded* durations for "Totale uren" made the two
+    disagree by several minutes)."""
+    return round(duration.total_seconds() / 60)
+
+
 def _format_duration(duration: timedelta) -> str:
-    total_minutes = int(duration.total_seconds() // 60)
-    hours, minutes = divmod(total_minutes, 60)
+    hours, minutes = divmod(_duration_minutes(duration), 60)
     return f"{hours}:{minutes:02d}"
 
 

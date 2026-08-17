@@ -130,10 +130,28 @@ def test_write_html_logbook_shows_hours_underway_and_avg_speed(tmp_path: Path):
     write_html_logbook([trip_a, trip_b], out_path)
 
     html = out_path.read_text(encoding="utf-8")
-    assert "Totale uren" in html
+    assert "Totale vaaruren" in html
     assert "4,0 h" in html  # 2h + 2h
     assert "Gem. snelheid" in html
     assert "4,0 kn" in html  # 16 nm / 4 h, distance-weighted
+
+
+def test_write_html_logbook_total_hours_matches_the_sum_of_rounded_trip_durations(tmp_path: Path):
+    """Regression test for a real inconsistency: "Totale vaaruren" used to sum each trip's *raw*
+    duration, while the "Duur" column floor-rounded each trip's own value for display -- so a
+    user adding up the visible per-row durations by hand could get a different total than the
+    card showed (found in practice). Both now go through the same per-trip rounded-minutes
+    value, and floor became round while at it (less biased for an individual trip's own
+    display)."""
+    trips = [_trip(duration=timedelta(minutes=5, seconds=40)) for _ in range(10)]
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook(trips, out_path)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert "<td>0:06</td>" in html  # each trip's own duration, rounded up from 5:40
+    # 10 * 0:06 = 1:00 -- not "0,9 h", which is what summing the *unrounded* 5:40s would give.
+    assert "1,0 h" in html
 
 
 def test_write_html_logbook_totals_omit_engine_label_with_one_engine(tmp_path: Path):
@@ -150,7 +168,7 @@ def test_write_html_logbook_totals_omit_engine_label_with_one_engine(tmp_path: P
 def test_write_html_logbook_engine_hour_meter_and_logged_hours_have_explanatory_tooltips(tmp_path: Path):
     """Regression test for a real point of confusion: "Motoruren-teller" is the engine's own
     lifetime hour meter reading (as of the most recent trip), not a total over the logged period
-    -- so it can be much larger than "Totale uren" or "Gelogde motoruren" right next to it, which
+    -- so it can be much larger than "Totale vaaruren" or "Gelogde motoruren" right next to it, which
     only cover this logbook's own trips (found in practice: read as if the numbers didn't add
     up, without a tooltip explaining that distinction)."""
     trip = _trip(engine_hours={0: 1.5}, engine_hours_total={0: 500.0})

@@ -34,6 +34,7 @@ from xml.sax.saxutils import escape
 from .logbook_writer import (
     _all_warnings_text,
     _avg_consumption_l_per_nm,
+    _duration_minutes,
     _engine_hours_text,
     _format_duration,
     _nl_num,
@@ -74,7 +75,10 @@ def _compute_totals(trips: List[TripLeg]) -> _Totals:
     fuel_liters = sum(trip.fuel_liters for trip in trips)
     device_values = [trip.fuel_liters_device for trip in trips if trip.fuel_liters_device is not None]
     fuel_liters_device = sum(device_values) if device_values else None
-    moving_hours = sum(trip.duration.total_seconds() for trip in trips) / 3600.0
+    # Summed from each trip's own *rounded* minutes (the same rounding _format_duration uses for
+    # the "Duur" column), not the raw unrounded durations -- otherwise this total doesn't exactly
+    # equal what a user gets by adding up the visible per-row values by hand (found in practice).
+    moving_hours = sum(_duration_minutes(trip.duration) for trip in trips) / 60.0
     engine_hours: Dict[int, float] = {}
     engine_hours_current: Dict[int, float] = {}
     # ``trips`` is already sorted chronologically by the caller, so the last value seen per
