@@ -18,8 +18,15 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 _NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
+_OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 _MIN_INTERVAL_S = 1.0
 _EARTH_RADIUS_M = 6_371_000.0
+
+# How far to look for a named marina before falling back to Nominatim's own plain address match
+# (village/town/...) -- same radius as _NEARBY_THRESHOLD_M below, so a marina that's this close
+# is shown outright (no "aan de kant, bij" prefix) the same way a directly-matched feature would
+# be within that threshold.
+_MARINA_SEARCH_RADIUS_M = 250.0
 
 # Beyond this distance from the matched feature, the name is no longer really "the" place we're
 # at -- it's just the closest one Nominatim could find (common at anchor, away from any mapped
@@ -52,6 +59,40 @@ def _distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     dlambda = math.radians(lon2 - lon1)
     a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlambda / 2) ** 2
     return 2 * _EARTH_RADIUS_M * math.asin(math.sqrt(a))
+
+
+def _nearby_marina_name(lat: float, lon: float, user_agent: str) -> Optional[str]:
+    """Looks for the nearest named marina (OSM leisure=marina) within _MARINA_SEARCH_RADIUS_M via
+    Overpass, since Nominatim's own reverse geocode only matches a feature the query point falls
+    *inside* -- a boat moored just outside a marina's own mapped basin (found in practice: at the
+    harbour mouth, not mid-basin) never gets the marina's name from a plain reverse lookup, only
+    whatever unrelated point feature happens to be nearest instead. A separate service (not
+    Nominatim) since Nominatim's own search endpoint can't filter by OSM tag, only match free-text
+    against a name we'd have to already know."""
+    query = (
+        "[out:json][timeout:10];"
+        f'way(around:{_MARINA_SEARCH_RADIUS_M:.0f},{lat:.6f},{lon:.6f})["leisure"="marina"]["name"];'
+        "out center tags;"
+    )
+    data = urllib.parse.urlencode({"data": query}).encode()
+    request = urllib.request.Request(_OVERPASS_URL, data=data, headers={"User-Agent": user_agent})
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, ValueError):
+        return None  # best-effort: falls back to the plain Nominatim result, not cached as a name
+
+    best_name: Optional[str] = None
+    best_distance: Optional[float] = None
+    for element in payload.get("elements", []):
+        name = element.get("tags", {}).get("name")
+        center = element.get("center")
+        if not name or not center:
+            continue
+        distance = _distance_m(lat, lon, center["lat"], center["lon"])
+        if best_distance is None or distance < best_distance:
+            best_name, best_distance = name, distance
+    return best_name
 
 
 class Geocoder:
@@ -125,6 +166,14 @@ class Geocoder:
             return f"Unknown ({lat:.4f}, {lon:.4f}) [geocoding failed: {exc}]", False
 
         self._last_request = time.monotonic()
+        # A nearby marina's own name beats whatever village/town Nominatim's plain reverse lookup
+        # happened to match (found in practice: moored just outside the marina's own mapped basin,
+        # so Nominatim matched an unrelated nearby feature and used *its* address hierarchy
+        # instead -- see _nearby_marina_name).
+        marina_name = _nearby_marina_name(lat, lon, self.user_agent)
+        self._last_request = time.monotonic()
+        if marina_name:
+            return marina_name, True
         return _describe_place(payload, lat, lon), True
 
     def _save_cache(self) -> None:
