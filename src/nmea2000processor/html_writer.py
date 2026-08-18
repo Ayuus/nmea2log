@@ -836,8 +836,6 @@ def write_html_logbook(
 {"".join(sections)}
 <script>
 const TRIPS = {trips_json};
-const MAP_SHOW = {json.dumps(T["map_button_show"])};
-const MAP_HIDE = {json.dumps(T["map_button_hide"])};
 const MAP_MARKER_DEPARTURE = {json.dumps(T["map_marker_departure"])};
 const MAP_MARKER_ARRIVAL = {json.dumps(T["map_marker_arrival"])};
 const REMARKS_API_URL = {json.dumps(remarks_api_url)};
@@ -913,7 +911,10 @@ document.querySelectorAll('.show-map').forEach(function(btn) {{
     var row = document.querySelector('.trip-map-row[data-trip="' + idx + '"]');
     var visible = row.style.display !== 'none';
     row.style.display = visible ? 'none' : '';
-    btn.textContent = visible ? MAP_SHOW : MAP_HIDE;
+    // Colored, not relabeled: changing the button's own text (e.g. to "Kaart verbergen") made
+    // that column -- and with it the whole table -- change width every time the map was toggled
+    // (found in practice). The label stays "Kaart"; only the color now shows whether it's open.
+    btn.classList.toggle('active', !visible);
     if (!visible && !row.dataset.initialized) {{
       row.dataset.initialized = '1';
       var map = L.map('map-' + idx);

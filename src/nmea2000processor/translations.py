@@ -72,7 +72,6 @@ NL: Dict[str, str] = {
     "rpm_tooltip_per_engine": "motor {instance}: gem. {avg} kn ({min}-{max} kn)",
     # Map button + popup
     "map_button_show": "Kaart",
-    "map_button_hide": "Kaart verbergen",
     "map_marker_departure": "Vertrek",
     "map_marker_arrival": "Aankomst",
     # Details popup (water temperature, motion, periodic log)
