@@ -244,6 +244,65 @@ def test_write_html_logbook_year_sections_use_calendar_year_not_iso_week_year(tm
     assert "5,0 h" in section_2026
 
 
+def test_write_html_logbook_yearly_and_overall_totals_sum_correctly_and_stay_isolated_by_year(
+    tmp_path: Path,
+):
+    """Coverage for the year-isolation guarantee from a different angle than the ISO-week-boundary
+    regression test above: with two ordinary trips in each of two different years, each year's own
+    "Totale afstand" and "Gelogde motoruren" must equal the sum of *only that year's* trips -- a
+    trip from the other year must never leak into it. The overall, all-years totals at the very
+    top of the page (before either year's own section) must always include every trip from every
+    year -- unlike a year's own section, there's no reason those should ever be "frozen"."""
+    trip_2025a = _trip(
+        depart_time=datetime(2025, 3, 1, 9, 0), arrive_time=datetime(2025, 3, 1, 10, 0),
+        distance_nm=5.0, engine_hours={0: 1.1},
+    )
+    trip_2025b = _trip(
+        depart_time=datetime(2025, 6, 1, 9, 0), arrive_time=datetime(2025, 6, 1, 10, 0),
+        distance_nm=7.0, engine_hours={0: 1.3},
+    )
+    trip_2026a = _trip(
+        depart_time=datetime(2026, 4, 1, 9, 0), arrive_time=datetime(2026, 4, 1, 10, 0),
+        distance_nm=11.0, engine_hours={0: 2.1},
+    )
+    trip_2026b = _trip(
+        depart_time=datetime(2026, 9, 1, 9, 0), arrive_time=datetime(2026, 9, 1, 10, 0),
+        distance_nm=13.0, engine_hours={0: 2.7},
+    )
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook(
+        [trip_2025a, trip_2025b, trip_2026a, trip_2026b], out_path, utc_offset_hours=0,
+    )
+
+    html = out_path.read_text(encoding="utf-8")
+    # years are shown most-recent-first: overall totals, then <h2>2026</h2>, then <h2>2025</h2>
+    year_2026_at = html.index("<h2>2026</h2>")
+    year_2025_at = html.index("<h2>2025</h2>")
+    overall_section = html[:year_2026_at]
+    section_2026 = html[year_2026_at:year_2025_at]
+    section_2025 = html[year_2025_at:]
+
+    # 2025: 5.0 + 7.0 = 12.0 nm distance, 1.1 + 1.3 = 2.4 h logged engine hours
+    assert "12,0 nm" in section_2025
+    assert "2,4 h" in section_2025
+    # must not also show 2026's own totals
+    assert "24,0 nm" not in section_2025
+    assert "4,8 h" not in section_2025
+
+    # 2026: 11.0 + 13.0 = 24.0 nm distance, 2.1 + 2.7 = 4.8 h logged engine hours
+    assert "24,0 nm" in section_2026
+    assert "4,8 h" in section_2026
+    # must not also show 2025's own totals
+    assert "12,0 nm" not in section_2026
+    assert "2,4 h" not in section_2026
+
+    # overall (all years combined): 12.0 + 24.0 = 36.0 nm, 2.4 + 4.8 = 7.2 h -- must include
+    # every trip regardless of year, unlike either year's own section above
+    assert "36,0 nm" in overall_section
+    assert "7,2 h" in overall_section
+
+
 def test_write_html_logbook_sequence_number_resets_each_year(tmp_path: Path):
     """Volgnummer counts trips chronologically within a year (1, 2, 3, ...), independent of the
     display order (most recent week first) -- and starts back at 1 for the next year."""
