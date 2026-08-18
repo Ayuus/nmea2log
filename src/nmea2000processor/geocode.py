@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import json
 import math
+import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Optional, Tuple
+
+from .log import log
 
 _NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
 _OVERPASS_URL = "https://overpass-api.de/api/interpreter"
@@ -63,7 +66,10 @@ def _distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * _EARTH_RADIUS_M * math.asin(math.sqrt(a))
 
 
-def _nearby_landmark_name(lat: float, lon: float, user_agent: str) -> Optional[str]:
+_LANDMARK_MAX_RETRIES = 10
+
+
+def _nearby_landmark_name(lat: float, lon: float, user_agent: str) -> Tuple[Optional[str], bool]:
     """Looks for the nearest named marina or islet within _LANDMARK_SEARCH_RADIUS_M via Overpass,
     since Nominatim's own reverse geocode only matches a feature the query point falls *inside*
     (an area, e.g. a marina) or literally nearest to (a point, e.g. an islet's own marker) --
@@ -73,7 +79,13 @@ def _nearby_landmark_name(lat: float, lon: float, user_agent: str) -> Optional[s
     anchored a couple hundred meters off a named islet (Nominatim matched an unrelated pier
     instead, using a real but different nearby hamlet). A separate service (not Nominatim) since
     Nominatim's own search endpoint can't filter by OSM tag, only match free-text against a name
-    we'd have to already know."""
+    we'd have to already know.
+
+    Returns ``(name, ok)`` -- ``ok`` is False only if the check itself never completed (every
+    retry failed), as opposed to completing and simply finding nothing nearby, so the caller can
+    tell the two apart: a confirmed "nothing here" is safe to cache, a failed check is not (the
+    caller should retry it on a later run instead of being stuck with today's plain Nominatim
+    fallback forever -- see Geocoder._lookup)."""
     query = (
         "[out:json][timeout:10];"
         "("
@@ -85,11 +97,11 @@ def _nearby_landmark_name(lat: float, lon: float, user_agent: str) -> Optional[s
     )
     data = urllib.parse.urlencode({"data": query}).encode()
     payload = None
-    # Up to 2 retries: the free public Overpass instance occasionally answers a plain around-query
-    # with a 504 under load and nothing else wrong (found in practice: failed once, succeeded < 1 s
-    # later) -- worth a couple of short retries before giving up and falling back to Nominatim's
-    # own, less specific match.
-    for attempt in range(3):
+    # The free public Overpass instance occasionally answers a plain around-query with a 504
+    # under load and nothing else wrong (found in practice: failed once, succeeded < 1 s later)
+    # -- worth retrying a good few times before giving up and falling back to Nominatim's own,
+    # less specific match.
+    for attempt in range(_LANDMARK_MAX_RETRIES + 1):
         if attempt:
             time.sleep(2.0)
         request = urllib.request.Request(_OVERPASS_URL, data=data, headers={"User-Agent": user_agent})
@@ -97,10 +109,18 @@ def _nearby_landmark_name(lat: float, lon: float, user_agent: str) -> Optional[s
             with urllib.request.urlopen(request, timeout=15) as response:
                 payload = json.loads(response.read().decode("utf-8"))
             break
-        except (urllib.error.URLError, TimeoutError, ValueError):
-            continue
+        # OSError alongside URLError: some connection failures (e.g. the server dropping the
+        # connection mid-response) surface as a raw ConnectionResetError/http.client exception,
+        # not wrapped in URLError (found in practice: http.client.RemoteDisconnected crashed the
+        # whole run instead of triggering the fallback below).
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            log(
+                f"[geocode] Overpass landmark check failed ({exc}) "
+                f"-- attempt {attempt + 1}/{_LANDMARK_MAX_RETRIES + 1}",
+                file=sys.stderr,
+            )
     if payload is None:
-        return None  # best-effort: falls back to the plain Nominatim result, not cached as a name
+        return None, False  # best-effort: caller falls back to the plain Nominatim result
 
     best_name: Optional[str] = None
     best_distance: Optional[float] = None
@@ -112,7 +132,7 @@ def _nearby_landmark_name(lat: float, lon: float, user_agent: str) -> Optional[s
         distance = _distance_m(lat, lon, center["lat"], center["lon"])
         if best_distance is None or distance < best_distance:
             best_name, best_distance = name, distance
-    return best_name
+    return best_name, True
 
 
 class Geocoder:
@@ -152,7 +172,11 @@ class Geocoder:
         about that position, so it must not be written to the cache file: otherwise a single
         offline run permanently poisons that position with "geocoding failed", and even a later
         run with a working connection would just keep returning the same stale failure forever
-        instead of retrying (found in practice: ran once without internet on the boat)."""
+        instead of retrying (found in practice: ran once without internet on the boat). Same
+        reasoning applies if only the separate landmark check (_nearby_landmark_name) fails after
+        exhausting its own retries: this run's name is still usable (Nominatim's own plain match),
+        just not cacheable, so a later run retries the landmark check instead of being stuck with
+        today's possibly-wrong fallback forever."""
         wait = _MIN_INTERVAL_S - (time.monotonic() - self._last_request)
         if wait > 0:
             time.sleep(wait)
@@ -181,18 +205,27 @@ class Geocoder:
         try:
             with urllib.request.urlopen(request, timeout=10) as response:
                 payload = json.loads(response.read().decode("utf-8"))
-        except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+        # OSError alongside URLError: some connection failures (e.g. the server dropping the
+        # connection mid-response) surface as a raw ConnectionResetError/http.client exception,
+        # not wrapped in URLError (found in practice: http.client.RemoteDisconnected crashed the
+        # whole run instead of being treated as a normal, non-cacheable lookup failure).
+        except (urllib.error.URLError, OSError, ValueError) as exc:
             self._last_request = time.monotonic()
             return f"Unknown ({lat:.4f}, {lon:.4f}) [geocoding failed: {exc}]", False
 
         self._last_request = time.monotonic()
         # A nearby marina or islet's own name beats whatever village/town Nominatim's plain
         # reverse lookup happened to match instead -- see _nearby_landmark_name.
-        landmark_name = _nearby_landmark_name(lat, lon, self.user_agent)
+        landmark_name, landmark_check_ok = _nearby_landmark_name(lat, lon, self.user_agent)
         self._last_request = time.monotonic()
         if landmark_name:
             return landmark_name, True
-        return _describe_place(payload, lat, lon), True
+        place = _describe_place(payload, lat, lon)
+        # Not cacheable if the landmark check itself failed (as opposed to completing and simply
+        # finding nothing nearby): otherwise this run's plain Nominatim fallback -- possibly the
+        # wrong name, that's the whole reason the check exists -- would get permanently stuck in
+        # the cache even once Overpass is reachable again on a later run.
+        return place, landmark_check_ok
 
     def _save_cache(self) -> None:
         if self.cache_file is None:
