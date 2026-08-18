@@ -79,6 +79,7 @@ NL: Dict[str, str] = {
     "details_button": "Details",
     "details_log_heading": "Log",
     "log_close_button": "Sluiten",
+    "log_header_number": "Nr.",
     "log_header_time": "Tijd",
     "log_header_position": "Positie",
     "log_header_cog": "Koers",

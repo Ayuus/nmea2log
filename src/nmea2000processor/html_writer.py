@@ -312,19 +312,31 @@ def _details_cell_html(trip: TripLeg, idx: int, interval_minutes: float, offset_
     entries = _periodic_log_entries(trip.track, interval_minutes, offset_hours)
     if len(entries) >= 2:
         rows = []
-        for entry in entries:
+        last_idx = len(entries) - 1
+        for i, entry in enumerate(entries):
+            # Same numbering as the map's own numbered markers (see _map_log_points/the
+            # log-marker JS, which number only the entries strictly between these two) -- the
+            # departure/arrival ends get their own map markers already, a redundant numbered
+            # circle right on top of those would just be clutter (found in practice).
+            if i == 0:
+                number_text = escape(T["map_marker_departure"])
+            elif i == last_idx:
+                number_text = escape(T["map_marker_arrival"])
+            else:
+                number_text = str(i)
             local_time = _to_local(entry.time, offset_hours)
             cog_text = f"{_nl_num(entry.cog_deg, 0)}&deg;" if entry.cog_deg is not None else ""
             sog_text = f"{_nl_num(entry.sog_ms / _KNOT_IN_MS)} kn"
             position_text = f"{entry.lat:.4f}, {entry.lon:.4f}"
             rows.append(
-                f"<tr><td>{local_time:%H:%M}</td><td>{position_text}</td>"
+                f"<tr><td>{number_text}</td><td>{local_time:%H:%M}</td><td>{position_text}</td>"
                 f"<td>{cog_text}</td><td>{sog_text}</td></tr>"
             )
         sections.append(
             f'<div class="detail-row"><span class="detail-icon">🧭</span>'
             f'<span class="detail-label">{escape(T["details_log_heading"])}</span></div>'
             "<table class=\"log-table\"><thead><tr>"
+            f"<th>{escape(T['log_header_number'])}</th>"
             f"<th>{escape(T['log_header_time'])}</th><th>{escape(T['log_header_position'])}</th>"
             f"<th>{escape(T['log_header_cog'])}</th><th>{escape(T['log_header_sog'])}</th>"
             f'</tr></thead><tbody>{"".join(rows)}</tbody></table>'
@@ -780,9 +792,9 @@ def write_html_logbook(
   .temp-hover:hover .temp-tooltip {{ display: block; }}
   .map {{ height: 350px; }}
   .log-marker {{
-    background: #1a6ecc; color: white; border: 2px solid white; border-radius: 50%;
-    width: 22px; height: 22px; display: flex; align-items: center; justify-content: center;
-    font-size: 12px; font-weight: 600;
+    background: #1a6ecc; color: white; border: 1px solid white; border-radius: 50%;
+    width: 14px; height: 14px; display: flex; align-items: center; justify-content: center;
+    font-size: 9px; font-weight: 600;
   }}
   .noscript-warning {{
     background: #fff3cd; color: #664d03; border: 1px solid #ffe69c; border-radius: 8px;
@@ -905,19 +917,30 @@ document.querySelectorAll('.show-map').forEach(function(btn) {{
       }}).addTo(map);
       var points = TRIPS[idx].points;
       var line = L.polyline(points, {{color: '#1a6ecc', weight: 3}}).addTo(map);
-      L.marker(points[0]).addTo(map).bindPopup(MAP_MARKER_DEPARTURE);
-      L.marker(points[points.length - 1]).addTo(map).bindPopup(MAP_MARKER_ARRIVAL);
-      // Same numbering as the Details popup's own log table (see _map_log_points) -- a hover
-      // tooltip, not a click popup like the departure/arrival markers above, since there can be
-      // many of these and a tooltip doesn't need dismissing to see the next one.
-      (TRIPS[idx].log || []).forEach(function(entry, i) {{
+      var log = TRIPS[idx].log || [];
+      function entryTooltip(label, entry) {{
+        var parts = [label];
+        if (entry) {{
+          parts.push(entry.time, entry.lat.toFixed(4) + ', ' + entry.lon.toFixed(4));
+          if (entry.cog) parts.push(entry.cog);
+          parts.push(entry.sog);
+        }}
+        return parts.join(' &middot; ');
+      }}
+      // A hover tooltip, not a click popup like before, for consistency with the numbered log
+      // markers below (and so it doesn't need dismissing to see the next one).
+      L.marker(points[0]).addTo(map).bindTooltip(entryTooltip(MAP_MARKER_DEPARTURE, log[0]));
+      L.marker(points[points.length - 1]).addTo(map)
+        .bindTooltip(entryTooltip(MAP_MARKER_ARRIVAL, log[log.length - 1]));
+      // Same numbering as the Details popup's own log table (see _details_cell_html) -- only the
+      // entries strictly between departure and arrival get their own numbered marker; those two
+      // ends already have the markers just above, a numbered circle right on top would just be
+      // clutter (found in practice).
+      log.slice(1, -1).forEach(function(entry, i) {{
         var icon = L.divIcon({{
-          className: 'log-marker', html: '<span>' + (i + 1) + '</span>', iconSize: [22, 22], iconAnchor: [11, 11]
+          className: 'log-marker', html: '<span>' + (i + 1) + '</span>', iconSize: [14, 14], iconAnchor: [7, 7]
         }});
-        var tooltip = [entry.time, entry.lat.toFixed(4) + ', ' + entry.lon.toFixed(4)];
-        if (entry.cog) tooltip.push(entry.cog);
-        tooltip.push(entry.sog);
-        L.marker([entry.lat, entry.lon], {{icon: icon}}).addTo(map).bindTooltip(tooltip.join(' &middot; '));
+        L.marker([entry.lat, entry.lon], {{icon: icon}}).addTo(map).bindTooltip(entryTooltip(String(i + 1), entry));
       }});
       map.fitBounds(line.getBounds(), {{padding: [20, 20]}});
       setTimeout(function() {{ map.invalidateSize(); }}, 0);

@@ -415,6 +415,16 @@ def test_write_html_logbook_embeds_log_points_for_the_map(tmp_path: Path):
     assert log_points[-1]["time"] == "10:30"
 
 
+def _log_table_html(html: str) -> str:
+    """Isolates the Details popup's own log table from the rest of the page -- the main trips
+    table has its own Vertrek/Aankomst *columns* with the same time values, so a plain substring
+    search over the whole page can accidentally match a cell there instead of the log table
+    (found in practice: a trip's own arrival time cell in the main table)."""
+    start = html.index('<table class="log-table"')
+    end = html.index("</table>", start)
+    return html[start:end]
+
+
 def test_write_html_logbook_shows_periodic_log_entries(tmp_path: Path):
     """Default interval is 30 minutes: a 90-minute track sampled every 10 minutes should collapse
     to entries at 0/30/60/90 (start, two 30-min steps, and the trip's own end)."""
@@ -429,9 +439,14 @@ def test_write_html_logbook_shows_periodic_log_entries(tmp_path: Path):
     assert 'id="log-0"' in html  # dialog id must match the button's data-trip
     assert 'class="log-dialog"' in html
     assert 'class="close-log"' in html
-    assert html.count("<tr><td>09:") + html.count("<tr><td>10:") == 4
-    assert "200&deg;" in html
-    assert "5,8 kn" in html  # 3.0 m/s -> ~5.8 kn
+    log_table = _log_table_html(html)
+    assert log_table.count("</td><td>09:") + log_table.count("</td><td>10:") == 4
+    assert "200&deg;" in log_table
+    assert "5,8 kn" in log_table  # 3.0 m/s -> ~5.8 kn
+    # first/last rows are labeled Vertrek/Aankomst, not numbered; the two in between are 1 and 2
+    assert "<td>Vertrek</td>" in log_table
+    assert "<td>Aankomst</td>" in log_table
+    assert "<td>1</td>" in log_table and "<td>2</td>" in log_table
 
 
 def test_write_html_logbook_log_interval_is_configurable(tmp_path: Path):
@@ -443,7 +458,8 @@ def test_write_html_logbook_log_interval_is_configurable(tmp_path: Path):
 
     html = out_path.read_text(encoding="utf-8")
     # every 60 minutes -> 09:00, 10:00 (>= next_due), 10:30 (trip end) = 3 rows
-    assert html.count("<tr><td>09:") + html.count("<tr><td>10:") == 3
+    log_table = _log_table_html(html)
+    assert log_table.count("</td><td>09:") + log_table.count("</td><td>10:") == 3
 
 
 def test_write_html_logbook_log_entries_are_clock_aligned(tmp_path: Path):
@@ -460,13 +476,13 @@ def test_write_html_logbook_log_entries_are_clock_aligned(tmp_path: Path):
 
     write_html_logbook([trip], out_path, utc_offset_hours=0)
 
-    html = out_path.read_text(encoding="utf-8")
-    assert "<tr><td>09:30</td>" in html
-    assert "<tr><td>10:00</td>" in html
-    assert "<tr><td>09:37</td>" not in html
+    log_table = _log_table_html(out_path.read_text(encoding="utf-8"))
+    assert "</td><td>09:30</td>" in log_table
+    assert "</td><td>10:00</td>" in log_table
+    assert "</td><td>09:37</td>" not in log_table
     # 10:07 IS present -- but only once, as the trip's own (mandatory) end time, not as a second
     # clock-aligned entry landing exactly on the old drift-from-departure schedule
-    assert html.count("<tr><td>10:07</td>") == 1
+    assert log_table.count("</td><td>10:07</td>") == 1
 
 
 def test_write_html_logbook_no_log_table_with_a_single_track_point(tmp_path: Path):
