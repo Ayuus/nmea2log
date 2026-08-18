@@ -1,3 +1,4 @@
+import json
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -391,6 +392,27 @@ def _track_every_10_minutes(count: int, cog_deg=200.0):
         NavSample(datetime(2026, 7, 15, 9, 0) + timedelta(minutes=10 * i), 52.30 + 0.001 * i, 4.90, 3.0, None, None, cog_deg)
         for i in range(count)
     ]
+
+
+def test_write_html_logbook_embeds_log_points_for_the_map(tmp_path: Path):
+    """The map shows a numbered marker per periodic log entry (see the log-marker JS in
+    write_html_logbook), reusing the exact same entries as the Details popup's own log table --
+    embedded here as TRIPS[idx].log so JS doesn't have to re-derive them (and risk landing on a
+    different set of points than the table shows for the same trip)."""
+    track = _track_every_10_minutes(10)  # 0..90 minutes, matches the periodic-log tests below
+    trip = _trip(track=track)
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([trip], out_path, utc_offset_hours=0)
+
+    html = out_path.read_text(encoding="utf-8")
+    trips_json = json.loads(re.search(r"const TRIPS = (\{.*?\});", html).group(1))
+    log_points = trips_json["0"]["log"]
+    assert len(log_points) == 4  # same 09:00/09:30/10:00/10:30 split as the log table
+    assert log_points[0]["time"] == "09:00"
+    assert log_points[0]["cog"] == "200°"
+    assert log_points[0]["sog"] == "5,8 kn"
+    assert log_points[-1]["time"] == "10:30"
 
 
 def test_write_html_logbook_shows_periodic_log_entries(tmp_path: Path):

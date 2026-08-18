@@ -255,6 +255,29 @@ def _periodic_log_entries(
     return entries
 
 
+def _map_log_points(trip: TripLeg, offset_hours: float, interval_minutes: float) -> List[dict]:
+    """The same periodic log entries shown in the Details popup's own log table (see
+    _details_cell_html), embedded for the map too so each one can get its own numbered marker --
+    formatted here in Python, not re-derived in JS, so the two can never show slightly different
+    numbers for what's supposed to be the same point."""
+    entries = _periodic_log_entries(trip.track, interval_minutes, offset_hours)
+    if len(entries) < 2:
+        return []
+    points = []
+    for entry in entries:
+        local_time = _to_local(entry.time, offset_hours)
+        points.append(
+            {
+                "lat": round(entry.lat, 6),
+                "lon": round(entry.lon, 6),
+                "time": f"{local_time:%H:%M}",
+                "cog": f"{_nl_num(entry.cog_deg, 0)}°" if entry.cog_deg is not None else None,
+                "sog": f"{_nl_num(entry.sog_ms / _KNOT_IN_MS)} kn",
+            }
+        )
+    return points
+
+
 def _trip_title(trip: TripLeg, depart_local: datetime) -> str:
     """Shared with the map popup's own title (see _trip_row_html) -- the Details popup needs the
     same "which trip is this" context, since unlike the always-visible table row it replaces a
@@ -647,7 +670,12 @@ def write_html_logbook(
         )
 
     trip_data = {
-        idx: {"points": _decimated_points(trip)}
+        idx: {
+            "points": _decimated_points(trip),
+            "log": _map_log_points(
+                trip, _trip_utc_offset_hours(trip, utc_offset_hours), log_interval_minutes
+            ),
+        }
         for idx, trip in enumerate(trips)
         if trip.track
     }
@@ -751,6 +779,11 @@ def write_html_logbook(
   }}
   .temp-hover:hover .temp-tooltip {{ display: block; }}
   .map {{ height: 350px; }}
+  .log-marker {{
+    background: #1a6ecc; color: white; border: 2px solid white; border-radius: 50%;
+    width: 22px; height: 22px; display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 600;
+  }}
   .noscript-warning {{
     background: #fff3cd; color: #664d03; border: 1px solid #ffe69c; border-radius: 8px;
     padding: 0.8em 1.2em; margin-bottom: 1.5em;
@@ -874,6 +907,18 @@ document.querySelectorAll('.show-map').forEach(function(btn) {{
       var line = L.polyline(points, {{color: '#1a6ecc', weight: 3}}).addTo(map);
       L.marker(points[0]).addTo(map).bindPopup(MAP_MARKER_DEPARTURE);
       L.marker(points[points.length - 1]).addTo(map).bindPopup(MAP_MARKER_ARRIVAL);
+      // Same numbering as the Details popup's own log table (see _map_log_points) -- a hover
+      // tooltip, not a click popup like the departure/arrival markers above, since there can be
+      // many of these and a tooltip doesn't need dismissing to see the next one.
+      (TRIPS[idx].log || []).forEach(function(entry, i) {{
+        var icon = L.divIcon({{
+          className: 'log-marker', html: '<span>' + (i + 1) + '</span>', iconSize: [22, 22], iconAnchor: [11, 11]
+        }});
+        var tooltip = [entry.time, entry.lat.toFixed(4) + ', ' + entry.lon.toFixed(4)];
+        if (entry.cog) tooltip.push(entry.cog);
+        tooltip.push(entry.sog);
+        L.marker([entry.lat, entry.lon], {{icon: icon}}).addTo(map).bindTooltip(tooltip.join(' &middot; '));
+      }});
       map.fitBounds(line.getBounds(), {{padding: [20, 20]}});
       setTimeout(function() {{ map.invalidateSize(); }}, 0);
     }}
