@@ -22,11 +22,13 @@ _OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 _MIN_INTERVAL_S = 1.0
 _EARTH_RADIUS_M = 6_371_000.0
 
-# How far to look for a named marina before falling back to Nominatim's own plain address match
-# (village/town/...) -- same radius as _NEARBY_THRESHOLD_M below, so a marina that's this close
-# is shown outright (no "aan de kant, bij" prefix) the same way a directly-matched feature would
-# be within that threshold.
-_MARINA_SEARCH_RADIUS_M = 250.0
+# How far to look for a named landmark (marina, islet, ...) before falling back to Nominatim's
+# own plain address match (village/town/...) -- shown outright within this radius (no "aan de
+# kant, bij"/"op het water, bij" prefix), the same as a directly-matched feature would be within
+# _NEARBY_THRESHOLD_M. Deliberately a bit wider than that: an anchorage is more often a bit off
+# from the landmark it's named after (e.g. a boat anchored off an islet, not on it) than a marina
+# berth is from the marina itself (found in practice: anchored 276 m off Île de la Jument).
+_LANDMARK_SEARCH_RADIUS_M = 300.0
 
 # Beyond this distance from the matched feature, the name is no longer really "the" place we're
 # at -- it's just the closest one Nominatim could find (common at anchor, away from any mapped
@@ -61,25 +63,43 @@ def _distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * _EARTH_RADIUS_M * math.asin(math.sqrt(a))
 
 
-def _nearby_marina_name(lat: float, lon: float, user_agent: str) -> Optional[str]:
-    """Looks for the nearest named marina (OSM leisure=marina) within _MARINA_SEARCH_RADIUS_M via
-    Overpass, since Nominatim's own reverse geocode only matches a feature the query point falls
-    *inside* -- a boat moored just outside a marina's own mapped basin (found in practice: at the
-    harbour mouth, not mid-basin) never gets the marina's name from a plain reverse lookup, only
-    whatever unrelated point feature happens to be nearest instead. A separate service (not
-    Nominatim) since Nominatim's own search endpoint can't filter by OSM tag, only match free-text
-    against a name we'd have to already know."""
+def _nearby_landmark_name(lat: float, lon: float, user_agent: str) -> Optional[str]:
+    """Looks for the nearest named marina or islet within _LANDMARK_SEARCH_RADIUS_M via Overpass,
+    since Nominatim's own reverse geocode only matches a feature the query point falls *inside*
+    (an area, e.g. a marina) or literally nearest to (a point, e.g. an islet's own marker) --
+    neither necessarily wins over an unrelated, closer-by-Nominatim's-own-metric feature. Found
+    in practice twice: moored just outside a marina's own mapped basin (Nominatim matched an
+    unrelated nearby slipway instead, using *its* address hierarchy, a village over a km away);
+    anchored a couple hundred meters off a named islet (Nominatim matched an unrelated pier
+    instead, using a real but different nearby hamlet). A separate service (not Nominatim) since
+    Nominatim's own search endpoint can't filter by OSM tag, only match free-text against a name
+    we'd have to already know."""
     query = (
         "[out:json][timeout:10];"
-        f'way(around:{_MARINA_SEARCH_RADIUS_M:.0f},{lat:.6f},{lon:.6f})["leisure"="marina"]["name"];'
+        "("
+        f'way(around:{_LANDMARK_SEARCH_RADIUS_M:.0f},{lat:.6f},{lon:.6f})["leisure"="marina"]["name"];'
+        f'node(around:{_LANDMARK_SEARCH_RADIUS_M:.0f},{lat:.6f},{lon:.6f})["place"="islet"]["name"];'
+        f'way(around:{_LANDMARK_SEARCH_RADIUS_M:.0f},{lat:.6f},{lon:.6f})["place"="islet"]["name"];'
+        ");"
         "out center tags;"
     )
     data = urllib.parse.urlencode({"data": query}).encode()
-    request = urllib.request.Request(_OVERPASS_URL, data=data, headers={"User-Agent": user_agent})
-    try:
-        with urllib.request.urlopen(request, timeout=15) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except (urllib.error.URLError, TimeoutError, ValueError):
+    payload = None
+    # Up to 2 retries: the free public Overpass instance occasionally answers a plain around-query
+    # with a 504 under load and nothing else wrong (found in practice: failed once, succeeded < 1 s
+    # later) -- worth a couple of short retries before giving up and falling back to Nominatim's
+    # own, less specific match.
+    for attempt in range(3):
+        if attempt:
+            time.sleep(2.0)
+        request = urllib.request.Request(_OVERPASS_URL, data=data, headers={"User-Agent": user_agent})
+        try:
+            with urllib.request.urlopen(request, timeout=15) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            break
+        except (urllib.error.URLError, TimeoutError, ValueError):
+            continue
+    if payload is None:
         return None  # best-effort: falls back to the plain Nominatim result, not cached as a name
 
     best_name: Optional[str] = None
@@ -166,14 +186,12 @@ class Geocoder:
             return f"Unknown ({lat:.4f}, {lon:.4f}) [geocoding failed: {exc}]", False
 
         self._last_request = time.monotonic()
-        # A nearby marina's own name beats whatever village/town Nominatim's plain reverse lookup
-        # happened to match (found in practice: moored just outside the marina's own mapped basin,
-        # so Nominatim matched an unrelated nearby feature and used *its* address hierarchy
-        # instead -- see _nearby_marina_name).
-        marina_name = _nearby_marina_name(lat, lon, self.user_agent)
+        # A nearby marina or islet's own name beats whatever village/town Nominatim's plain
+        # reverse lookup happened to match instead -- see _nearby_landmark_name.
+        landmark_name = _nearby_landmark_name(lat, lon, self.user_agent)
         self._last_request = time.monotonic()
-        if marina_name:
-            return marina_name, True
+        if landmark_name:
+            return landmark_name, True
         return _describe_place(payload, lat, lon), True
 
     def _save_cache(self) -> None:

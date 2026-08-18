@@ -73,7 +73,7 @@ def test_successful_lookup_is_cached_and_not_looked_up_again(monkeypatch, tmp_pa
     assert geocoder.place_name(47.8387, -4.1759) == "Loctudy"
     assert geocoder.place_name(47.8387, -4.1759) == "Loctudy"
 
-    assert call_count == 2  # Nominatim + the nearby-marina check (see _nearby_marina_name), once
+    assert call_count == 2  # Nominatim + the nearby-landmark check (see _nearby_landmark_name), once
     saved = json.loads(cache_file.read_text(encoding="utf-8"))
     assert saved == {"47.8387,-4.1759": "Loctudy"}
 
@@ -81,8 +81,8 @@ def test_successful_lookup_is_cached_and_not_looked_up_again(monkeypatch, tmp_pa
 def test_place_name_prefers_a_nearby_marina_over_nominatims_own_match(monkeypatch, tmp_path):
     """Regression test for a real case: moored just outside a marina's own mapped basin, so
     Nominatim's plain reverse lookup matched an unrelated nearby feature (and used *its* address
-    hierarchy, "Port au Loup") instead of the marina itself. The separate nearby-marina check
-    (see _nearby_marina_name) must win over that plain match."""
+    hierarchy, "Port au Loup") instead of the marina itself. The separate nearby-landmark check
+    (see _nearby_landmark_name) must win over that plain match."""
     def fake_urlopen(request, timeout=10):
         if "overpass-api.de" in request.full_url:
             return _FakeResponse(
@@ -103,7 +103,31 @@ def test_place_name_prefers_a_nearby_marina_over_nominatims_own_match(monkeypatc
     assert geocoder.place_name(47.382706, -2.544722) == "Port de Piriac-sur-Mer"
 
 
-def test_place_name_falls_back_to_nominatim_when_no_marina_nearby(monkeypatch, tmp_path):
+def test_place_name_prefers_a_nearby_islet_over_nominatims_own_match(monkeypatch, tmp_path):
+    """Regression test for a real case: anchored a couple hundred meters off a named islet, so
+    Nominatim's plain reverse lookup matched an unrelated nearby pier (and used *its* address
+    hierarchy, a real but different nearby hamlet) instead of the islet itself."""
+    def fake_urlopen(request, timeout=10):
+        if "overpass-api.de" in request.full_url:
+            return _FakeResponse(
+                {
+                    "elements": [
+                        {
+                            "tags": {"name": "Île de la Jument"},
+                            "center": {"lat": 47.5686912, "lon": -2.8875040},
+                        }
+                    ]
+                }
+            )
+        return _FakeResponse({"address": {"hamlet": "Le Graniol", "village": "Kerners"}})
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    geocoder = Geocoder(cache_file=tmp_path / "cache.json")
+
+    assert geocoder.place_name(47.5706676, -2.8852789) == "Île de la Jument"
+
+
+def test_place_name_falls_back_to_nominatim_when_no_landmark_nearby(monkeypatch, tmp_path):
     def fake_urlopen(request, timeout=10):
         if "overpass-api.de" in request.full_url:
             return _FakeResponse({"elements": []})
@@ -115,9 +139,9 @@ def test_place_name_falls_back_to_nominatim_when_no_marina_nearby(monkeypatch, t
     assert geocoder.place_name(47.5707, -2.8853) == "Kerners"
 
 
-def test_place_name_ignores_a_failed_marina_check(monkeypatch, tmp_path):
+def test_place_name_ignores_a_failed_landmark_check(monkeypatch, tmp_path):
     """A failed Overpass lookup (timeout, unreachable, ...) must not break geocoding entirely --
-    just falls back to the plain Nominatim result, same as if no marina had been found."""
+    just falls back to the plain Nominatim result, same as if no landmark had been found."""
     def fake_urlopen(request, timeout=10):
         if "overpass-api.de" in request.full_url:
             raise urllib.error.URLError("timed out")
@@ -127,6 +151,31 @@ def test_place_name_ignores_a_failed_marina_check(monkeypatch, tmp_path):
     geocoder = Geocoder(cache_file=tmp_path / "cache.json")
 
     assert geocoder.place_name(47.5707, -2.8853) == "Kerners"
+
+
+def test_place_name_retries_the_landmark_check_after_a_transient_failure(monkeypatch, tmp_path):
+    """Regression test for a real case: the free public Overpass instance answered a plain
+    around-query with a 504 under load once, then succeeded under a second (< 1 s later) --
+    a single failure must not give up and fall back to Nominatim's own, less specific match."""
+    overpass_call_count = 0
+
+    def fake_urlopen(request, timeout=10):
+        nonlocal overpass_call_count
+        if "overpass-api.de" in request.full_url:
+            overpass_call_count += 1
+            if overpass_call_count == 1:
+                raise urllib.error.HTTPError(request.full_url, 504, "Gateway Timeout", None, None)
+            return _FakeResponse(
+                {"elements": [{"tags": {"name": "Île de la Jument"}, "center": {"lat": 47.5687, "lon": -2.8875}}]}
+            )
+        return _FakeResponse({"address": {"village": "Kerners"}})
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr("nmea2000processor.geocode.time.sleep", lambda s: None)
+    geocoder = Geocoder(cache_file=tmp_path / "cache.json")
+
+    assert geocoder.place_name(47.5706676, -2.8852789) == "Île de la Jument"
+    assert overpass_call_count == 2
 
 
 def test_no_geocoder_returns_coordinates():
