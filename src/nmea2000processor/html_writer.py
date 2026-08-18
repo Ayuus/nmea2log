@@ -790,7 +790,13 @@ def write_html_logbook(
     box-shadow: 0 1px 4px rgba(0,0,0,0.25);
   }}
   .temp-hover:hover .temp-tooltip {{ display: block; }}
-  .map {{ height: 350px; }}
+  /* The map's own <td> spans every column of the (often much wider than the viewport, already
+     horizontally-scrolled) trips table, so without a width cap the map itself would render just
+     as wide -- on a narrow screen, only a thin vertical slice of that ends up actually visible
+     without also scrolling the table sideways while the map is open (found in practice). Capping
+     the width and sticking it to the left edge of .table-scroll keeps the whole map in view
+     regardless of the table's own scroll position. */
+  .map {{ height: 350px; width: min(700px, calc(100vw - 3em)); position: sticky; left: 0; }}
   .log-marker {{
     background: #1a6ecc; color: white; border: 1px solid white; border-radius: 50%;
     width: 14px; height: 14px; display: flex; align-items: center; justify-content: center;
