@@ -802,6 +802,12 @@ def write_html_logbook(
      Sticking it to the left edge of .table-scroll keeps the whole map in view regardless of the
      table's own scroll position. */
   .map {{ height: 350px; width: calc(100vw - 3em); position: sticky; left: 0; }}
+  /* Without this, the map's own near-viewport-width sizing (see .map above) still counts towards
+     this <td>'s natural width in the table's own (auto) column-sizing math, even though the map
+     is just visually overflowing a sticky box -- widening the whole table to match (found in
+     practice). max-width: 0 tells that sizing pass to ignore this cell's content entirely; the
+     map itself still renders at its full intended size regardless, since nothing here clips it. */
+  .trip-map-row > td {{ max-width: 0; }}
   .log-marker {{
     background: #1a6ecc; color: white; border: 1px solid white; border-radius: 50%;
     width: 14px; height: 14px; display: flex; align-items: center; justify-content: center;
