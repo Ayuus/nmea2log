@@ -68,8 +68,15 @@ def _distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 _LANDMARK_MAX_RETRIES = 10
 
+# Address levels that count as "a village name" for _nearby_landmark_name's marina precedence --
+# deliberately excludes "leisure"/"marina"/"harbour" from _PREFERRED_ADDRESS_KEYS, since those
+# aren't village names, they're Nominatim's own (separate) marina match.
+_VILLAGE_LEVEL_ADDRESS_KEYS = ("town", "village", "city", "municipality", "suburb", "quarter")
 
-def _nearby_landmark_name(lat: float, lon: float, user_agent: str) -> Tuple[Optional[str], bool]:
+
+def _nearby_landmark_name(
+    lat: float, lon: float, user_agent: str, *, has_village: bool
+) -> Tuple[Optional[str], bool]:
     """Looks for the nearest named marina or islet within _LANDMARK_SEARCH_RADIUS_M via Overpass,
     since Nominatim's own reverse geocode only matches a feature the query point falls *inside*
     (an area, e.g. a marina) or literally nearest to (a point, e.g. an islet's own marker) --
@@ -80,6 +87,16 @@ def _nearby_landmark_name(lat: float, lon: float, user_agent: str) -> Tuple[Opti
     instead, using a real but different nearby hamlet). A separate service (not Nominatim) since
     Nominatim's own search endpoint can't filter by OSM tag, only match free-text against a name
     we'd have to already know.
+
+    ``has_village``: whether Nominatim's own plain address already names a real village/town/city
+    (see _VILLAGE_LEVEL_ADDRESS_KEYS) -- if so, a nearby *marina*'s own name is skipped in favour
+    of that village name (found in practice: at an actual town with its own real marina moored
+    right there, e.g. Port-Louis, the marina's own name -- "Port de la Pointe" -- replaced the
+    already-correct, more recognizable town name; unlike Piriac, where the plain match was a
+    village a km away and genuinely wrong). An islet is never skipped this way even when a
+    village is also nearby -- an anchorage's whole point is usually the island, and being
+    anchored a couple hundred meters off one doesn't make the nearest inland village more
+    relevant the way it would for a marina actually moored at a town.
 
     Returns ``(name, ok)`` -- ``ok`` is False only if the check itself never completed (every
     retry failed), as opposed to completing and simply finding nothing nearby, so the caller can
@@ -122,17 +139,27 @@ def _nearby_landmark_name(lat: float, lon: float, user_agent: str) -> Tuple[Opti
     if payload is None:
         return None, False  # best-effort: caller falls back to the plain Nominatim result
 
-    best_name: Optional[str] = None
-    best_distance: Optional[float] = None
+    best_marina: Optional[Tuple[str, float]] = None
+    best_islet: Optional[Tuple[str, float]] = None
     for element in payload.get("elements", []):
-        name = element.get("tags", {}).get("name")
+        tags = element.get("tags", {})
+        name = tags.get("name")
         center = element.get("center")
         if not name or not center:
             continue
         distance = _distance_m(lat, lon, center["lat"], center["lon"])
-        if best_distance is None or distance < best_distance:
-            best_name, best_distance = name, distance
-    return best_name, True
+        if tags.get("place") == "islet":
+            if best_islet is None or distance < best_islet[1]:
+                best_islet = (name, distance)
+        elif tags.get("leisure") == "marina":
+            if best_marina is None or distance < best_marina[1]:
+                best_marina = (name, distance)
+
+    if best_islet is not None:
+        return best_islet[0], True
+    if best_marina is not None and not has_village:
+        return best_marina[0], True
+    return None, True
 
 
 class Geocoder:
@@ -214,9 +241,13 @@ class Geocoder:
             return f"Unknown ({lat:.4f}, {lon:.4f}) [geocoding failed: {exc}]", False
 
         self._last_request = time.monotonic()
-        # A nearby marina or islet's own name beats whatever village/town Nominatim's plain
-        # reverse lookup happened to match instead -- see _nearby_landmark_name.
-        landmark_name, landmark_check_ok = _nearby_landmark_name(lat, lon, self.user_agent)
+        # A nearby islet's own name always beats whatever Nominatim's plain reverse lookup
+        # happened to match instead; a nearby marina's own name only does when Nominatim's own
+        # address doesn't already name a real village/town/city -- see _nearby_landmark_name.
+        has_village = any(key in payload.get("address", {}) for key in _VILLAGE_LEVEL_ADDRESS_KEYS)
+        landmark_name, landmark_check_ok = _nearby_landmark_name(
+            lat, lon, self.user_agent, has_village=has_village
+        )
         self._last_request = time.monotonic()
         if landmark_name:
             return landmark_name, True

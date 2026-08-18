@@ -99,8 +99,8 @@ def test_successful_lookup_is_cached_and_not_looked_up_again(monkeypatch, tmp_pa
 
 def test_place_name_prefers_a_nearby_marina_over_nominatims_own_match(monkeypatch, tmp_path):
     """Regression test for a real case: moored just outside a marina's own mapped basin, so
-    Nominatim's plain reverse lookup matched an unrelated nearby feature (and used *its* address
-    hierarchy, "Port au Loup") instead of the marina itself. The separate nearby-landmark check
+    Nominatim's plain reverse lookup matched an unrelated nearby feature with no usable village
+    of its own (just a road) instead of the marina itself. The separate nearby-landmark check
     (see _nearby_landmark_name) must win over that plain match."""
     def fake_urlopen(request, timeout=10):
         if "overpass-api.de" in request.full_url:
@@ -108,18 +108,44 @@ def test_place_name_prefers_a_nearby_marina_over_nominatims_own_match(monkeypatc
                 {
                     "elements": [
                         {
-                            "tags": {"name": "Port de Piriac-sur-Mer"},
+                            "tags": {"leisure": "marina", "name": "Port de Piriac-sur-Mer"},
                             "center": {"lat": 47.3824, "lon": -2.5440},
                         }
                     ]
                 }
             )
-        return _FakeResponse({"address": {"village": "Port au Loup"}})
+        return _FakeResponse({"address": {"road": "Place du Port"}})
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     geocoder = Geocoder(cache_file=tmp_path / "cache.json")
 
     assert geocoder.place_name(47.382706, -2.544722) == "Port de Piriac-sur-Mer"
+
+
+def test_place_name_prefers_a_real_village_over_a_nearby_marina(monkeypatch, tmp_path):
+    """Regression test for a real case: at an actual town with a real marina moored right there
+    (Port-Louis, next to the "Port de la Pointe" marina), Nominatim's plain reverse lookup already
+    correctly named the town -- the marina check must not replace an already-correct, more
+    recognizable village/town name with a more specific but less recognizable marina name.
+    Unlike Piriac above, where the plain match had no usable village of its own at all."""
+    def fake_urlopen(request, timeout=10):
+        if "overpass-api.de" in request.full_url:
+            return _FakeResponse(
+                {
+                    "elements": [
+                        {
+                            "tags": {"leisure": "marina", "name": "Port de la Pointe"},
+                            "center": {"lat": 47.7101, "lon": -3.3543},
+                        }
+                    ]
+                }
+            )
+        return _FakeResponse({"address": {"village": "Port-Louis"}})
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    geocoder = Geocoder(cache_file=tmp_path / "cache.json")
+
+    assert geocoder.place_name(47.7108, -3.3551) == "Port-Louis"
 
 
 def test_place_name_prefers_a_nearby_islet_over_nominatims_own_match(monkeypatch, tmp_path):
@@ -132,7 +158,7 @@ def test_place_name_prefers_a_nearby_islet_over_nominatims_own_match(monkeypatch
                 {
                     "elements": [
                         {
-                            "tags": {"name": "Île de la Jument"},
+                            "tags": {"place": "islet", "name": "Île de la Jument"},
                             "center": {"lat": 47.5686912, "lon": -2.8875040},
                         }
                     ]
@@ -203,7 +229,14 @@ def test_place_name_retries_the_landmark_check_after_a_transient_failure(monkeyp
             if overpass_call_count == 1:
                 raise urllib.error.HTTPError(request.full_url, 504, "Gateway Timeout", None, None)
             return _FakeResponse(
-                {"elements": [{"tags": {"name": "Île de la Jument"}, "center": {"lat": 47.5687, "lon": -2.8875}}]}
+                {
+                    "elements": [
+                        {
+                            "tags": {"place": "islet", "name": "Île de la Jument"},
+                            "center": {"lat": 47.5687, "lon": -2.8875},
+                        }
+                    ]
+                }
             )
         return _FakeResponse({"address": {"village": "Kerners"}})
 
