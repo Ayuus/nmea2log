@@ -127,8 +127,11 @@ def test_upload_file_raises_with_the_sftp_error_message(tmp_path: Path, monkeypa
 def test_list_remote_filenames_parses_bare_names(tmp_path: Path, monkeypatch):
     key_file = tmp_path / "id_ed25519"
     key_file.write_text("fake key", encoding="utf-8")
+    captured = {}
 
     def fake_run(cmd, capture_output, text):
+        batch_path = Path(cmd[cmd.index("-b") + 1])
+        captured["batch_contents"] = batch_path.read_text(encoding="utf-8")
         return _FakeCompletedProcess(returncode=0, stdout="a.ebl\nb.ebl\n\n")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -138,17 +141,22 @@ def test_list_remote_filenames_parses_bare_names(tmp_path: Path, monkeypatch):
     )
 
     assert names == {"a.ebl", "b.ebl"}
+    # the directory is created first (error ignored via "-") so "ls" always has something to
+    # list, instead of having to tell "doesn't exist yet" apart from a real failure by matching
+    # on the sftp client's own (inconsistently worded) error text
+    assert '-mkdir "private/ebl-backup"' in captured["batch_contents"]
+    assert 'ls -1 "private/ebl-backup"' in captured["batch_contents"]
 
 
-def test_list_remote_filenames_returns_empty_set_for_a_missing_directory(tmp_path: Path, monkeypatch):
-    """A first-ever backup run: the remote directory doesn't exist yet, which sftp's own "ls"
-    reports as an error -- that's just "nothing backed up here yet", not a real failure, so it
-    must not raise (found in practice: would otherwise crash the very first backup attempt)."""
+def test_list_remote_filenames_returns_empty_set_for_a_freshly_created_directory(tmp_path: Path, monkeypatch):
+    """A first-ever backup run: the remote directory doesn't exist yet, so it gets created (empty)
+    right before the "ls" -- which then succeeds with no output, not an empty set as an error
+    workaround."""
     key_file = tmp_path / "id_ed25519"
     key_file.write_text("fake key", encoding="utf-8")
 
     def fake_run(cmd, capture_output, text):
-        return _FakeCompletedProcess(returncode=1, stderr='Can\'t ls: "private/ebl-backup" No such file or directory')
+        return _FakeCompletedProcess(returncode=0, stdout="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 

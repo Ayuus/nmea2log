@@ -793,7 +793,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             )
             log(f"Uploaded to {args.upload_user}@{args.upload_host}:{args.upload_remote_path}")
         except UploadError as exc:
-            log(f"[error] upload failed: {exc}", file=sys.stderr)
+            # A newline after "failed:", not a space -- the SFTP client's own error message can
+            # itself be multi-line (e.g. the server's login banner), which otherwise starts
+            # awkwardly mid-line right after the prefix (found in practice).
+            log(f"[error] upload failed:\n{exc}", file=sys.stderr)
             return 1
 
     if args.backup_ebl:
@@ -823,7 +826,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 f"({len(args.logfiles) - len(new_files)} already there)"
             )
         except UploadError as exc:
-            log(f"[error] logfile backup failed: {exc}", file=sys.stderr)
+            log(f"[error] logfile backup failed:\n{exc}", file=sys.stderr)
             return 1
 
     return 0

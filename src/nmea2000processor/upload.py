@@ -95,12 +95,20 @@ def list_remote_filenames(
 ) -> Set[str]:
     """Bare filenames (not full paths) already present in ``remote_dir``, so a caller backing up
     many local files can skip whichever ones are already there instead of re-uploading everything
-    on every run. Returns an empty set if ``remote_dir`` doesn't exist yet (a first-ever backup)
-    rather than raising -- that's just "nothing backed up here yet", not a real failure."""
-    result = _run_sftp_batch([f'ls -1 "{remote_dir}"'], host, user, key_file, port)
+    on every run. Returns an empty set if ``remote_dir`` doesn't exist yet (a first-ever backup),
+    rather than raising -- that's just "nothing backed up here yet", not a real failure.
+
+    Ensures ``remote_dir`` exists first (ignoring the error if it already does, same as
+    ``upload_files``' own "-mkdir") instead of trying to distinguish "doesn't exist yet" from
+    other ``ls`` failures by matching on the sftp client's own error text -- the OpenSSH sftp
+    client doesn't expose a distinguishable exit code for that, and the text itself isn't
+    consistent (found in practice: one server said "No such file or directory", another just "not
+    found"). With the directory guaranteed to exist, any remaining ``ls`` failure is a real
+    problem worth raising instead of silently swallowing."""
+    result = _run_sftp_batch(
+        [f'-mkdir "{remote_dir}"', f'ls -1 "{remote_dir}"'], host, user, key_file, port
+    )
     if result.returncode != 0:
-        if "no such file" in (result.stderr or result.stdout or "").lower():
-            return set()
         message = (result.stderr or result.stdout or "unknown sftp error").strip()
         raise UploadError(message)
     names = set()
