@@ -14,44 +14,29 @@ from __future__ import annotations
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional, Set
 
 
 class UploadError(Exception):
     pass
 
 
-def upload_file(
-    local_path: Path,
-    host: str,
-    user: str,
-    remote_path: str,
-    key_file: Path,
-    port: int = 22,
-) -> None:
-    """Copies ``local_path`` to ``remote_path`` on ``host`` over SFTP. Raises ``UploadError``
-    with the SFTP client's own message on failure (wrong key, host unreachable, remote path
-    doesn't exist, ...) instead of letting a raw ``CalledProcessError`` traceback through."""
+def _run_sftp_batch(lines: List[str], host: str, user: str, key_file: Path, port: int) -> subprocess.CompletedProcess:
+    """Runs an SFTP client batch script (one command per line) against ``host`` in a single
+    session -- shared by every function in this module so uploading several files only opens one
+    connection instead of one per file."""
     if not key_file.exists():
         raise UploadError(f"SSH key not found: {key_file}")
 
-    # Batch mode (-b) instead of passing the "put" command as an argument: it's the documented
-    # way to script the OpenSSH sftp client non-interactively, and avoids any shell-quoting
-    # concerns with paths that contain spaces.
-    #
-    # sftp's own batch-file parser treats backslash as an escape character in its "put"
-    # arguments (like a shell would), so a Windows path's backslashes silently vanish instead of
-    # being treated as path separators -- found in practice: "C:\Users\...\logbook.html" turned
-    # into "C:UsersLogbook.html", which then failed with "No such file or directory". Windows
-    # accepts forward slashes just as well, so using those in the batch file sidesteps the whole
-    # escaping question.
-    local_str = str(local_path).replace("\\", "/")
+    # Batch mode (-b) instead of passing commands as arguments: it's the documented way to
+    # script the OpenSSH sftp client non-interactively, and avoids any shell-quoting concerns
+    # with paths that contain spaces.
     with tempfile.NamedTemporaryFile("w", suffix=".sftp-batch", delete=False, encoding="utf-8") as handle:
-        handle.write(f'put "{local_str}" "{remote_path}"\n')
+        handle.write("\n".join(lines) + "\n")
         batch_file = Path(handle.name)
 
     try:
-        result = subprocess.run(
+        return subprocess.run(
             [
                 "sftp",
                 "-i", str(key_file),
@@ -72,6 +57,80 @@ def upload_file(
     finally:
         batch_file.unlink(missing_ok=True)
 
+
+def _local_to_sftp_path(local_path: Path) -> str:
+    """sftp's own batch-file parser treats backslash as an escape character in its "put"
+    arguments (like a shell would), so a Windows path's backslashes silently vanish instead of
+    being treated as path separators -- found in practice: "C:\\Users\\...\\logbook.html" turned
+    into "C:UsersLogbook.html", which then failed with "No such file or directory". Windows
+    accepts forward slashes just as well, so using those in the batch file sidesteps the whole
+    escaping question."""
+    return str(local_path).replace("\\", "/")
+
+
+def upload_file(
+    local_path: Path,
+    host: str,
+    user: str,
+    remote_path: str,
+    key_file: Path,
+    port: int = 22,
+) -> None:
+    """Copies ``local_path`` to ``remote_path`` on ``host`` over SFTP. Raises ``UploadError``
+    with the SFTP client's own message on failure (wrong key, host unreachable, remote path
+    doesn't exist, ...) instead of letting a raw ``CalledProcessError`` traceback through."""
+    lines = [f'put "{_local_to_sftp_path(local_path)}" "{remote_path}"']
+    result = _run_sftp_batch(lines, host, user, key_file, port)
+    if result.returncode != 0:
+        message = (result.stderr or result.stdout or "unknown sftp error").strip()
+        raise UploadError(message)
+
+
+def list_remote_filenames(
+    host: str,
+    user: str,
+    remote_dir: str,
+    key_file: Path,
+    port: int = 22,
+) -> Set[str]:
+    """Bare filenames (not full paths) already present in ``remote_dir``, so a caller backing up
+    many local files can skip whichever ones are already there instead of re-uploading everything
+    on every run. Returns an empty set if ``remote_dir`` doesn't exist yet (a first-ever backup)
+    rather than raising -- that's just "nothing backed up here yet", not a real failure."""
+    result = _run_sftp_batch([f'ls -1 "{remote_dir}"'], host, user, key_file, port)
+    if result.returncode != 0:
+        if "no such file" in (result.stderr or result.stdout or "").lower():
+            return set()
+        message = (result.stderr or result.stdout or "unknown sftp error").strip()
+        raise UploadError(message)
+    names = set()
+    for line in result.stdout.splitlines():
+        name = line.strip().split("/")[-1]
+        if name and name not in (".", ".."):
+            names.add(name)
+    return names
+
+
+def upload_files(
+    local_paths: List[Path],
+    host: str,
+    user: str,
+    remote_dir: str,
+    key_file: Path,
+    port: int = 22,
+) -> None:
+    """Uploads every file in ``local_paths`` into ``remote_dir`` (same basename, directory
+    stripped) in a single SFTP session. Creates ``remote_dir`` first if it doesn't exist yet --
+    the leading "-" makes sftp ignore the error if it already does, the documented way to get
+    mkdir -p-like behaviour out of a client that doesn't have one. A no-op (no connection at all)
+    for an empty list, since there's then nothing to justify even creating the directory."""
+    if not local_paths:
+        return
+    lines = [f'-mkdir "{remote_dir}"']
+    for local_path in local_paths:
+        remote_path = f"{remote_dir}/{local_path.name}"
+        lines.append(f'put "{_local_to_sftp_path(local_path)}" "{remote_path}"')
+    result = _run_sftp_batch(lines, host, user, key_file, port)
     if result.returncode != 0:
         message = (result.stderr or result.stdout or "unknown sftp error").strip()
         raise UploadError(message)

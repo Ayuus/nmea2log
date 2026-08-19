@@ -52,7 +52,7 @@ from .pgn_decode import (
 )
 from .trip_ids import assign_trip_ids
 from .tripbuilder import build_trips
-from .upload import UploadError, upload_file
+from .upload import UploadError, list_remote_filenames, upload_file, upload_files
 
 _T = TypeVar("_T")
 
@@ -494,6 +494,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="SFTP port (default 22, only with --upload)",
     )
     parser.add_argument(
+        "--backup-ebl",
+        action="store_true",
+        help="Back up this run's own logfiles (e.g. .ebl files) to the SFTP server too, so "
+        "they're not only sitting on whatever device downloaded them (see 'backup-remote-path', "
+        "or the matching [upload] settings in the config file; reuses --upload-host/-user/"
+        "-key-file/-port). Skips files already present on the server, so only ever uploads "
+        "what's new since the last run.",
+    )
+    parser.add_argument(
+        "--backup-remote-path",
+        type=str,
+        default=None,
+        help="Destination directory on the SFTP server for the logfile backup (only with "
+        "--backup-ebl)",
+    )
+    parser.add_argument(
         "--ebl-dir",
         type=Path,
         default=None,
@@ -553,12 +569,15 @@ def _apply_config_defaults(parser: argparse.ArgumentParser) -> None:
     upload_section = load_section("upload")
     if "enabled" in upload_section:
         defaults["upload"] = _bool(upload_section["enabled"])
+    if "backup_ebl" in upload_section:
+        defaults["backup_ebl"] = _bool(upload_section["backup_ebl"])
     for key, dest, caster in (
         ("host", "upload_host", str),
         ("user", "upload_user", str),
         ("remote_path", "upload_remote_path", str),
         ("key_file", "upload_key_file", Path),
         ("port", "upload_port", int),
+        ("backup_remote_path", "backup_remote_path", str),
     ):
         if key in upload_section:
             defaults[dest] = caster(upload_section[key])
@@ -575,6 +594,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             "--upload needs --upload-host, --upload-user, --upload-remote-path, and "
             "--upload-key-file (or the matching settings in the [upload] section of the config "
             "file) to all be set"
+        )
+    if args.backup_ebl and not (args.upload_host and args.upload_user and args.upload_key_file and args.backup_remote_path):
+        parser.error(
+            "--backup-ebl needs --upload-host, --upload-user, --upload-key-file, and "
+            "--backup-remote-path (or the matching settings in the [upload] section of the "
+            "config file) to all be set"
         )
 
     if not args.logfiles and not args.live and args.ebl_dir:
@@ -769,6 +794,36 @@ def main(argv: Optional[List[str]] = None) -> int:
             log(f"Uploaded to {args.upload_user}@{args.upload_host}:{args.upload_remote_path}")
         except UploadError as exc:
             log(f"[error] upload failed: {exc}", file=sys.stderr)
+            return 1
+
+    if args.backup_ebl:
+        # Only ever the logfiles this run actually processed (empty in --live mode, since there
+        # are no discrete local files to back up there -- upload_files is a no-op for an empty
+        # list, so this needs no special-casing for that).
+        try:
+            already_backed_up = list_remote_filenames(
+                host=args.upload_host,
+                user=args.upload_user,
+                remote_dir=args.backup_remote_path,
+                key_file=args.upload_key_file,
+                port=args.upload_port,
+            )
+            new_files = [path for path in args.logfiles if path.name not in already_backed_up]
+            upload_files(
+                new_files,
+                host=args.upload_host,
+                user=args.upload_user,
+                remote_dir=args.backup_remote_path,
+                key_file=args.upload_key_file,
+                port=args.upload_port,
+            )
+            log(
+                f"Backed up {len(new_files)} new logfile(s) to "
+                f"{args.upload_user}@{args.upload_host}:{args.backup_remote_path} "
+                f"({len(args.logfiles) - len(new_files)} already there)"
+            )
+        except UploadError as exc:
+            log(f"[error] logfile backup failed: {exc}", file=sys.stderr)
             return 1
 
     return 0

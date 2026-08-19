@@ -206,6 +206,87 @@ def test_main_reports_a_clear_error_when_upload_is_missing_settings(tmp_path, mo
     assert "--upload needs" in capsys.readouterr().err
 
 
+def test_main_reports_a_clear_error_when_backup_ebl_is_missing_settings(tmp_path, monkeypatch, capsys):
+    # Isolated from any real nmea2log.ini for the same reason as the --upload test above.
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = None
+    try:
+        main(["--backup-ebl", "--ebl-dir", str(tmp_path)])
+    except SystemExit as exc:
+        exit_code = exc.code
+
+    assert exit_code == 2
+    assert "--backup-ebl needs" in capsys.readouterr().err
+
+
+def test_main_backs_up_only_the_logfiles_not_already_on_the_server(tmp_path, monkeypatch):
+    """Regression-style test for the whole point of --backup-ebl: a file already present on the
+    server (per list_remote_filenames) must not be uploaded again, so a run only ever sends
+    what's new since the last one."""
+    # Isolated from any real nmea2log.ini for the same reason as the --upload test above -- this
+    # project's own [upload] section (enabled=true, a real remote_path) would otherwise supply
+    # defaults that trigger a *real* (if doomed-to-fail) --upload attempt before ever reaching
+    # the backup step this test is actually about (found in practice).
+    monkeypatch.chdir(tmp_path)
+    already_there = tmp_path / "000000_000.ebl"
+    new_file = tmp_path / "000001_000.ebl"
+    already_there.write_bytes(b"x" * 100)
+    new_file.write_bytes(b"x" * 100)
+
+    # 12 min stationary -> 30 min underway -> 12 min stationary, enough for build_trips to
+    # recognize one real trip (needed to get past main()'s own "no trips found" -> exit 1 --
+    # a single static position fix doesn't produce one, see _run_with_one_trip above).
+    def _dt(minute):
+        return datetime(2026, 7, 15, 8, 0, 0) + timedelta(minutes=minute)
+
+    fixes, sogs = [], []
+    for m in range(0, 12):
+        fixes.append(PositionFix(_dt(m), 52.30, 4.90))
+        sogs.append(SogSample(_dt(m), 0.0))
+    for i, m in enumerate(range(12, 42)):
+        frac = i / 29
+        fixes.append(PositionFix(_dt(m), 52.30 + 0.10 * frac, 4.90 + 0.05 * frac))
+        sogs.append(SogSample(_dt(m), 3.0))
+    for m in range(42, 54):
+        fixes.append(PositionFix(_dt(m), 52.40, 4.95))
+        sogs.append(SogSample(_dt(m), 0.0))
+
+    fixed_samples = ({10: fixes}, {10: sogs}, [], [], {}, {}, {}, [], {})
+    monkeypatch.setattr(
+        "nmea2000processor.cli._collect_samples", lambda frames, deadline=None: fixed_samples
+    )
+    monkeypatch.setattr(
+        "nmea2000processor.cli._iter_frames_for_path", lambda path, start_date, state: iter([])
+    )
+
+    listed_dir = {}
+    uploaded = {}
+
+    def fake_list_remote_filenames(*, host, user, remote_dir, key_file, port):
+        listed_dir["remote_dir"] = remote_dir
+        return {"000000_000.ebl"}
+
+    def fake_upload_files(local_paths, *, host, user, remote_dir, key_file, port):
+        uploaded["paths"] = local_paths
+
+    monkeypatch.setattr("nmea2000processor.cli.list_remote_filenames", fake_list_remote_filenames)
+    monkeypatch.setattr("nmea2000processor.cli.upload_files", fake_upload_files)
+
+    exit_code = main(
+        [
+            str(already_there), str(new_file), "-o", str(tmp_path / "logbook.csv"), "--no-geocode",
+            "--backup-ebl", "--backup-remote-path", "private/ebl-backup",
+            "--upload-host", "example.com", "--upload-user", "me",
+            "--upload-key-file", str(tmp_path / "key"),
+        ]
+    )
+
+    assert exit_code == 0
+    assert listed_dir["remote_dir"] == "private/ebl-backup"
+    assert uploaded["paths"] == [new_file]
+
+
 def test_main_reuses_cached_samples_on_a_second_run(tmp_path, monkeypatch, capsys):
     """Integration test for the .ebl sample cache: a second run against the same, unchanged file
     must not re-parse it (only reuse the decoded samples from the first run's cache)."""
