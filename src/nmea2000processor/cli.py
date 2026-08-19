@@ -56,6 +56,15 @@ from .upload import UploadError, list_remote_filenames, upload_file, upload_file
 
 _T = TypeVar("_T")
 
+# How many logfiles --backup-ebl uploads per SFTP session, rather than all of them (potentially
+# 1000+, several MB each on a first-ever backup run) in one -- found in practice: a shared-hosting
+# server reset the connection partway through a single giant session (12 files/~60 MB in),
+# discarding whatever hadn't already landed. Smaller sessions mean a reset loses less progress at
+# once, and there's nothing to gain from one huge session anyway (list_remote_filenames already
+# makes the whole thing resumable across runs; nothing here depends on one session covering
+# everything).
+_BACKUP_CHUNK_SIZE = 25
+
 # The only PGNs this app decodes anything from (see _collect_samples below). Real NMEA2000
 # buses carry a lot of other chatter (autopilot/heading/attitude PGNs can easily outnumber these
 # 100:1) that would otherwise get fully decoded and turned into Frame objects for nothing --
@@ -800,10 +809,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 1
 
     if args.backup_ebl:
-        # Only ever the logfiles this run actually processed (empty in --live mode, since there
-        # are no discrete local files to back up there -- upload_files is a no-op for an empty
-        # list, so this needs no special-casing for that).
+        # A failed (or partial) backup is deliberately never fatal to the run -- it's a bonus
+        # resilience step on top of already having written and uploaded today's logbook, not
+        # something today's run actually depends on, and it's fully resumable: whatever made it
+        # to the server this time is skipped next time (see list_remote_filenames), so an
+        # unfinished backup just continues from there rather than needing to be retried whole.
+        backed_up_count = 0  # set before the try so the except below can always reference it
         try:
+            # Only ever the logfiles this run actually processed (empty in --live mode, since
+            # there are no discrete local files to back up there).
             already_backed_up = list_remote_filenames(
                 host=args.upload_host,
                 user=args.upload_user,
@@ -812,22 +826,28 @@ def main(argv: Optional[List[str]] = None) -> int:
                 port=args.upload_port,
             )
             new_files = [path for path in args.logfiles if path.name not in already_backed_up]
-            upload_files(
-                new_files,
-                host=args.upload_host,
-                user=args.upload_user,
-                remote_dir=args.backup_remote_path,
-                key_file=args.upload_key_file,
-                port=args.upload_port,
-            )
+            for start in range(0, len(new_files), _BACKUP_CHUNK_SIZE):
+                chunk = new_files[start : start + _BACKUP_CHUNK_SIZE]
+                upload_files(
+                    chunk,
+                    host=args.upload_host,
+                    user=args.upload_user,
+                    remote_dir=args.backup_remote_path,
+                    key_file=args.upload_key_file,
+                    port=args.upload_port,
+                )
+                backed_up_count += len(chunk)
             log(
-                f"Backed up {len(new_files)} new logfile(s) to "
+                f"Backed up {backed_up_count} new logfile(s) to "
                 f"{args.upload_user}@{args.upload_host}:{args.backup_remote_path} "
                 f"({len(args.logfiles) - len(new_files)} already there)"
             )
         except UploadError as exc:
-            log(f"[error] logfile backup failed:\n{exc}", file=sys.stderr)
-            return 1
+            log(
+                f"[warning] logfile backup stopped after {backed_up_count} new file(s) this run "
+                f"(will pick up from there next time):\n{exc}",
+                file=sys.stderr,
+            )
 
     return 0
 

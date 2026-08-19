@@ -220,23 +220,12 @@ def test_main_reports_a_clear_error_when_backup_ebl_is_missing_settings(tmp_path
     assert "--backup-ebl needs" in capsys.readouterr().err
 
 
-def test_main_backs_up_only_the_logfiles_not_already_on_the_server(tmp_path, monkeypatch):
-    """Regression-style test for the whole point of --backup-ebl: a file already present on the
-    server (per list_remote_filenames) must not be uploaded again, so a run only ever sends
-    what's new since the last one."""
-    # Isolated from any real nmea2log.ini for the same reason as the --upload test above -- this
-    # project's own [upload] section (enabled=true, a real remote_path) would otherwise supply
-    # defaults that trigger a *real* (if doomed-to-fail) --upload attempt before ever reaching
-    # the backup step this test is actually about (found in practice).
-    monkeypatch.chdir(tmp_path)
-    already_there = tmp_path / "000000_000.ebl"
-    new_file = tmp_path / "000001_000.ebl"
-    already_there.write_bytes(b"x" * 100)
-    new_file.write_bytes(b"x" * 100)
-
-    # 12 min stationary -> 30 min underway -> 12 min stationary, enough for build_trips to
-    # recognize one real trip (needed to get past main()'s own "no trips found" -> exit 1 --
-    # a single static position fix doesn't produce one, see _run_with_one_trip above).
+def _stub_one_trip_samples(monkeypatch):
+    """Makes any .ebl path passed to main() decode into the same single real trip (12 min
+    stationary -> 30 min underway -> 12 min stationary -- enough for build_trips to recognize
+    one; a single static position fix doesn't), needed to get past main()'s own "no trips found"
+    -> exit 1 for tests that don't otherwise care about trip data. See also _run_with_one_trip
+    below, which this mirrors but without hardcoding a single fixed ebl path/main() call itself."""
     def _dt(minute):
         return datetime(2026, 7, 15, 8, 0, 0) + timedelta(minutes=minute)
 
@@ -259,6 +248,22 @@ def test_main_backs_up_only_the_logfiles_not_already_on_the_server(tmp_path, mon
     monkeypatch.setattr(
         "nmea2000processor.cli._iter_frames_for_path", lambda path, start_date, state: iter([])
     )
+
+
+def test_main_backs_up_only_the_logfiles_not_already_on_the_server(tmp_path, monkeypatch):
+    """Regression-style test for the whole point of --backup-ebl: a file already present on the
+    server (per list_remote_filenames) must not be uploaded again, so a run only ever sends
+    what's new since the last one."""
+    # Isolated from any real nmea2log.ini for the same reason as the --upload test above -- this
+    # project's own [upload] section (enabled=true, a real remote_path) would otherwise supply
+    # defaults that trigger a *real* (if doomed-to-fail) --upload attempt before ever reaching
+    # the backup step this test is actually about (found in practice).
+    monkeypatch.chdir(tmp_path)
+    already_there = tmp_path / "000000_000.ebl"
+    new_file = tmp_path / "000001_000.ebl"
+    already_there.write_bytes(b"x" * 100)
+    new_file.write_bytes(b"x" * 100)
+    _stub_one_trip_samples(monkeypatch)
 
     listed_dir = {}
     uploaded = {}
@@ -285,6 +290,85 @@ def test_main_backs_up_only_the_logfiles_not_already_on_the_server(tmp_path, mon
     assert exit_code == 0
     assert listed_dir["remote_dir"] == "private/ebl-backup"
     assert uploaded["paths"] == [new_file]
+
+
+def test_main_backs_up_new_logfiles_in_chunks(tmp_path, monkeypatch):
+    """Regression test for a real failure: a single SFTP session uploading everything in one go
+    (1000+ files, several MB each, on a first-ever backup run) got its connection reset partway
+    through by a shared-hosting server, losing whatever hadn't already landed. Uploading in
+    smaller chunks -- each its own session -- means a reset loses less progress at once."""
+    monkeypatch.chdir(tmp_path)
+    from nmea2000processor.cli import _BACKUP_CHUNK_SIZE
+
+    count = _BACKUP_CHUNK_SIZE + 3  # deliberately not an exact multiple of the chunk size
+    files = [tmp_path / f"{i:06d}_000.ebl" for i in range(count)]
+    for f in files:
+        f.write_bytes(b"x" * 100)
+    _stub_one_trip_samples(monkeypatch)
+
+    monkeypatch.setattr(
+        "nmea2000processor.cli.list_remote_filenames",
+        lambda **kw: set(),
+    )
+    chunks = []
+    monkeypatch.setattr(
+        "nmea2000processor.cli.upload_files",
+        lambda local_paths, **kw: chunks.append(local_paths),
+    )
+
+    exit_code = main(
+        [
+            *[str(f) for f in files], "-o", str(tmp_path / "logbook.csv"), "--no-geocode",
+            "--backup-ebl", "--backup-remote-path", "private/ebl-backup",
+            "--upload-host", "example.com", "--upload-user", "me",
+            "--upload-key-file", str(tmp_path / "key"),
+        ]
+    )
+
+    assert exit_code == 0
+    assert [len(c) for c in chunks] == [_BACKUP_CHUNK_SIZE, 3]
+    assert [f for chunk in chunks for f in chunk] == files
+
+
+def test_main_does_not_fail_the_run_when_the_backup_upload_breaks_partway(tmp_path, monkeypatch, capsys):
+    """Regression test for a real failure: a run whose logbook was already written and uploaded
+    fine still reported the whole run as failed (exit code 1) just because the *backup*, a bonus
+    step, didn't fully finish -- even though it's fully resumable next run (see
+    list_remote_filenames) and nothing about today's actual logbook was at risk."""
+    monkeypatch.chdir(tmp_path)
+    from nmea2000processor.cli import _BACKUP_CHUNK_SIZE
+    from nmea2000processor.upload import UploadError
+
+    count = _BACKUP_CHUNK_SIZE + 3
+    files = [tmp_path / f"{i:06d}_000.ebl" for i in range(count)]
+    for f in files:
+        f.write_bytes(b"x" * 100)
+    _stub_one_trip_samples(monkeypatch)
+
+    monkeypatch.setattr("nmea2000processor.cli.list_remote_filenames", lambda **kw: set())
+
+    call_count = 0
+
+    def fake_upload_files(local_paths, **kw):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:
+            raise UploadError("Connection reset")
+
+    monkeypatch.setattr("nmea2000processor.cli.upload_files", fake_upload_files)
+
+    exit_code = main(
+        [
+            *[str(f) for f in files], "-o", str(tmp_path / "logbook.csv"), "--no-geocode",
+            "--backup-ebl", "--backup-remote-path", "private/ebl-backup",
+            "--upload-host", "example.com", "--upload-user", "me",
+            "--upload-key-file", str(tmp_path / "key"),
+        ]
+    )
+
+    assert exit_code == 0  # not fatal to the run
+    assert call_count == 2  # stopped after the failing chunk, didn't retry or skip ahead
+    assert "stopped after 25 new file(s)" in capsys.readouterr().err
 
 
 def test_main_reuses_cached_samples_on_a_second_run(tmp_path, monkeypatch, capsys):
