@@ -176,7 +176,12 @@ def test_ebl_dir_config_default_applies_when_no_logfiles_given(tmp_path, monkeyp
     assert args.ebl_dir == tmp_path
 
 
-def test_main_reports_a_clear_error_when_ebl_dir_has_no_ebl_files(tmp_path, capsys):
+def test_main_reports_a_clear_error_when_ebl_dir_has_no_ebl_files(tmp_path, monkeypatch, capsys):
+    # No -o is given, so the new nmea2log.log (see log.py's set_log_file) would otherwise land
+    # next to the *default* logbook.csv -- this project's own real working directory -- instead
+    # of somewhere test-isolated (found in practice: a stray nmea2log.log left behind by the test
+    # suite in the repo root).
+    monkeypatch.chdir(tmp_path)
     empty_dir = tmp_path / "empty"
     empty_dir.mkdir()
 

@@ -11,6 +11,7 @@ dist/
 logbook.csv
 logbook.gpx
 logbook.html
+nmea2log.log
 .claude/
 
 # lokale W2K-2-downloadconfiguratie/data -- bevat inloggegevens, hoort nooit in git

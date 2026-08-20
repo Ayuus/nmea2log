@@ -109,6 +109,37 @@ def test_upload_file_deletes_the_batch_file_afterwards(tmp_path: Path, monkeypat
     assert not seen_batch_path["path"].exists()
 
 
+def test_upload_file_strips_the_servers_login_banner_from_the_error_message(tmp_path: Path, monkeypatch):
+    """Regression test for a real bug: TransIP's SFTP server shows a multi-line legal disclaimer
+    ("Unauthorized access to this system/network is prohibited.") on every single connection,
+    successful or not -- buried the actual error (Connection reset by peer) under several lines
+    of unrelated boilerplate, making it look like something was wrong with the connection itself
+    rather than a transient reset (found in practice)."""
+    local = tmp_path / "logbook.html"
+    local.write_text("hi", encoding="utf-8")
+    key_file = tmp_path / "id_ed25519"
+    key_file.write_text("fake key", encoding="utf-8")
+    banner = (
+        "** WARNING: connection is not using a post-quantum key exchange algorithm.\n"
+        "**************************************************************\n"
+        "*                                                            *\n"
+        "*               Unauthorized access to this                  *\n"
+        "*               system/network is prohibited.                *\n"
+        "*                                                            *\n"
+        "**************************************************************\n"
+    )
+
+    def fake_run(cmd, capture_output, text):
+        return _FakeCompletedProcess(returncode=1, stderr=banner + "Connection reset by peer")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(UploadError) as excinfo:
+        upload_file(local, host="example.com", user="me", remote_path="logbook.html", key_file=key_file)
+
+    assert str(excinfo.value) == "Connection reset by peer"
+
+
 def test_upload_file_raises_with_the_sftp_error_message(tmp_path: Path, monkeypatch):
     local = tmp_path / "logbook.html"
     local.write_text("hi", encoding="utf-8")
@@ -175,9 +206,38 @@ def test_list_remote_filenames_raises_on_other_failures(tmp_path: Path, monkeypa
         return _FakeCompletedProcess(returncode=1, stderr="Permission denied (publickey).")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr("nmea2000processor.upload.time.sleep", lambda s: None)
 
     with pytest.raises(UploadError, match="Permission denied"):
         list_remote_filenames(host="example.com", user="me", remote_dir="private/ebl-backup", key_file=key_file)
+
+
+def test_list_remote_filenames_retries_and_succeeds_after_a_transient_failure(tmp_path: Path, monkeypatch, capsys):
+    """Regression test for a real bug: the SFTP connection to a shared-hosting server reset out of
+    the blue, even on the very first command of a brand new session -- retrying the whole batch a
+    couple of times before giving up is what actually recovers from it (found in practice: the
+    exact same batch, replayed by hand right after a failure, succeeded instantly)."""
+    key_file = tmp_path / "id_ed25519"
+    key_file.write_text("fake key", encoding="utf-8")
+    calls = []
+
+    def fake_run(cmd, capture_output, text):
+        calls.append(1)
+        if len(calls) == 1:
+            return _FakeCompletedProcess(returncode=1, stderr="Connection reset by peer")
+        return _FakeCompletedProcess(returncode=0, stdout="a.ebl\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr("nmea2000processor.upload.time.sleep", lambda s: None)
+
+    names = list_remote_filenames(host="example.com", user="me", remote_dir="private/ebl-backup", key_file=key_file)
+
+    assert names == {"a.ebl"}
+    assert len(calls) == 2
+    err = capsys.readouterr().err
+    assert "attempt 1/3, retrying" in err
+    # the message itself starts on its own line, not appended right after "failed (attempt...):"
+    assert "):\n" in err or "):\r\n" in err
 
 
 def test_upload_files_is_a_noop_for_an_empty_list(tmp_path: Path, monkeypatch):
@@ -248,6 +308,28 @@ def test_upload_files_raises_with_the_sftp_error_message(tmp_path: Path, monkeyp
         return _FakeCompletedProcess(returncode=1, stderr="Connection timed out")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr("nmea2000processor.upload.time.sleep", lambda s: None)
 
     with pytest.raises(UploadError, match="Connection timed out"):
         upload_files([a], host="example.com", user="me", remote_dir="private/ebl-backup", key_file=key_file)
+
+
+def test_upload_files_retries_and_succeeds_after_a_transient_failure(tmp_path: Path, monkeypatch):
+    a = tmp_path / "a.ebl"
+    a.write_text("a", encoding="utf-8")
+    key_file = tmp_path / "id_ed25519"
+    key_file.write_text("fake key", encoding="utf-8")
+    calls = []
+
+    def fake_run(cmd, capture_output, text):
+        calls.append(1)
+        if len(calls) == 1:
+            return _FakeCompletedProcess(returncode=1, stderr="Connection reset by peer")
+        return _FakeCompletedProcess(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr("nmea2000processor.upload.time.sleep", lambda s: None)
+
+    upload_files([a], host="example.com", user="me", remote_dir="private/ebl-backup", key_file=key_file)
+
+    assert len(calls) == 2

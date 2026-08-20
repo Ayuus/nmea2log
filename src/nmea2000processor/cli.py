@@ -13,7 +13,7 @@ from .ebl_reader import iter_frames as iter_frames_ebl
 from .geocode import Geocoder, NoGeocoder
 from .gpx_writer import write_gpx
 from .html_writer import _DEFAULT_LOG_INTERVAL_MINUTES, _DEFAULT_REMARKS_API_URL, write_html_logbook
-from .log import log
+from .log import log, set_log_file
 from .logbook_writer import write_csv
 from .model import (
     AttitudeSample,
@@ -598,6 +598,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
 
+    # Next to the output file, not the current directory -- so it's found in the same place
+    # regardless of how nmea2log.bat happened to be launched. Console output alone disappears the
+    # moment the terminal window closes, which for a run started by double-clicking a .bat file
+    # leaves nothing to check afterwards -- particularly for a --backup-ebl run that can take a
+    # while and is easy to interrupt by closing the window too early (found in practice).
+    set_log_file(args.output.parent / "nmea2log.log")
+
     if args.upload and not (args.upload_host and args.upload_user and args.upload_remote_path and args.upload_key_file):
         parser.error(
             "--upload needs --upload-host, --upload-user, --upload-remote-path, and "
@@ -837,6 +844,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                     port=args.upload_port,
                 )
                 backed_up_count += len(chunk)
+                # A backup of hundreds/thousands of files can genuinely take a while; without any
+                # feedback in between, it can look stuck and invite closing the terminal early --
+                # which kills the whole (still-blocking) run, backup included (found in practice).
+                if len(new_files) > _BACKUP_CHUNK_SIZE:
+                    log(f"  ...backed up {backed_up_count}/{len(new_files)} new logfile(s) so far")
             log(
                 f"Backed up {backed_up_count} new logfile(s) to "
                 f"{args.upload_user}@{args.upload_host}:{args.backup_remote_path} "
