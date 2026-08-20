@@ -178,7 +178,7 @@ def _collect_samples(
     try:
         for frame in frames:
             if deadline is not None and time.monotonic() >= deadline:
-                log("Duration elapsed; closing live session...", file=sys.stderr)
+                log("[info] Duration elapsed; closing live session...", file=sys.stderr)
                 break
             if frame.pgn == PGN_POSITION_RAPID:
                 decoded = decode_position_rapid(frame.data)
@@ -227,7 +227,7 @@ def _collect_samples(
                         AttitudeSample(frame.time, pitch_deg, roll_deg)
                     )
     except KeyboardInterrupt:
-        log("Interrupted by user; writing the logbook with the data collected so far...", file=sys.stderr)
+        log("[info] Interrupted by user; writing the logbook with the data collected so far...", file=sys.stderr)
     return (
         fixes_by_source,
         sogs_by_source,
@@ -624,7 +624,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         args.logfiles = _discover_ebl_files(args.ebl_dir)
         if not args.logfiles:
             parser.error(f"no .ebl files found under {args.ebl_dir}")
-        log(f"Found {len(args.logfiles)} .ebl file(s) under {args.ebl_dir}.", file=sys.stderr)
+        log(f"[info] Found {len(args.logfiles)} .ebl file(s) under {args.ebl_dir}.", file=sys.stderr)
 
     if bool(args.logfiles) == bool(args.live):
         parser.error(
@@ -648,11 +648,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.live:
         host, port = _parse_host_port(args.live, DEFAULT_PORT)
-        log(f"Connecting live to {host}:{port}... (Ctrl+C to stop)", file=sys.stderr)
+        log(f"[info] Connecting live to {host}:{port}... (Ctrl+C to stop)", file=sys.stderr)
         try:
             frames = iter_frames_tcp(host, port, tee_to=args.tee)
         except OSError as exc:
-            log(f"Could not connect to {host}:{port}: {exc}", file=sys.stderr)
+            log(f"[error] Could not connect to {host}:{port}: {exc}", file=sys.stderr)
             return 1
         deadline = time.monotonic() + args.duration if args.duration else None
         (
@@ -677,7 +677,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         cache_hits = 0
         for index, path in enumerate(args.logfiles):
             if not path.exists():
-                log(f"Log file not found: {path}", file=sys.stderr)
+                log(f"[error] Log file not found: {path}", file=sys.stderr)
                 return 1
 
             is_ebl = path.suffix.lower() == ".ebl"
@@ -727,13 +727,13 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if len(fixes_by_source) > 1:
         log(
-            f"Multiple position sources found ({sorted(fixes_by_source)}); "
+            f"[info] Multiple position sources found ({sorted(fixes_by_source)}); "
             f"using source {primary_gps_source} as the primary GPS (most messages).",
             file=sys.stderr,
         )
 
     if not all_fixes:
-        log("No position data (PGN 129025) found.", file=sys.stderr)
+        log("[error] No position data (PGN 129025) found.", file=sys.stderr)
         return 1
 
     if args.engine_count == 1:
@@ -762,7 +762,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if not trips:
         log(
-            "No trips found (maybe never stopped or underway long enough relative to the thresholds).",
+            "[error] No trips found (maybe never stopped or underway long enough relative to the thresholds).",
             file=sys.stderr,
         )
         return 1
@@ -773,13 +773,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         write_csv(
             trips, args.output, utc_offset_hours=args.utc_offset, battery_warning_voltage=args.battery_warning_voltage
         )
-        log(f"Logbook written: {args.output}")
+        log(f"[ok] Logbook written: {args.output}")
     if args.gpx:
         gpx_path = args.output.with_suffix(".gpx")
         write_gpx(
             trips, gpx_path, utc_offset_hours=args.utc_offset, battery_warning_voltage=args.battery_warning_voltage
         )
-        log(f"Route written: {gpx_path}")
+        log(f"[ok] Route written: {gpx_path}")
     html_path = args.output.with_suffix(".html")
     write_html_logbook(
         trips,
@@ -795,7 +795,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         log_interval_minutes=args.log_interval_minutes,
         remarks_api_url=args.remarks_api_url,
     )
-    log(f"HTML logbook written: {html_path} ({len(trips)} trip(s))")
+    log(f"[ok] HTML logbook written: {html_path} ({len(trips)} trip(s))")
 
     if args.upload:
         try:
@@ -807,7 +807,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 key_file=args.upload_key_file,
                 port=args.upload_port,
             )
-            log(f"Uploaded to {args.upload_user}@{args.upload_host}:{args.upload_remote_path}")
+            log(f"[ok] Uploaded to {args.upload_user}@{args.upload_host}:{args.upload_remote_path}")
         except UploadError as exc:
             # A newline after "failed:", not a space -- the SFTP client's own error message can
             # itself be multi-line (e.g. the server's login banner), which otherwise starts
@@ -848,9 +848,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                 # feedback in between, it can look stuck and invite closing the terminal early --
                 # which kills the whole (still-blocking) run, backup included (found in practice).
                 if len(new_files) > _BACKUP_CHUNK_SIZE:
-                    log(f"  ...backed up {backed_up_count}/{len(new_files)} new logfile(s) so far")
+                    log(f"[info] ...backed up {backed_up_count}/{len(new_files)} new logfile(s) so far")
             log(
-                f"Backed up {backed_up_count} new logfile(s) to "
+                f"[ok] Backed up {backed_up_count} new logfile(s) to "
                 f"{args.upload_user}@{args.upload_host}:{args.backup_remote_path} "
                 f"({len(args.logfiles) - len(new_files)} already there)"
             )
