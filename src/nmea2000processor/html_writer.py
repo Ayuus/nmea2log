@@ -758,10 +758,18 @@ def write_html_logbook(
     padding: 1em 0.6em 0.5em; border-top: 2px solid #1a6ecc; border-bottom: none;
   }}
   .show-map, .show-log {{ cursor: pointer; border: 1px solid #1a6ecc; background: white; color: #1a6ecc; border-radius: 4px; padding: 0.2em 0.6em; white-space: nowrap; }}
-  .show-map:hover, .show-log:hover, .show-map.active {{ background: #1a6ecc; color: white; }}
-  /* Hovering an already-active (blue) button previews what clicking it does -- hiding the map,
-     i.e. going back to white -- the same way hovering a white one previews opening it (blue). */
-  .show-map.active:hover {{ background: white; color: #1a6ecc; }}
+  .show-map.active {{ background: #1a6ecc; color: white; }}
+  /* Scoped to devices with a real hover-capable pointer (a mouse) -- on a touchscreen, tapping
+     can leave a lingering synthetic :hover state that combined with these rules made the button
+     flip to the wrong color right after tapping (blue map button turning white right after
+     opening the map, and vice versa) instead of just tracking .active (found in practice on a
+     phone). */
+  @media (hover: hover) {{
+    .show-map:hover, .show-log:hover {{ background: #1a6ecc; color: white; }}
+    /* Hovering an already-active (blue) button previews what clicking it does -- hiding the map,
+       i.e. going back to white -- the same way hovering a white one previews opening it (blue). */
+    .show-map.active:hover {{ background: white; color: #1a6ecc; }}
+  }}
   .trip-map-title {{ font-weight: 600; margin-bottom: 0.4em; }}
   /* Only the Details popup's own title (not the Map's, which reuses .trip-map-title inside a
      table row rather than a .log-dialog) -- matches the log-table header's background so the
