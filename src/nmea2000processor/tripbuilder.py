@@ -14,7 +14,7 @@ import bisect
 import math
 import statistics
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from itertools import groupby
 from typing import Dict, FrozenSet, List, Optional, Tuple
@@ -99,7 +99,8 @@ class TripLeg:
     engine_hours_total: Dict[int, float]  # engine instance -> absolute hour-meter reading at arrival
     engine_health: Dict[int, EngineHealth]  # engine instance -> health indicators + warnings
     typical_rpm: Dict[int, float]  # engine instance -> most commonly occurring RPM during the trip
-    typical_rpm_speed_kn: Dict[int, Tuple[float, float, float]]  # engine instance -> (min, max, avg) speed
+    # engine instance -> (min, max, avg speed in kn, avg fuel in L/h or None) while holding that RPM
+    typical_rpm_speed_kn: Dict[int, Tuple[float, float, float, Optional[float]]]
     battery_health: Dict[int, BatteryHealth]  # battery instance -> voltage stats during this trip
     min_depth_m: Optional[float]  # shallowest water depth measured during this trip
     min_depth_lat: Optional[float]
@@ -112,6 +113,8 @@ class TripLeg:
     roll_range_deg: Optional[float]  # peak-to-peak (max - min) roll during the trip
     pitch_range_deg: Optional[float]  # peak-to-peak (max - min) pitch during the trip
     track: List[NavSample]  # GPS points of this trip, e.g. for GPX export
+    max_speed_at: Optional[datetime] = None  # moment the max speed (see max_speed_kn) was recorded
+    max_speed_rpm: Dict[int, float] = field(default_factory=dict)  # engine instance -> RPM at that moment
 
 
 def _haversine_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -491,11 +494,14 @@ def _device_fuel_delta(
     return total if found_any else None
 
 
-def _speed_stats_kn(track: List[NavSample]) -> Tuple[Optional[float], Optional[float]]:
+def _speed_stats_kn(track: List[NavSample]) -> Tuple[Optional[float], Optional[float], Optional[datetime]]:
+    """Returns (avg, max, time of the max) -- the time lets a caller look up what else was going
+    on (e.g. engine RPM, see _rpm_at_time) at the exact moment of the trip's top speed."""
     if not track:
-        return None, None
+        return None, None, None
     speeds_kn = [s.sog_ms / _KNOT_IN_MS for s in track]
-    return sum(speeds_kn) / len(speeds_kn), max(speeds_kn)
+    max_idx = max(range(len(track)), key=lambda i: speeds_kn[i])
+    return sum(speeds_kn) / len(speeds_kn), speeds_kn[max_idx], track[max_idx].time
 
 
 def _min_depth(track: List[NavSample]) -> Tuple[Optional[float], Optional[float], Optional[float]]:
@@ -570,6 +576,23 @@ def _battery_health(samples: List[BatterySample], start: datetime, end: datetime
     return result
 
 
+def _rpm_at_time(
+    rpm_samples: List[EngineRpmSample], time: datetime, start: datetime, end: datetime
+) -> Dict[int, float]:
+    """The RPM reading closest to ``time`` (e.g. the moment of the trip's max speed), per engine
+    instance -- restricted to this trip's own [start, end] window so a gap in RPM reporting right
+    at that moment doesn't pick up a reading that actually belongs to a different trip."""
+    by_instance: Dict[int, List[EngineRpmSample]] = {}
+    for sample in rpm_samples:
+        if sample.rpm is None or not (start <= sample.time <= end):
+            continue
+        by_instance.setdefault(sample.instance, []).append(sample)
+    return {
+        instance: min(samples, key=lambda s: abs((s.time - time).total_seconds())).rpm
+        for instance, samples in by_instance.items()
+    }
+
+
 def _typical_rpm(samples: List[EngineRpmSample], start: datetime, end: datetime) -> Dict[int, float]:
     """The most commonly occurring engine speed (RPM) during the trip, per engine instance --
     rounded to the nearest ``_RPM_BUCKET`` before counting, so normal small load fluctuations at
@@ -592,13 +615,18 @@ def _typical_rpm(samples: List[EngineRpmSample], start: datetime, end: datetime)
 
 
 def _typical_rpm_speed_range(
-    rpm_samples: List[EngineRpmSample], track: List[NavSample], start: datetime, end: datetime
-) -> Dict[int, Tuple[float, float, float]]:
-    """(min, max, avg) boat speed in knots recorded at the moments the engine was actually
-    running at its typical RPM (see ``_typical_rpm``) -- the trip's overall average speed is
-    diluted by slower maneuvering in/out of the harbor, so "2250 RPM" next to "11.9 kn avg" reads
-    as if that RPM only makes 11.9 kn, when the boat was really doing 12.6-13.4 kn whenever it
-    was actually holding that RPM (found in practice).
+    rpm_samples: List[EngineRpmSample],
+    engine_samples: List[EngineSample],
+    track: List[NavSample],
+    start: datetime,
+    end: datetime,
+) -> Dict[int, Tuple[float, float, float, Optional[float]]]:
+    """(min, max, avg) boat speed in knots, plus average fuel consumption (L/h, None if no fuel
+    data), recorded at the moments the engine was actually running at its typical RPM (see
+    ``_typical_rpm``) -- the trip's overall average speed is diluted by slower maneuvering in/out
+    of the harbor, so "2250 RPM" next to "11.9 kn avg" reads as if that RPM only makes 11.9 kn,
+    when the boat was really doing 12.6-13.4 kn whenever it was actually holding that RPM (found
+    in practice).
 
     Only counts samples from a *sustained* run at (or within one bucket of) the typical RPM
     bucket -- at least ``_RPM_STABLE_MINUTES`` long -- a lone reading that briefly passes through
@@ -620,8 +648,14 @@ def _typical_rpm_speed_range(
             continue
         by_instance.setdefault(sample.instance, []).append(sample)
 
+    fuel_by_instance: Dict[int, List[EngineSample]] = {}
+    for sample in engine_samples:
+        if sample.fuel_rate_lph is None or not (start <= sample.time <= end):
+            continue
+        fuel_by_instance.setdefault(sample.instance, []).append(sample)
+
     min_duration = timedelta(minutes=_RPM_STABLE_MINUTES)
-    result: Dict[int, Tuple[float, float, float]] = {}
+    result: Dict[int, Tuple[float, float, float, Optional[float]]] = {}
     for instance, samples in by_instance.items():
         samples = sorted(samples, key=lambda s: s.time)
         buckets = [round(s.rpm / _RPM_BUCKET) * _RPM_BUCKET for s in samples]
@@ -632,6 +666,7 @@ def _typical_rpm_speed_range(
         near_typical = [abs(b - typical_bucket) <= _RPM_BUCKET for b in buckets]
 
         speeds_kn = []
+        windows: List[Tuple[datetime, datetime]] = []
         idx = 0
         n = len(samples)
         while idx < n:
@@ -642,6 +677,7 @@ def _typical_rpm_speed_range(
             while j + 1 < n and near_typical[j + 1]:
                 j += 1
             if samples[j].time - samples[idx].time >= min_duration:
+                windows.append((samples[idx].time, samples[j].time))
                 for sample in samples[idx : j + 1]:
                     pos = bisect.bisect_left(times, sample.time)
                     candidates = [i for i in (pos - 1, pos) if 0 <= i < len(track)]
@@ -651,8 +687,19 @@ def _typical_rpm_speed_range(
                     speeds_kn.append(track[nearest].sog_ms / _KNOT_IN_MS)
             idx = j + 1
 
-        if speeds_kn:
-            result[instance] = (min(speeds_kn), max(speeds_kn), sum(speeds_kn) / len(speeds_kn))
+        if not speeds_kn:
+            continue
+
+        # Same sustained windows as the speed samples above, not the whole trip -- fuel burn
+        # while idling/maneuvering at a different RPM shouldn't dilute "what does it cost to hold
+        # this RPM" any more than the trip's overall average speed should.
+        fuel_rates = [
+            fuel_sample.fuel_rate_lph
+            for fuel_sample in fuel_by_instance.get(instance, [])
+            if any(w_start <= fuel_sample.time <= w_end for w_start, w_end in windows)
+        ]
+        avg_fuel_lph = sum(fuel_rates) / len(fuel_rates) if fuel_rates else None
+        result[instance] = (min(speeds_kn), max(speeds_kn), sum(speeds_kn) / len(speeds_kn), avg_fuel_lph)
     return result
 
 
@@ -784,7 +831,10 @@ def build_trips(
         distance_nm = sum(
             _haversine_nm(a.lat, a.lon, b.lat, b.lon) for a, b in zip(group, group[1:])
         )
-        avg_speed_kn, max_speed_kn = _speed_stats_kn(group)
+        avg_speed_kn, max_speed_kn, max_speed_at = _speed_stats_kn(group)
+        max_speed_rpm = (
+            _rpm_at_time(rpm_samples, max_speed_at, depart_time, arrive_time) if max_speed_at else {}
+        )
         min_depth_m, min_depth_lat, min_depth_lon = _min_depth(group)
         avg_water_temp_c, min_water_temp_c, max_water_temp_c = _water_temp_stats(group)
         roll_variation_deg, pitch_variation_deg, roll_range_deg, pitch_range_deg = _motion_variation(
@@ -809,7 +859,9 @@ def build_trips(
                 engine_hours_total=_engine_hours_total(engine_samples, depart_time, arrive_time),
                 engine_health=_engine_health(engine_samples, depart_time, arrive_time),
                 typical_rpm=_typical_rpm(rpm_samples, depart_time, arrive_time),
-                typical_rpm_speed_kn=_typical_rpm_speed_range(rpm_samples, group, depart_time, arrive_time),
+                typical_rpm_speed_kn=_typical_rpm_speed_range(
+                    rpm_samples, engine_samples, group, depart_time, arrive_time
+                ),
                 battery_health=_battery_health(battery_samples, depart_time, arrive_time),
                 min_depth_m=min_depth_m,
                 min_depth_lat=min_depth_lat,
@@ -822,6 +874,8 @@ def build_trips(
                 roll_range_deg=roll_range_deg,
                 pitch_range_deg=pitch_range_deg,
                 track=group,
+                max_speed_at=max_speed_at,
+                max_speed_rpm=max_speed_rpm,
             )
         )
     return [trip for trip in trips if trip.distance_nm >= min_trip_distance_nm]

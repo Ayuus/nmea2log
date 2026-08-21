@@ -200,22 +200,66 @@ def _typical_rpm_html(trip: TripLeg) -> str:
         return visible
 
     if len(trip.typical_rpm_speed_kn) == 1:
-        min_kn, max_kn, avg_kn = next(iter(trip.typical_rpm_speed_kn.values()))
-        tooltip = T["rpm_tooltip_single"].format(
-            avg=_nl_num(avg_kn), min=_nl_num(min_kn), max=_nl_num(max_kn)
-        )
-    else:
-        tooltip = ", ".join(
-            T["rpm_tooltip_per_engine"].format(
-                instance=instance, avg=_nl_num(avg_kn), min=_nl_num(min_kn), max=_nl_num(max_kn)
+        min_kn, max_kn, avg_kn, avg_fuel_lph = next(iter(trip.typical_rpm_speed_kn.values()))
+        if avg_fuel_lph is not None:
+            tooltip = T["rpm_tooltip_single_fuel"].format(
+                avg=_nl_num(avg_kn), min=_nl_num(min_kn), max=_nl_num(max_kn), fuel=_nl_num(avg_fuel_lph)
             )
-            for instance, (min_kn, max_kn, avg_kn) in sorted(trip.typical_rpm_speed_kn.items())
-        )
+        else:
+            tooltip = T["rpm_tooltip_single"].format(
+                avg=_nl_num(avg_kn), min=_nl_num(min_kn), max=_nl_num(max_kn)
+            )
+    else:
+        parts = []
+        for instance, (min_kn, max_kn, avg_kn, avg_fuel_lph) in sorted(trip.typical_rpm_speed_kn.items()):
+            if avg_fuel_lph is not None:
+                parts.append(
+                    T["rpm_tooltip_per_engine_fuel"].format(
+                        instance=instance, avg=_nl_num(avg_kn), min=_nl_num(min_kn), max=_nl_num(max_kn),
+                        fuel=_nl_num(avg_fuel_lph),
+                    )
+                )
+            else:
+                parts.append(
+                    T["rpm_tooltip_per_engine"].format(
+                        instance=instance, avg=_nl_num(avg_kn), min=_nl_num(min_kn), max=_nl_num(max_kn)
+                    )
+                )
+        tooltip = ", ".join(parts)
     tooltip = escape(tooltip)
     return (
         f'<span class="temp-hover">{visible}'
         f'<span class="temp-tooltip" style="background:#eef4fb;color:#1a4a7a;">'
         f"⚙️ {tooltip}</span></span>"
+    )
+
+
+def _max_speed_html(trip: TripLeg, offset_hours: float) -> str:
+    """Plain max-speed text in the cell; hovering shows when it happened and what RPM the engine
+    was running at that moment -- the bare number alone doesn't say whether it was a brief
+    downwind surge at low RPM or genuinely flat-out at full throttle."""
+    if trip.max_speed_kn is None:
+        return ""
+    visible = _nl_num(trip.max_speed_kn) + " kn"
+    if trip.max_speed_at is None:
+        return visible
+    time_text = _to_local(trip.max_speed_at, offset_hours).strftime("%H:%M")
+
+    if len(trip.max_speed_rpm) == 1:
+        rpm = next(iter(trip.max_speed_rpm.values()))
+        tooltip = T["max_speed_tooltip_single"].format(time=time_text, rpm=f"{rpm:.0f}")
+    elif trip.max_speed_rpm:
+        tooltip = ", ".join(
+            T["max_speed_tooltip_per_engine"].format(time=time_text, instance=instance, rpm=f"{rpm:.0f}")
+            for instance, rpm in sorted(trip.max_speed_rpm.items())
+        )
+    else:
+        return visible
+    tooltip = escape(tooltip)
+    return (
+        f'<span class="temp-hover">{visible}'
+        f'<span class="temp-tooltip" style="background:#eef4fb;color:#1a4a7a;">'
+        f"🚀 {tooltip}</span></span>"
     )
 
 
@@ -465,7 +509,7 @@ def _trip_row_html(
         _format_duration(trip.duration),
         f"{_nl_num(trip.distance_nm)} nm",
         _nl_num(trip.avg_speed_kn) + " kn" if trip.avg_speed_kn is not None else "",
-        _nl_num(trip.max_speed_kn) + " kn" if trip.max_speed_kn is not None else "",
+        _max_speed_html(trip, offset),
         _nl_num(trip.fuel_liters) + " L",
         f"{_nl_num(avg_consumption_nm, 2)} L/nm" if avg_consumption_nm is not None else "",
         escape(_engine_hours_text(trip)),

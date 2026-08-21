@@ -85,6 +85,49 @@ def test_build_trips_single_leg():
     assert len(geocoder.calls) == 2
 
 
+def test_max_speed_records_when_and_at_what_rpm_it_happened():
+    """The bare max speed number doesn't say whether it was a brief downwind surge at low RPM or
+    genuinely flat-out -- max_speed_at/max_speed_rpm let a caller show that context (e.g. in a
+    tooltip) instead of just the number on its own."""
+    fixes = []
+    sogs = []
+    engine_samples = []
+    rpm_samples = []
+
+    for m in range(0, 12):
+        fixes.append(PositionFix(_dt(m), 52.30, 4.90))
+        sogs.append(SogSample(_dt(m), 0.0))
+        engine_samples.append(EngineSample(_dt(m), 0, 0.5, 3600 * 100 + m * 60))
+
+    for i, m in enumerate(range(12, 42)):
+        frac = i / 29
+        fixes.append(PositionFix(_dt(m), 52.30 + 0.10 * frac, 4.90 + 0.05 * frac))
+        if m == 25:
+            sogs.append(SogSample(_dt(m), 9.0))  # brief spike, ~17.5 kn
+            rpm_samples.append(EngineRpmSample(_dt(m), 0, 3400.0))
+        else:
+            sogs.append(SogSample(_dt(m), 6.5))  # steady cruise, ~12.6 kn
+            rpm_samples.append(EngineRpmSample(_dt(m), 0, 2200.0))
+        engine_samples.append(EngineSample(_dt(m), 0, 8.0, 3600 * 100 + m * 60))
+
+    for m in range(42, 54):
+        fixes.append(PositionFix(_dt(m), 52.40, 4.95))
+        sogs.append(SogSample(_dt(m), 0.0))
+        engine_samples.append(EngineSample(_dt(m), 0, 0.5, 3600 * 100 + m * 60))
+
+    geocoder = _StubGeocoder()
+    trips = build_trips(
+        fixes, sogs, engine_samples, rpm_samples=rpm_samples,
+        geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+    )
+
+    assert len(trips) == 1
+    trip = trips[0]
+    assert trip.max_speed_kn == pytest.approx(9.0 / 0.514444, rel=1e-3)
+    assert trip.max_speed_at == _dt(25)
+    assert trip.max_speed_rpm[0] == pytest.approx(3400.0)
+
+
 def test_track_carries_cog_forward_filled_from_sog_samples():
     """PGN 129026 reports COG and SOG together, so cog_deg is decoded and forward-filled onto
     the track exactly like sog_ms already was -- needed for the periodic log table in the HTML
@@ -313,9 +356,10 @@ def test_typical_rpm_speed_range_reflects_speed_at_that_rpm_not_trip_average():
     assert len(trips) == 1
     trip = trips[0]
     assert trip.typical_rpm[0] == pytest.approx(2200.0)
-    min_kn, max_kn, avg_kn = trip.typical_rpm_speed_kn[0]
+    min_kn, max_kn, avg_kn, avg_fuel_lph = trip.typical_rpm_speed_kn[0]
     assert min_kn > 5.0  # the one neutral-coast sample (0.5 m/s / ~1 kn) must not drag it down
     assert max_kn == pytest.approx(6.5 / 0.514444, rel=1e-3)
+    assert avg_fuel_lph == pytest.approx(8.0)  # fuel rate during the same steady-cruise window
 
 
 def test_typical_rpm_speed_range_ignores_a_brief_pass_through_while_accelerating():
@@ -360,11 +404,12 @@ def test_typical_rpm_speed_range_ignores_a_brief_pass_through_while_accelerating
     assert len(trips) == 1
     trip = trips[0]
     assert trip.typical_rpm[0] == pytest.approx(2200.0)
-    min_kn, max_kn, avg_kn = trip.typical_rpm_speed_kn[0]
+    min_kn, max_kn, avg_kn, avg_fuel_lph = trip.typical_rpm_speed_kn[0]
     # the brief 1-minute overshoot (1.5 m/s / ~2.9 kn) must be excluded -- too short to be a
     # sustained run -- leaving only the steady-cruise speed
     assert min_kn > 5.0
     assert max_kn == pytest.approx(6.5 / 0.514444, rel=1e-3)
+    assert avg_fuel_lph == pytest.approx(8.0)
 
 
 def test_motion_variation_reflects_roll_and_pitch_spread():

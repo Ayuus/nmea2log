@@ -709,7 +709,7 @@ def test_write_html_logbook_details_popup_shows_water_temperature(tmp_path: Path
 
 
 def test_write_html_logbook_shows_speed_at_typical_rpm_tooltip(tmp_path: Path):
-    trip = _trip(typical_rpm={0: 2250.0}, typical_rpm_speed_kn={0: (12.6, 13.4, 13.0)})
+    trip = _trip(typical_rpm={0: 2250.0}, typical_rpm_speed_kn={0: (12.6, 13.4, 13.0, None)})
     out_path = tmp_path / "logbook.html"
 
     write_html_logbook([trip], out_path)
@@ -717,6 +717,31 @@ def test_write_html_logbook_shows_speed_at_typical_rpm_tooltip(tmp_path: Path):
     html = out_path.read_text(encoding="utf-8")
     assert "2250" in html
     assert "gem. 13,0 kn bij dat toerental (12,6-13,4 kn)" in html
+
+
+def test_write_html_logbook_shows_fuel_consumption_at_typical_rpm_tooltip(tmp_path: Path):
+    trip = _trip(typical_rpm={0: 2250.0}, typical_rpm_speed_kn={0: (12.6, 13.4, 13.0, 8.4)})
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([trip], out_path)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert "gem. 13,0 kn bij dat toerental (12,6-13,4 kn), gem. verbruik 8,4 L/h" in html
+
+
+def test_write_html_logbook_shows_max_speed_time_and_rpm_tooltip(tmp_path: Path):
+    trip = _trip(
+        max_speed_kn=17.5,
+        max_speed_at=datetime(2026, 7, 15, 9, 25),
+        max_speed_rpm={0: 3400.0},
+    )
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([trip], out_path)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert "17,5 kn" in html
+    assert "om 09:25 bij 3400 rpm" in html
 
 
 def test_write_html_logbook_details_popup_shows_motion(tmp_path: Path):

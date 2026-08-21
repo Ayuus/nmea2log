@@ -472,6 +472,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "config file)",
     )
     parser.add_argument(
+        "--no-upload",
+        action="store_true",
+        help="Force-disable both --upload and --backup-ebl for this run, overriding even the "
+        "config file's own 'enabled'/'backup_ebl' settings -- use this for a local test run so it "
+        "can never touch the live site by accident (found in practice: a local test run with "
+        "--no-geocode still uploaded, since the config file enables upload by default regardless "
+        "of that flag)",
+    )
+    parser.add_argument(
         "--upload-host",
         type=str,
         default=None,
@@ -604,6 +613,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     # leaves nothing to check afterwards -- particularly for a --backup-ebl run that can take a
     # while and is easy to interrupt by closing the window too early (found in practice).
     set_log_file(args.output.parent / "nmea2log.log")
+
+    if args.no_upload:
+        # Overrides even a config-file default of enabled=true/backup_ebl=true -- the whole point
+        # is a way to run locally that's *guaranteed* not to touch the live site, regardless of
+        # what's already sitting in nmea2log.ini (found in practice: forgetting that upload is
+        # enabled by default there is exactly what caused a live-site incident twice).
+        args.upload = False
+        args.backup_ebl = False
 
     if args.upload and not (args.upload_host and args.upload_user and args.upload_remote_path and args.upload_key_file):
         parser.error(

@@ -225,6 +225,29 @@ def test_main_reports_a_clear_error_when_backup_ebl_is_missing_settings(tmp_path
     assert "--backup-ebl needs" in capsys.readouterr().err
 
 
+def test_main_no_upload_flag_overrides_upload_and_backup_ebl(tmp_path, monkeypatch, capsys):
+    """Regression test for a real incident: a local test run still uploaded to the live site
+    because nmea2log.ini enables upload by default -- --no-upload must force both --upload and
+    --backup-ebl off regardless of what --upload/--backup-ebl (or the config file) request, so a
+    local test run can never touch the live site by accident."""
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = None
+    try:
+        main(["--upload", "--backup-ebl", "--no-upload", "--ebl-dir", str(tmp_path)])
+    except SystemExit as exc:
+        exit_code = exc.code
+
+    # Got past the "--upload needs ..."/"--backup-ebl needs ..." validation (which would fire if
+    # either were still enabled, since none of the required upload settings are supplied here) --
+    # reaching the unrelated "no .ebl files" error instead proves both were switched off.
+    assert exit_code == 2
+    err = capsys.readouterr().err
+    assert "--upload needs" not in err
+    assert "--backup-ebl needs" not in err
+    assert "no .ebl files found" in err
+
+
 def _stub_one_trip_samples(monkeypatch):
     """Makes any .ebl path passed to main() decode into the same single real trip (12 min
     stationary -> 30 min underway -> 12 min stationary -- enough for build_trips to recognize
