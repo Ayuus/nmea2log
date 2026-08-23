@@ -37,6 +37,7 @@ import getpass
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -52,6 +53,12 @@ SD_LOG_ROOT = "/sdcard/logs/ebl_data_logs"
 
 TIMEOUT = 30  # seconds per API request
 DOWNLOAD_TIMEOUT = 300  # more headroom for the ~5 MB files
+
+# The boat's own wifi hotspot can drop out mid-transfer -- retry a couple of times before giving
+# up on a single file rather than aborting the whole remaining download queue over one transient
+# reset (found in practice: ConnectionResetError mid-download crashed the entire run).
+_DOWNLOAD_MAX_RETRIES = 2
+_DOWNLOAD_RETRY_DELAY_S = 3.0
 
 # file_time value the W2K-2 uses when there was no GPS time (1980-01-01). 10-year margin:
 # anything before 1990 is treated as "no real time".
@@ -184,9 +191,25 @@ def download_file(session: _Session, download_dir: Path, folder: str, info: dict
         log(f"[skip] {folder}/{info['file_name']} already complete locally")
         return
 
-    session.download_to(
-        "/api/download", {"file_name": f"{SD_LOG_ROOT}/{folder}/{info['file_name']}"}, target
-    )
+    for attempt in range(_DOWNLOAD_MAX_RETRIES + 1):
+        if attempt:
+            time.sleep(_DOWNLOAD_RETRY_DELAY_S)
+        try:
+            session.download_to(
+                "/api/download", {"file_name": f"{SD_LOG_ROOT}/{folder}/{info['file_name']}"}, target
+            )
+            break
+        # OSError alongside URLError: a dropped wifi connection to the W2K-2 mid-transfer surfaces
+        # as a raw ConnectionResetError, not wrapped in URLError (found in practice, same as the
+        # Overpass geocoding calls -- see geocode.py).
+        except (urllib.error.URLError, OSError) as exc:
+            if attempt == _DOWNLOAD_MAX_RETRIES:
+                raise
+            log(
+                f"[warning] download of {folder}/{info['file_name']} failed ({exc}) "
+                f"-- attempt {attempt + 1}/{_DOWNLOAD_MAX_RETRIES + 1}, retrying...",
+                file=sys.stderr,
+            )
 
     file_time = info.get("file_time", 0)
     if file_time > NO_GPS_TIME_BEFORE:
@@ -227,7 +250,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "or get a fresh token"
             )
         sys.exit(f"[error] HTTP {exc.code}: {exc}")
-    except (urllib.error.URLError, TimeoutError) as exc:
+    except (urllib.error.URLError, OSError) as exc:
         sys.exit(f"[error] network: {exc}")
     return 0
 
