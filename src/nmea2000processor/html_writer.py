@@ -141,37 +141,35 @@ def _warnings_count(trip: TripLeg, battery_warning_voltage: Optional[float]) -> 
 
 
 def _warnings_tooltip_text(trip: TripLeg, battery_warning_voltage: Optional[float], offset_hours: float) -> str:
-    """Same warnings as the CSV's plain-text column (see logbook_writer._all_warnings_text), each
-    with the local time it first triggered -- built separately rather than reusing that function
-    so the CSV's own text stays exactly as-is for anything already parsing it (see this module's
-    docstring: CSV/GPX output is deliberately not touched by HTML-only presentation changes)."""
+    """Same warnings as the CSV's plain-text column (see logbook_writer._all_warnings_text), but
+    flattened into one list across every engine/battery and sorted chronologically (time first,
+    then the warning text) instead of grouped and alphabetized -- built separately rather than
+    reusing that function so the CSV's own text stays exactly as-is for anything already parsing
+    it (see this module's docstring: CSV/GPX output is deliberately not touched by HTML-only
+    presentation changes)."""
     single_engine = len(trip.engine_health) == 1
-    parts = []
-    for instance, health in sorted(trip.engine_health.items()):
-        if not health.warnings:
-            continue
+    single_battery = len(trip.battery_health) == 1
+    entries: List[Tuple[Optional[datetime], str]] = []
+
+    for instance, health in trip.engine_health.items():
         prefix = "" if single_engine else f"engine {instance}: "
-        bits = []
-        for warning in sorted(health.warnings):
-            first_seen = health.warning_first_seen.get(warning)
-            if first_seen is not None:
-                bits.append(f"{warning} ({_to_local(first_seen, offset_hours).strftime('%H:%M')})")
-            else:
-                bits.append(warning)
-        parts.append(prefix + ", ".join(bits))
+        for warning in health.warnings:
+            entries.append((health.warning_first_seen.get(warning), f"{prefix}{warning}"))
 
     if battery_warning_voltage is not None:
-        single_battery = len(trip.battery_health) == 1
-        for instance, health in sorted(trip.battery_health.items()):
+        for instance, health in trip.battery_health.items():
             if health.min_voltage_v is None or health.min_voltage_v >= battery_warning_voltage:
                 continue
             prefix = "" if single_battery else f"battery {instance}: "
-            text = f"{prefix}low battery {_nl_num(health.min_voltage_v)} V"
-            if health.min_voltage_at is not None:
-                text += f" ({_to_local(health.min_voltage_at, offset_hours).strftime('%H:%M')})"
-            parts.append(text)
+            entries.append((health.min_voltage_at, f"{prefix}low battery {_nl_num(health.min_voltage_v)} V"))
 
-    return "; ".join(parts)
+    # Entries without a known time (only possible from data built before warning_first_seen/
+    # min_voltage_at existed) sort last instead of crashing on comparing None to a datetime.
+    entries.sort(key=lambda entry: (entry[0] is None, entry[0]))
+    return ", ".join(
+        f"{_to_local(time, offset_hours).strftime('%H:%M')} {text}" if time is not None else text
+        for time, text in entries
+    )
 
 
 def _warnings_html(trip: TripLeg, battery_warning_voltage: Optional[float], offset_hours: float) -> str:

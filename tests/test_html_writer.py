@@ -705,9 +705,9 @@ def test_write_html_logbook_warnings_tooltip_shows_when_each_one_first_triggered
     write_html_logbook([trip], out_path, battery_warning_voltage=12.2)
 
     html = out_path.read_text(encoding="utf-8")
-    assert "low oil pressure (09:12)" in html
-    assert "overheat (09:40)" in html
-    assert "low battery 11,8 V (09:55)" in html
+    # time first, no parentheses, and chronological (09:12 before 09:40 before 09:55) rather than
+    # alphabetized -- "overheat" would otherwise sort before "low oil pressure"
+    assert "09:12 low oil pressure, 09:40 overheat, 09:55 low battery 11,8 V" in html
 
 
 def test_write_html_logbook_no_warnings_cell_without_warnings(tmp_path: Path):
