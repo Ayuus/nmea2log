@@ -69,9 +69,9 @@ NL: Dict[str, str] = {
     "motion_peak": "piek",
     # Typical RPM tooltip
     "rpm_tooltip_single": "gem. {avg} kn bij dat toerental ({min}-{max} kn)",
-    "rpm_tooltip_single_fuel": "gem. {avg} kn bij dat toerental ({min}-{max} kn), gem. verbruik {fuel} L/h",
+    "rpm_tooltip_single_fuel": "gem. {avg} kn bij dat toerental ({min}-{max} kn), gem. verbruik {fuel} L/nm",
     "rpm_tooltip_per_engine": "motor {instance}: gem. {avg} kn ({min}-{max} kn)",
-    "rpm_tooltip_per_engine_fuel": "motor {instance}: gem. {avg} kn ({min}-{max} kn), gem. verbruik {fuel} L/h",
+    "rpm_tooltip_per_engine_fuel": "motor {instance}: gem. {avg} kn ({min}-{max} kn), gem. verbruik {fuel} L/nm",
     # Max speed tooltip
     "max_speed_tooltip_single": "om {time} bij {rpm} rpm",
     "max_speed_tooltip_per_engine": "om {time}, motor {instance}: {rpm} rpm",

@@ -200,10 +200,11 @@ def _typical_rpm_html(trip: TripLeg) -> str:
         return visible
 
     if len(trip.typical_rpm_speed_kn) == 1:
-        min_kn, max_kn, avg_kn, avg_fuel_lph = next(iter(trip.typical_rpm_speed_kn.values()))
-        if avg_fuel_lph is not None:
+        min_kn, max_kn, avg_kn, avg_fuel_l_per_nm = next(iter(trip.typical_rpm_speed_kn.values()))
+        if avg_fuel_l_per_nm is not None:
             tooltip = T["rpm_tooltip_single_fuel"].format(
-                avg=_nl_num(avg_kn), min=_nl_num(min_kn), max=_nl_num(max_kn), fuel=_nl_num(avg_fuel_lph)
+                avg=_nl_num(avg_kn), min=_nl_num(min_kn), max=_nl_num(max_kn),
+                fuel=_nl_num(avg_fuel_l_per_nm, 2),
             )
         else:
             tooltip = T["rpm_tooltip_single"].format(
@@ -211,12 +212,12 @@ def _typical_rpm_html(trip: TripLeg) -> str:
             )
     else:
         parts = []
-        for instance, (min_kn, max_kn, avg_kn, avg_fuel_lph) in sorted(trip.typical_rpm_speed_kn.items()):
-            if avg_fuel_lph is not None:
+        for instance, (min_kn, max_kn, avg_kn, avg_fuel_l_per_nm) in sorted(trip.typical_rpm_speed_kn.items()):
+            if avg_fuel_l_per_nm is not None:
                 parts.append(
                     T["rpm_tooltip_per_engine_fuel"].format(
                         instance=instance, avg=_nl_num(avg_kn), min=_nl_num(min_kn), max=_nl_num(max_kn),
-                        fuel=_nl_num(avg_fuel_lph),
+                        fuel=_nl_num(avg_fuel_l_per_nm, 2),
                     )
                 )
             else:

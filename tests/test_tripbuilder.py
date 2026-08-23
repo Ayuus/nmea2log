@@ -356,10 +356,11 @@ def test_typical_rpm_speed_range_reflects_speed_at_that_rpm_not_trip_average():
     assert len(trips) == 1
     trip = trips[0]
     assert trip.typical_rpm[0] == pytest.approx(2200.0)
-    min_kn, max_kn, avg_kn, avg_fuel_lph = trip.typical_rpm_speed_kn[0]
+    min_kn, max_kn, avg_kn, avg_fuel_l_per_nm = trip.typical_rpm_speed_kn[0]
     assert min_kn > 5.0  # the one neutral-coast sample (0.5 m/s / ~1 kn) must not drag it down
     assert max_kn == pytest.approx(6.5 / 0.514444, rel=1e-3)
-    assert avg_fuel_lph == pytest.approx(8.0)  # fuel rate during the same steady-cruise window
+    # 8.0 L/h at the steady-cruise speed of this window, expressed as L/nm
+    assert avg_fuel_l_per_nm == pytest.approx(8.0 / avg_kn, rel=1e-3)
 
 
 def test_typical_rpm_speed_range_ignores_a_brief_pass_through_while_accelerating():
@@ -404,12 +405,12 @@ def test_typical_rpm_speed_range_ignores_a_brief_pass_through_while_accelerating
     assert len(trips) == 1
     trip = trips[0]
     assert trip.typical_rpm[0] == pytest.approx(2200.0)
-    min_kn, max_kn, avg_kn, avg_fuel_lph = trip.typical_rpm_speed_kn[0]
+    min_kn, max_kn, avg_kn, avg_fuel_l_per_nm = trip.typical_rpm_speed_kn[0]
     # the brief 1-minute overshoot (1.5 m/s / ~2.9 kn) must be excluded -- too short to be a
     # sustained run -- leaving only the steady-cruise speed
     assert min_kn > 5.0
     assert max_kn == pytest.approx(6.5 / 0.514444, rel=1e-3)
-    assert avg_fuel_lph == pytest.approx(8.0)
+    assert avg_fuel_l_per_nm == pytest.approx(8.0 / avg_kn, rel=1e-3)
 
 
 def test_motion_variation_reflects_roll_and_pitch_spread():

@@ -720,13 +720,13 @@ def test_write_html_logbook_shows_speed_at_typical_rpm_tooltip(tmp_path: Path):
 
 
 def test_write_html_logbook_shows_fuel_consumption_at_typical_rpm_tooltip(tmp_path: Path):
-    trip = _trip(typical_rpm={0: 2250.0}, typical_rpm_speed_kn={0: (12.6, 13.4, 13.0, 8.4)})
+    trip = _trip(typical_rpm={0: 2250.0}, typical_rpm_speed_kn={0: (12.6, 13.4, 13.0, 0.84)})
     out_path = tmp_path / "logbook.html"
 
     write_html_logbook([trip], out_path)
 
     html = out_path.read_text(encoding="utf-8")
-    assert "gem. 13,0 kn bij dat toerental (12,6-13,4 kn), gem. verbruik 8,4 L/h" in html
+    assert "gem. 13,0 kn bij dat toerental (12,6-13,4 kn), gem. verbruik 0,84 L/nm" in html
 
 
 def test_write_html_logbook_shows_max_speed_time_and_rpm_tooltip(tmp_path: Path):

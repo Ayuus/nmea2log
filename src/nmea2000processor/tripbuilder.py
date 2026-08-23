@@ -99,7 +99,7 @@ class TripLeg:
     engine_hours_total: Dict[int, float]  # engine instance -> absolute hour-meter reading at arrival
     engine_health: Dict[int, EngineHealth]  # engine instance -> health indicators + warnings
     typical_rpm: Dict[int, float]  # engine instance -> most commonly occurring RPM during the trip
-    # engine instance -> (min, max, avg speed in kn, avg fuel in L/h or None) while holding that RPM
+    # engine instance -> (min, max, avg speed in kn, avg fuel in L/nm or None) while holding that RPM
     typical_rpm_speed_kn: Dict[int, Tuple[float, float, float, Optional[float]]]
     battery_health: Dict[int, BatteryHealth]  # battery instance -> voltage stats during this trip
     min_depth_m: Optional[float]  # shallowest water depth measured during this trip
@@ -621,7 +621,7 @@ def _typical_rpm_speed_range(
     start: datetime,
     end: datetime,
 ) -> Dict[int, Tuple[float, float, float, Optional[float]]]:
-    """(min, max, avg) boat speed in knots, plus average fuel consumption (L/h, None if no fuel
+    """(min, max, avg) boat speed in knots, plus average fuel consumption (L/nm, None if no fuel
     data), recorded at the moments the engine was actually running at its typical RPM (see
     ``_typical_rpm``) -- the trip's overall average speed is diluted by slower maneuvering in/out
     of the harbor, so "2250 RPM" next to "11.9 kn avg" reads as if that RPM only makes 11.9 kn,
@@ -690,6 +690,8 @@ def _typical_rpm_speed_range(
         if not speeds_kn:
             continue
 
+        avg_kn = sum(speeds_kn) / len(speeds_kn)
+
         # Same sustained windows as the speed samples above, not the whole trip -- fuel burn
         # while idling/maneuvering at a different RPM shouldn't dilute "what does it cost to hold
         # this RPM" any more than the trip's overall average speed should.
@@ -698,8 +700,11 @@ def _typical_rpm_speed_range(
             for fuel_sample in fuel_by_instance.get(instance, [])
             if any(w_start <= fuel_sample.time <= w_end for w_start, w_end in windows)
         ]
-        avg_fuel_lph = sum(fuel_rates) / len(fuel_rates) if fuel_rates else None
-        result[instance] = (min(speeds_kn), max(speeds_kn), sum(speeds_kn) / len(speeds_kn), avg_fuel_lph)
+        # L/nm (matching the rest of the logbook, e.g. the per-trip "Gem. verbruik") rather than
+        # L/h -- L/h alone doesn't say anything about efficiency, since a higher RPM naturally
+        # burns more per hour but may still cover a mile more efficiently.
+        avg_fuel_l_per_nm = (sum(fuel_rates) / len(fuel_rates) / avg_kn) if fuel_rates and avg_kn > 0 else None
+        result[instance] = (min(speeds_kn), max(speeds_kn), avg_kn, avg_fuel_l_per_nm)
     return result
 
 
