@@ -684,6 +684,32 @@ def test_write_html_logbook_warnings_cell_shows_a_count(tmp_path: Path):
     assert "low battery 11,8 V" in html
 
 
+def test_write_html_logbook_warnings_tooltip_shows_when_each_one_first_triggered(tmp_path: Path):
+    trip = _trip(
+        engine_health={
+            0: EngineHealth(
+                None, None, None, None, None,
+                warnings=frozenset({"low oil pressure", "overheat"}),
+                warning_first_seen={
+                    "low oil pressure": datetime(2026, 7, 15, 9, 12),
+                    "overheat": datetime(2026, 7, 15, 9, 40),
+                },
+            )
+        },
+        battery_health={
+            0: BatteryHealth(avg_voltage_v=12.6, min_voltage_v=11.8, min_voltage_at=datetime(2026, 7, 15, 9, 55))
+        },
+    )
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([trip], out_path, battery_warning_voltage=12.2)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert "low oil pressure (09:12)" in html
+    assert "overheat (09:40)" in html
+    assert "low battery 11,8 V (09:55)" in html
+
+
 def test_write_html_logbook_no_warnings_cell_without_warnings(tmp_path: Path):
     out_path = tmp_path / "logbook.html"
 

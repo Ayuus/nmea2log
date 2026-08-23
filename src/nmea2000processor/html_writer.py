@@ -32,7 +32,6 @@ from typing import Dict, Iterable, List, Optional, Tuple
 from xml.sax.saxutils import escape
 
 from .logbook_writer import (
-    _all_warnings_text,
     _avg_consumption_l_per_nm,
     _duration_minutes,
     _engine_hours_text,
@@ -129,7 +128,7 @@ def _decimated_points(trip: TripLeg) -> List[Tuple[float, float]]:
 
 def _warnings_count(trip: TripLeg, battery_warning_voltage: Optional[float]) -> int:
     """Counts individual warnings (not text segments) directly from the underlying data instead
-    of parsing _all_warnings_text's semicolon-joined string, since one engine's segment can
+    of parsing _warnings_tooltip_text's semicolon-joined string, since one engine's segment can
     itself contain several comma-separated warnings."""
     count = sum(len(health.warnings) for health in trip.engine_health.values())
     if battery_warning_voltage is not None:
@@ -141,13 +140,48 @@ def _warnings_count(trip: TripLeg, battery_warning_voltage: Optional[float]) -> 
     return count
 
 
-def _warnings_html(trip: TripLeg, battery_warning_voltage: Optional[float]) -> str:
+def _warnings_tooltip_text(trip: TripLeg, battery_warning_voltage: Optional[float], offset_hours: float) -> str:
+    """Same warnings as the CSV's plain-text column (see logbook_writer._all_warnings_text), each
+    with the local time it first triggered -- built separately rather than reusing that function
+    so the CSV's own text stays exactly as-is for anything already parsing it (see this module's
+    docstring: CSV/GPX output is deliberately not touched by HTML-only presentation changes)."""
+    single_engine = len(trip.engine_health) == 1
+    parts = []
+    for instance, health in sorted(trip.engine_health.items()):
+        if not health.warnings:
+            continue
+        prefix = "" if single_engine else f"engine {instance}: "
+        bits = []
+        for warning in sorted(health.warnings):
+            first_seen = health.warning_first_seen.get(warning)
+            if first_seen is not None:
+                bits.append(f"{warning} ({_to_local(first_seen, offset_hours).strftime('%H:%M')})")
+            else:
+                bits.append(warning)
+        parts.append(prefix + ", ".join(bits))
+
+    if battery_warning_voltage is not None:
+        single_battery = len(trip.battery_health) == 1
+        for instance, health in sorted(trip.battery_health.items()):
+            if health.min_voltage_v is None or health.min_voltage_v >= battery_warning_voltage:
+                continue
+            prefix = "" if single_battery else f"battery {instance}: "
+            text = f"{prefix}low battery {_nl_num(health.min_voltage_v)} V"
+            if health.min_voltage_at is not None:
+                text += f" ({_to_local(health.min_voltage_at, offset_hours).strftime('%H:%M')})"
+            parts.append(text)
+
+    return "; ".join(parts)
+
+
+def _warnings_html(trip: TripLeg, battery_warning_voltage: Optional[float], offset_hours: float) -> str:
     """Just the count in the cell (so a trip with many warnings doesn't blow up the column
-    width); hovering shows the actual warning text, same pattern as the other tooltip columns."""
+    width); hovering shows the actual warning text plus when each one first triggered, same
+    pattern as the other tooltip columns."""
     count = _warnings_count(trip, battery_warning_voltage)
     if count == 0:
         return ""
-    tooltip = escape(_all_warnings_text(trip, battery_warning_voltage))
+    tooltip = escape(_warnings_tooltip_text(trip, battery_warning_voltage, offset_hours))
     return (
         f'<span class="temp-hover warning-count">{count}'
         f'<span class="temp-tooltip" style="background:#fdecea;color:#7a2b22;">'
@@ -515,7 +549,7 @@ def _trip_row_html(
         f"{_nl_num(avg_consumption_nm, 2)} L/nm" if avg_consumption_nm is not None else "",
         escape(_engine_hours_text(trip)),
         _typical_rpm_html(trip),
-        _warnings_html(trip, battery_warning_voltage),
+        _warnings_html(trip, battery_warning_voltage, offset),
         map_cell,
         _details_cell_html(trip, idx, log_interval_minutes, offset),
     ]

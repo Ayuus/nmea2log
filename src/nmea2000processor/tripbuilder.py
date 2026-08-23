@@ -73,12 +73,14 @@ class EngineHealth:
     alternator_voltage_v_avg: Optional[float]
     engine_load_pct_max: Optional[float]
     warnings: FrozenSet[str]
+    warning_first_seen: Dict[str, datetime] = field(default_factory=dict)  # warning text -> first time seen
 
 
 @dataclass(frozen=True)
 class BatteryHealth:
     avg_voltage_v: Optional[float]
     min_voltage_v: Optional[float]
+    min_voltage_at: Optional[datetime] = None  # moment the min_voltage_v reading was recorded
 
 
 @dataclass(frozen=True)
@@ -542,6 +544,10 @@ def _engine_health(
         alternator_voltage = [s.alternator_voltage_v for s in window if s.alternator_voltage_v is not None]
         engine_load = [s.engine_load_pct for s in window if s.engine_load_pct is not None]
         warnings: FrozenSet[str] = frozenset().union(*(s.warnings for s in window))
+        warning_first_seen: Dict[str, datetime] = {}
+        for sample in sorted(window, key=lambda s: s.time):
+            for warning in sample.warnings:
+                warning_first_seen.setdefault(warning, sample.time)
 
         oil_pressure_avg = _avg(oil_pressure)
         oil_temperature_avg = _avg(oil_temperature)
@@ -556,6 +562,7 @@ def _engine_health(
             alternator_voltage_v_avg=_avg(alternator_voltage),
             engine_load_pct_max=max(engine_load) if engine_load else None,
             warnings=warnings,
+            warning_first_seen=warning_first_seen,
         )
     return result
 
@@ -569,10 +576,16 @@ def _battery_health(samples: List[BatterySample], start: datetime, end: datetime
 
     result: Dict[int, BatteryHealth] = {}
     for instance, seq in by_instance.items():
-        window = [s.voltage_v for s in seq if start <= s.time <= end]
+        window = [s for s in seq if start <= s.time <= end]
         if not window:
             continue
-        result[instance] = BatteryHealth(avg_voltage_v=sum(window) / len(window), min_voltage_v=min(window))
+        voltages = [s.voltage_v for s in window]
+        min_sample = min(window, key=lambda s: s.voltage_v)
+        result[instance] = BatteryHealth(
+            avg_voltage_v=sum(voltages) / len(voltages),
+            min_voltage_v=min_sample.voltage_v,
+            min_voltage_at=min_sample.time,
+        )
     return result
 
 

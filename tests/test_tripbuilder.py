@@ -261,6 +261,7 @@ def test_battery_health_with_low_voltage():
     trip = trips[0]
     assert trip.battery_health[0].min_voltage_v == pytest.approx(11.5)
     assert trip.battery_health[0].avg_voltage_v is not None
+    assert trip.battery_health[0].min_voltage_at == _dt(25)
 
 
 def test_battery_health_absent_without_samples():
@@ -514,6 +515,7 @@ def test_engine_health_and_warnings():
     assert health.engine_load_pct_max == pytest.approx(90.0)
     # the warning active at m=20 (while underway) must be visible
     assert "Low Oil Pressure" in health.warnings
+    assert health.warning_first_seen["Low Oil Pressure"] == _dt(20)
 
 
 def test_short_stop_does_not_split_trip():
