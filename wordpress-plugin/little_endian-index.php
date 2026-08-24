@@ -14,6 +14,11 @@
  * accounts (WooCommerce), and every one of those is just as "logged in" as an actual crew member
  * -- being logged in at all is not the same question as being allowed to see this logbook.
  *
+ * Every successful view (i.e. past the permission check below) is appended to views.log next to
+ * logbook.html -- outside the web root, same as the logbook itself, so it's not publicly
+ * browsable. A failed file write is never fatal to actually serving the logbook; this is a
+ * bonus, not something the page depends on.
+ *
  * Also patches a live wp_rest nonce into the served copy (replacing the "%%WP_REST_NONCE%%"
  * placeholder the Python side embeds), since logbook.html itself is static and generated well
  * before -- and completely separately from -- any particular WordPress session, so it has no way
@@ -45,6 +50,10 @@ if (!file_exists($logbook_path)) {
     echo 'Logboek nog niet geüpload.';
     exit;
 }
+
+$views_log_path = __DIR__ . '/../../private/little_endian/views.log';
+$line = date('Y-m-d H:i:s') . ' ' . wp_get_current_user()->user_login . "\n";
+@file_put_contents($views_log_path, $line, FILE_APPEND | LOCK_EX);
 
 $html = file_get_contents($logbook_path);
 $html = str_replace('%%WP_REST_NONCE%%', wp_create_nonce('wp_rest'), $html);
