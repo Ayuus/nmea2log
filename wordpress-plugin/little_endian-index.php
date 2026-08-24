@@ -58,5 +58,11 @@ $line = date('Y-m-d H:i:s') . ' ' . wp_get_current_user()->user_login . "\n";
 $html = file_get_contents($logbook_path);
 $html = str_replace('%%WP_REST_NONCE%%', wp_create_nonce('wp_rest'), $html);
 
+// The whole point of this page is to always show whatever was most recently uploaded -- a cached
+// copy (e.g. Safari on iPhone, found in practice) can silently keep showing an old logbook until
+// manually refreshed, which defeats that. No-store also covers the WP_REST_NONCE baked into this
+// response, which would otherwise itself go stale if the page were cached.
+header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+header('Pragma: no-cache');
 header('Content-Type: text/html; charset=utf-8');
 echo $html;
