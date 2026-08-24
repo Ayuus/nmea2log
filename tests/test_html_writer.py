@@ -51,6 +51,20 @@ def test_write_html_logbook_includes_boat_name_in_title_and_heading(tmp_path: Pa
     assert "Zeevalk" in html and "Vaarlogboek" in html
 
 
+def test_write_html_logbook_has_a_home_screen_icon(tmp_path: Path):
+    """Without an apple-touch-icon, iOS's own "Add to Home Screen" falls back to an ugly
+    screenshot of the page as the icon (found in practice)."""
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([_trip()], out_path, boat_name="Zeevalk")
+
+    html = out_path.read_text(encoding="utf-8")
+    assert '<link rel="icon" href="data:image/svg+xml;base64,' in html
+    assert '<link rel="apple-touch-icon" href="data:image/svg+xml;base64,' in html
+    assert '<meta name="apple-mobile-web-app-capable" content="yes">' in html
+    assert '<meta name="apple-mobile-web-app-title" content="Zeevalk - Vaarlogboek">' in html
+
+
 def test_write_html_logbook_shows_mmsi_and_call_sign(tmp_path: Path):
     out_path = tmp_path / "logbook.html"
 

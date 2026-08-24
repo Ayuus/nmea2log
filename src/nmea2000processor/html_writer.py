@@ -23,6 +23,7 @@ explains that the file needs to be opened in a real browser.
 
 from __future__ import annotations
 
+import base64
 import json
 from collections import defaultdict
 from dataclasses import dataclass
@@ -46,6 +47,22 @@ from .tripbuilder import NavSample, TripLeg
 
 _LEAFLET_CSS = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
 _LEAFLET_JS = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+# Google's own Material Symbols "directions_boat" icon (Apache-2.0) -- used as both the favicon
+# and the "Add to Home Screen" icon on iPhone, which otherwise falls back to an ugly screenshot of
+# the page itself. Embedded as a data URI (not an external CDN link, unlike Leaflet above) so the
+# icon shows up even without a network connection -- no reason a static square icon should depend
+# on the internet being reachable.
+#
+# The original icon's cabin roof has a small rectangular notch (a step up and back down) that
+# reads as an odd thickening in the middle of an otherwise straight top line at small icon sizes;
+# flattened into a plain "h468" straight across instead (found in practice, asked for explicitly).
+_ICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<rect width="200" height="200" fill="#1a4a7a"/>
+<g transform="translate(30,170) scale(0.14583)">
+<path fill="#eef4fb" d="M178-80h-58v-60h58q40 0 79-11t76-34q35 22 72 32.5t75 10.5q38 0 75-10.5t72-32.5q38 23 77.5 34t78.5 11h57v60h-57q-39 0-78-9t-77-28q-38 19-75 28t-73 9q-36 0-73-9.5T333-117q-38 18-77.5 27.5T178-80Zm226.5-169.5Q365-270 330-307q-33 33-71 52.5T182-230l-71-245q-4-12 2-22.5t18-14.5l55-16v-190q0-25 17.5-42.5T246-778h468q25 0 42.5 17.5T774-718v190l55 16q12 4 18 14.5t2 22.5l-71 245q-39-5-77-24.5T630-307q-35 37-74.5 57.5T480-229q-36 0-75.5-20.5ZM481-289q32 0 58.5-18t47.5-43l41-48 36 38q16 17 34 31t38 25l48-159-304-92-304 92 48 159q20-11 38-25t34-31l36-38 41 48q22 25 49 43t59 18ZM246-547l234-71 234 72v-172H246v171Zm234 125Z"/>
+</g>
+</svg>"""
+_ICON_URL = "data:image/svg+xml;base64," + base64.b64encode(_ICON_SVG.encode("utf-8")).decode("ascii")
 _MAX_MAP_POINTS = 500
 _KNOT_IN_MS = 0.514444
 _DEFAULT_LOG_INTERVAL_MINUTES = 30.0
@@ -791,6 +808,10 @@ def write_html_logbook(
 <head>
 <meta charset="utf-8">
 <title>{escape(title)}</title>
+<link rel="icon" href="{_ICON_URL}">
+<link rel="apple-touch-icon" href="{_ICON_URL}">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="{escape(title)}">
 <link rel="stylesheet" href="{_LEAFLET_CSS}">
 <script src="{_LEAFLET_JS}"></script>
 <style>
