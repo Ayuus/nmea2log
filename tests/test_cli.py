@@ -195,6 +195,24 @@ def test_main_reports_a_clear_error_when_ebl_dir_has_no_ebl_files(tmp_path, monk
     assert "no .ebl files found" in capsys.readouterr().err
 
 
+def test_main_prunes_the_log_file_using_log_retention_days(tmp_path, monkeypatch):
+    """Regression test: nmea2log.log grew forever with nothing ever trimming it. --log-retention-
+    days must actually reach set_log_file (see log.py), not just exist as an unused flag."""
+    monkeypatch.chdir(tmp_path)
+    log_path = tmp_path / "nmea2log.log"
+    old_line = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d %H:%M:%S") + " too old, should be dropped\n"
+    log_path.write_text(old_line, encoding="utf-8")
+    empty_dir = tmp_path / "empty"
+    empty_dir.mkdir()
+
+    try:
+        main(["--ebl-dir", str(empty_dir), "--log-retention-days", "1"])
+    except SystemExit:
+        pass  # the empty --ebl-dir errors out right after set_log_file runs -- irrelevant here
+
+    assert "too old" not in log_path.read_text(encoding="utf-8")
+
+
 def test_main_reports_a_clear_error_when_upload_is_missing_settings(tmp_path, monkeypatch, capsys):
     # Isolated from any real nmea2log.ini (e.g. this project's own, which has real [upload]
     # settings filled in) -- otherwise those would supply the "missing" settings as config

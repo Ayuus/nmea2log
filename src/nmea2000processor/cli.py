@@ -13,7 +13,7 @@ from .ebl_reader import iter_frames as iter_frames_ebl
 from .geocode import Geocoder, NoGeocoder
 from .gpx_writer import write_gpx
 from .html_writer import _DEFAULT_LOG_INTERVAL_MINUTES, _DEFAULT_REMARKS_API_URL, write_html_logbook
-from .log import log, set_log_file
+from .log import DEFAULT_LOG_RETENTION_DAYS, log, set_log_file
 from .logbook_writer import write_csv
 from .model import (
     AttitudeSample,
@@ -318,6 +318,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Also write the GPX route file (default: only the HTML logbook is written)",
     )
     parser.add_argument(
+        "--log-retention-days",
+        type=float,
+        default=DEFAULT_LOG_RETENTION_DAYS,
+        help=f"How long to keep lines in nmea2log.log (next to the output file) before they're "
+        f"automatically dropped -- otherwise that file grows forever (default "
+        f"{DEFAULT_LOG_RETENTION_DAYS:g} days)",
+    )
+    parser.add_argument(
         "--start-date",
         type=str,
         default=None,
@@ -572,6 +580,7 @@ def _apply_config_defaults(parser: argparse.ArgumentParser) -> None:
         ("lock_radius_m", float),
         ("lock_max_duration_minutes", float),
         ("sample_cache_file", Path),
+        ("log_retention_days", float),
     ):
         if key in section:
             defaults[key] = caster(section[key])
@@ -612,7 +621,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # moment the terminal window closes, which for a run started by double-clicking a .bat file
     # leaves nothing to check afterwards -- particularly for a --backup-ebl run that can take a
     # while and is easy to interrupt by closing the window too early (found in practice).
-    set_log_file(args.output.parent / "nmea2log.log")
+    set_log_file(args.output.parent / "nmea2log.log", retention_days=args.log_retention_days)
 
     if args.no_upload:
         # Overrides even a config-file default of enabled=true/backup_ebl=true -- the whole point

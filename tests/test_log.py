@@ -1,4 +1,5 @@
 import io
+from datetime import datetime, timedelta
 
 from nmea2000processor import log as log_module
 from nmea2000processor.log import log, set_log_file
@@ -68,3 +69,34 @@ def test_set_log_file_appends_across_runs_instead_of_overwriting(tmp_path, monke
     contents = log_path.read_text(encoding="utf-8")
     assert "previous run" in contents
     assert "this run" in contents
+
+
+def test_set_log_file_prunes_lines_older_than_retention_days(tmp_path, monkeypatch):
+    """Regression test: appending forever (see the test above) with nothing ever trimming the
+    file meant it grew without bound (found in practice, asked for explicitly)."""
+    monkeypatch.setattr(log_module, "_log_file", None)
+    log_path = tmp_path / "nmea2log.log"
+    now = datetime.now()
+    old_line = (now - timedelta(days=100)).strftime("%Y-%m-%d %H:%M:%S") + " too old, should be dropped\n"
+    recent_line = (now - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S") + " recent, should stay\n"
+    log_path.write_text(old_line + recent_line, encoding="utf-8")
+
+    set_log_file(log_path, retention_days=90)
+    log_module._log_file.close()
+
+    contents = log_path.read_text(encoding="utf-8")
+    assert "too old" not in contents
+    assert "recent, should stay" in contents
+
+
+def test_set_log_file_keeps_unparseable_lines_when_pruning(tmp_path, monkeypatch):
+    """A line that doesn't start with a timestamp (e.g. hand-edited, or from before this file even
+    had timestamps) is kept rather than risk silently losing something unexpected."""
+    monkeypatch.setattr(log_module, "_log_file", None)
+    log_path = tmp_path / "nmea2log.log"
+    log_path.write_text("not a timestamped line\n", encoding="utf-8")
+
+    set_log_file(log_path, retention_days=1)
+    log_module._log_file.close()
+
+    assert "not a timestamped line" in log_path.read_text(encoding="utf-8")
