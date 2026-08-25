@@ -13,7 +13,7 @@ from nmea2000processor.model import (
     TripFuelSample,
     WaterTempSample,
 )
-from nmea2000processor.tripbuilder import build_trips
+from nmea2000processor.tripbuilder import _reject_gps_outliers, build_trips
 
 
 class _StubGeocoder:
@@ -83,6 +83,37 @@ def test_build_trips_single_leg():
     assert trip.engine_health[0].warnings == frozenset()
     # the geocoder must not be called more often than the number of port visits
     assert len(geocoder.calls) == 2
+
+
+def test_reject_gps_outliers_drops_a_single_corrupted_fix():
+    """Regression test for a real incident, values taken from the actual corrupted record found
+    in a real .ebl file: the correct 8-byte position payload (46.916294, -2.3801566) with its
+    first 2 bytes moved to the end decodes to (-78.629377, -60.8371052), ~7800 nm away -- for one
+    sample, a fraction of a second after the correct reading. The fix right after the bad one must
+    survive too -- it's the bad fix that's the outlier, not the ones around it."""
+    good_before = PositionFix(datetime(2026, 8, 25, 8, 13, 55), 46.916294, -2.3801566)
+    bad = PositionFix(datetime(2026, 8, 25, 8, 13, 56), -78.629377, -60.8371052)
+    good_after = PositionFix(datetime(2026, 8, 25, 8, 13, 56), 46.9162885, -2.3801523)
+
+    kept = _reject_gps_outliers([good_before, bad, good_after])
+
+    assert kept == [good_before, good_after]
+
+
+def test_build_trips_ignores_a_single_gps_glitch_in_distance():
+    fixes, sogs, engine_samples = _build_scenario()
+    # a single corrupted fix landing mid-trip, far from anywhere near the real track
+    fixes.insert(20, PositionFix(_dt(20) + timedelta(seconds=1), -78.6, -60.8))
+    geocoder = _StubGeocoder()
+
+    trips = build_trips(
+        fixes, sogs, engine_samples, geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10
+    )
+
+    assert len(trips) == 1
+    # the real trip covers a fraction of a degree (~6 nm); thousands of nm would mean the glitch
+    # leaked through
+    assert trips[0].distance_nm < 20
 
 
 def test_max_speed_records_when_and_at_what_rpm_it_happened():

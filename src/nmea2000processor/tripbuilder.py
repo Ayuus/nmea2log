@@ -127,6 +127,44 @@ def _haversine_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * _EARTH_RADIUS_NM * math.asin(math.sqrt(a))
 
 
+_MAX_PLAUSIBLE_SPEED_KN = 60.0  # generous margin above the fastest speed this app has ever
+# recorded (~22 kn) -- exists purely to catch corrupted position fixes, not to model anything
+# about the boat itself.
+
+
+def _reject_gps_outliers(fixes: List[PositionFix]) -> List[PositionFix]:
+    """Drops a position fix that implies an impossible speed from the last *accepted* fix.
+
+    Confirmed in practice, byte-for-byte: a real .ebl file contained a well-formed record (valid
+    length, valid CAN ID for PGN 129025 on a real GPS source) whose 8-byte position payload was
+    the correct value with its first 2 bytes moved to the end -- i.e. genuinely corrupted data
+    already sitting in the raw file, not a bug in how this file is parsed (checked against the
+    reference Go implementation this parser is based on, and its issues/PRs -- nothing similar
+    reported there either). One such fix reported a position ~7800 nm away for a single sample,
+    which balloons a trip's reported distance by thousands of nm even though the boat never
+    actually went there. Only ever seen on one of the boat's two GPS sources so far, and not
+    fixable by simply preferring the other source everywhere: that source has entire days with no
+    data at all where the affected one does (found in practice) -- dropping a corrupted fix costs
+    far less than dropping whole trips.
+
+    Comparing against the last *accepted* fix, not simply the previous one in the list, is what
+    lets a single bad fix get dropped without also rejecting the good fix right after it."""
+    if not fixes:
+        return fixes
+    sorted_fixes = sorted(fixes, key=lambda f: f.time)
+    accepted = [sorted_fixes[0]]
+    for fix in sorted_fixes[1:]:
+        prev = accepted[-1]
+        dt_hours = (fix.time - prev.time).total_seconds() / 3600
+        if dt_hours <= 0:
+            continue  # duplicate/out-of-order timestamp -- keep whichever came first
+        implied_speed_kn = _haversine_nm(prev.lat, prev.lon, fix.lat, fix.lon) / dt_hours
+        if implied_speed_kn > _MAX_PLAUSIBLE_SPEED_KN:
+            continue
+        accepted.append(fix)
+    return accepted
+
+
 def _merge_nav_samples(
     fixes: List[PositionFix],
     sogs: List[SogSample],
@@ -135,6 +173,7 @@ def _merge_nav_samples(
 ) -> List[NavSample]:
     """Combines position, speed, depth, and water temperature readings chronologically; all are
     forward-filled."""
+    fixes = _reject_gps_outliers(fixes)
     sogs_sorted = sorted(sogs, key=lambda s: s.time)
     depths_sorted = sorted(depths, key=lambda s: s.time) if depths else []
     water_temps_sorted = sorted(water_temps, key=lambda s: s.time) if water_temps else []
