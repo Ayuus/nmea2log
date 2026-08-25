@@ -666,13 +666,13 @@ def write_html_logbook(
     each trip row, and used to key the Remarks feature (see ``remarks_api_url``) -- a uid that
     survives a trip-recognition fix reshuffling exact timestamps is the whole reason it exists.
 
-    ``latest_data_at`` (UTC): shown as "Laatst bijgewerkt". The absolute newest timestamp seen
-    anywhere in the decoded data -- e.g. cli.py's own running ``ebl_time_state["current"]``, the
-    last PGN 126992 System Time seen across every .ebl file, not just files that closed off into
-    a full trip -- so it still advances while at anchor/idle, not only between sailing trips
-    (found in practice: a completed trip's own arrival time lagged behind days of anchored
-    logging that never got shown at all). Falls back to the most recent trip's own arrival time
-    if not given (e.g. a caller with only trips, no access to the raw parse-time state).
+    ``latest_data_at`` (UTC): shown as "Laatst bijgewerkt" -- meant to answer "is this page
+    showing a stale file", so cli.py passes the moment this run actually happened, not the latest
+    timestamp found in the boat's own data (an earlier version used the latter, which made this
+    look unchanged after a fresh run whenever the boat itself hadn't produced new data since the
+    previous run -- found in practice, asked for explicitly). Falls back to the most recent trip's
+    own arrival time if not given (e.g. a caller with only trips, no access to cli.py's own
+    run-time clock).
 
     ``fetch_failed``: shows that same timestamp in red, on top of it already reflecting the
     data's own age -- a second, more visible cue that this run specifically didn't get new data,

@@ -739,11 +739,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                     file=sys.stderr,
                 )
 
-        # The last known absolute time (PGN 126992, System Time) across every processed .ebl
-        # file, not just ones that closed off into a full trip -- so "Laatst bijgewerkt" still
-        # advances while at anchor/idle, instead of lagging behind at the last completed trip's
-        # own arrival time (found in practice).
-        latest_data_at = ebl_time_state.get("current")
+        # When this run actually happened, not the latest timestamp found in the data -- the
+        # earlier version used the latter (PGN 126992's last known time), but that made "Laatst
+        # bijgewerkt" ambiguous: it looked unchanged after a fresh run whenever the boat itself
+        # hadn't produced new data since the previous run, when what it's actually meant to answer
+        # is "is this page showing a stale file" (found in practice, asked for explicitly).
+        latest_data_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
     all_fixes, all_sogs, primary_gps_source = _select_primary_gps_source(fixes_by_source, sogs_by_source)
     all_depth = _dominant_source_only(depth_by_source)
