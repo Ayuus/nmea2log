@@ -7,7 +7,7 @@ een volgende wijziging niet opnieuw dezelfde doodlopende paden te laten bewandel
 Alle claims hieronder zijn geverifieerd tegen echte Nominatim/Overpass-data voor de 15 echte
 reis-stops uit een echt logboek (zie "Referentieset" onderaan) — niet tegen aannames.
 
-## Huidige regels (stand van commit `6aa7f02`)
+## Huidige regels (stand van commit `1b567e9`)
 
 1. **Eilandje via Overpass wint altijd**, ongeacht afstand. Alleen een losse naam-**node** telt
    mee; een kustlijn-**way** wordt genegeerd, ook niet als fallback.
@@ -47,6 +47,42 @@ ook niet als er geen node gevonden wordt.
   "eilandje wint alleen als dichterbij kan toch niet in dit geval" / "altijd node gebruiken". Het
   hele punt van voor anker liggen bij een eilandje is vaak juist het eilandje zelf, ook als het
   dorp toevallig net iets dichterbij ligt.
+
+## Drie regressies bij de live uitrol (gevonden tijdens een echte productierun)
+
+De Overpass-queryvereenvoudiging uit Beslissing 1 hierboven introduceerde, naast de bedoelde
+wijziging, drie losse bugs — pas zichtbaar tijdens een echte run met duizenden `.ebl`-bestanden,
+niet in de tests (die werken met gemockte antwoorden) en ook niet in de eerdere verificaties
+vóór het uitrollen (die een lokaal gecachet Overpass-antwoord hergebruikten, opgebouwd met een
+eigen, apart geschreven queryfunctie — niet de queryfunctie uit `geocode.py` zelf).
+
+1. **Ontbrekend `[out:json]`** (commit `3c0b757`): zonder die instructie antwoordt Overpass met
+   zijn eigen standaardformaat (XML, HTTP 200) in plaats van een foutmelding — elke aanroep
+   faalde daardoor gegarandeerd op `json.loads`, niet incidenteel onder belasting. Zichtbaar in
+   het logbestand als `Expecting value: line 1 column 1 (char 0)`, telkens opnieuw.
+2. **Een server-side timeout die eruitziet als "niets gevonden"** (commit `bb2c241`): Overpass
+   antwoordt óók met HTTP 200 en geldige JSON als de query zelf op de server is afgebroken door
+   tijdslimiet — met een `"remark"`-veld en een lege/onvolledige `"elements"`-lijst. Dat werd
+   voorheen niet herkend en dus permanent gecachet als een bevestigd "geen eilandje hier".
+3. **`out tags;` levert geen coördinaten** (commit `1b567e9`): zonder het `center`-modifier geeft
+   Overpass voor een node alleen `id` + `tags` terug, geen `lat`/`lon` — de node werd dus wél
+   gevonden, maar zonder positie om een afstand mee te berekenen, en viel daardoor stil weg
+   alsof er niets gevonden was. Ook dit resultaat werd (ten onrechte) permanent gecachet.
+
+**Les voor volgende keer**: alle drie zijn precies het soort fout die een gemockte test of een
+hergebruikt lokaal cachebestand niet vangt, omdat beide ervan uitgaan dat de queryconstructie zelf
+al correct is. De enige manier waarop dit aan het licht kwam was een **echte, volledige run tegen
+de live Overpass-dienst** met de daadwerkelijke queryfunctie uit `geocode.py` zelf — niet een
+losstaand testscript met een eigen, apart geschreven query. Bij een toekomstige wijziging aan de
+Overpass-query: minstens één keer een losse `_nearby_islet_name(...)`-aanroep rechtstreeks tegen
+de live dienst doen, niet alleen `pytest` en niet alleen een simulatie op eerder gecachete data.
+
+Bijkomend, apart probleem tijdens dezelfde sessie: een oude, nooit verklaarde upload van
+testfixture-data (1 reis, ronde coördinaten uit `tests/test_trip_ids.py`) stond enige tijd live —
+niet veroorzaakt door code in dit project, en verdween vanzelf zodra een echte run opnieuw
+uploadde. Oorzaak nooit gevonden; geen actie ondernomen buiten het herbevestigen dat geen van de
+bovenstaande fixes of testruns dit kan veroorzaken (alle upload-tests isoleren zich expliciet van
+de echte `nmea2log.ini`, zie `tests/test_cli.py`).
 
 ## Beslissing 2: marina-node vs. dorp
 
