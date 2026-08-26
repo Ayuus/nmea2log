@@ -108,11 +108,17 @@ def _nearby_islet_name(lat: float, lon: float, user_agent: str) -> Tuple[Optiona
     # single request instead of just occasionally under load (found in practice: silently
     # reintroduced while simplifying this query, turned every real run's islet check into a
     # guaranteed failure until the retries gave up).
+    #
+    # "out tags;" alone omits geometry entirely for a node -- no lat/lon at all, not even its own
+    # position -- so it looked like the node was found but every match got silently dropped for
+    # "missing" coordinates (found live: a real, correctly-matched "Île de la Jument" node came
+    # back with only its id and tags, nothing else, so _nearby_islet_name treated it as if no
+    # islet existed here at all and cached that as the confirmed answer). "center" adds it back.
     query = (
         f'[out:json][timeout:10];'
         f'node(around:{_LANDMARK_SEARCH_RADIUS_M:.0f},{lat:.6f},{lon:.6f})'
         '["place"="islet"]["name"];'
-        "out tags;"
+        "out tags center;"
     )
     data = urllib.parse.urlencode({"data": query}).encode()
     payload = None
