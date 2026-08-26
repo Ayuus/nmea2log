@@ -7,8 +7,9 @@ from nmea2000processor.geocode import Geocoder, NoGeocoder
 
 
 class _FakeResponse:
-    def __init__(self, payload: dict):
+    def __init__(self, payload: dict, status: int = 200):
         self._data = json.dumps(payload).encode("utf-8")
+        self.status = status
 
     def __enter__(self):
         return self
@@ -345,7 +346,7 @@ def test_place_name_retries_the_landmark_check_after_a_transient_failure(monkeyp
     assert overpass_call_count == 2
 
 
-def test_landmark_check_retries_ten_times_before_giving_up(monkeypatch, tmp_path):
+def test_landmark_check_retries_nine_times_before_giving_up(monkeypatch, tmp_path):
     overpass_call_count = 0
 
     def fake_urlopen(request, timeout=10):
@@ -361,7 +362,7 @@ def test_landmark_check_retries_ten_times_before_giving_up(monkeypatch, tmp_path
 
     geocoder.place_name(47.5707, -2.8853)
 
-    assert overpass_call_count == 11  # the first attempt plus 10 retries
+    assert overpass_call_count == 10  # the first attempt plus 9 retries
 
 
 def test_landmark_check_logs_each_failed_attempt(monkeypatch, tmp_path, capsys):
@@ -377,7 +378,7 @@ def test_landmark_check_logs_each_failed_attempt(monkeypatch, tmp_path, capsys):
     geocoder.place_name(47.5707, -2.8853)
 
     err = capsys.readouterr().err
-    assert err.count("Overpass islet check failed") == 11
+    assert err.count("Overpass islet check failed") == 10
 
 
 def test_result_is_not_cached_when_the_landmark_check_fails_entirely(monkeypatch, tmp_path):

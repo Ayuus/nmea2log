@@ -66,7 +66,7 @@ def _distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * _EARTH_RADIUS_M * math.asin(math.sqrt(a))
 
 
-_LANDMARK_MAX_RETRIES = 10
+_LANDMARK_MAX_RETRIES = 9
 
 # Address levels that count as "a village name" -- used by _pick_place_name (a real village/
 # town/city beats a leisure match that's just a bare point node, see there) and shared here so
@@ -103,7 +103,13 @@ def _nearby_islet_name(lat: float, lon: float, user_agent: str) -> Tuple[Optiona
     tell the two apart: a confirmed "nothing here" is safe to cache, a failed check is not (the
     caller should retry it on a later run instead of being stuck with today's plain Nominatim
     fallback forever -- see Geocoder._lookup)."""
+    # [out:json] is required -- without it Overpass answers with its own default format (XML,
+    # HTTP 200) instead of an error, so a missing/dropped [out:json] fails json.loads on every
+    # single request instead of just occasionally under load (found in practice: silently
+    # reintroduced while simplifying this query, turned every real run's islet check into a
+    # guaranteed failure until the retries gave up).
     query = (
+        f'[out:json][timeout:10];'
         f'node(around:{_LANDMARK_SEARCH_RADIUS_M:.0f},{lat:.6f},{lon:.6f})'
         '["place"="islet"]["name"];'
         "out tags;"
@@ -118,17 +124,24 @@ def _nearby_islet_name(lat: float, lon: float, user_agent: str) -> Tuple[Optiona
         if attempt:
             time.sleep(2.0)
         request = urllib.request.Request(_OVERPASS_URL, data=data, headers={"User-Agent": user_agent})
+        status = None
         try:
             with urllib.request.urlopen(request, timeout=15) as response:
+                status = response.status
                 payload = json.loads(response.read().decode("utf-8"))
             break
         # OSError alongside URLError: some connection failures (e.g. the server dropping the
         # connection mid-response) surface as a raw ConnectionResetError/http.client exception,
         # not wrapped in URLError (found in practice: http.client.RemoteDisconnected crashed the
-        # whole run instead of triggering the fallback below).
+        # whole run instead of triggering the fallback below). The HTTP status is included
+        # whenever one is known (an HTTPError's own code, or the status of a response that came
+        # back but failed to parse as JSON) -- found in practice: a 200-with-XML failure and a
+        # real server error both raised a bare-looking exception, indistinguishable in the log
+        # without the status alongside it.
         except (urllib.error.URLError, OSError, ValueError) as exc:
+            status = getattr(exc, "code", status)
             log(
-                f"[geocode] Overpass islet check failed ({exc}) "
+                f"[geocode] Overpass islet check failed ({exc}) [http {status}] "
                 f"-- attempt {attempt + 1}/{_LANDMARK_MAX_RETRIES + 1}",
                 file=sys.stderr,
             )
