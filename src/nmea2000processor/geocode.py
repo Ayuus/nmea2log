@@ -68,35 +68,35 @@ def _distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 _LANDMARK_MAX_RETRIES = 10
 
-# Address levels that count as "a village name" for _nearby_landmark_name's marina precedence --
-# deliberately excludes "leisure"/"marina"/"harbour" from _PREFERRED_ADDRESS_KEYS, since those
-# aren't village names, they're Nominatim's own (separate) marina match.
+# Address levels that count as "a village name" -- used by _pick_place_name (a real village/
+# town/city beats a leisure match that's just a bare point node, see there) and shared here so
+# anything else that needs the same definition of "a real village/town/city" can reuse it.
 _VILLAGE_LEVEL_ADDRESS_KEYS = ("town", "village", "city", "municipality", "suburb", "quarter")
 
 
-def _nearby_landmark_name(
-    lat: float, lon: float, user_agent: str, *, has_village: bool
-) -> Tuple[Optional[str], bool]:
-    """Looks for the nearest named marina or islet within _LANDMARK_SEARCH_RADIUS_M via Overpass,
-    since Nominatim's own reverse geocode only matches a feature the query point falls *inside*
-    (an area, e.g. a marina) or literally nearest to (a point, e.g. an islet's own marker) --
-    neither necessarily wins over an unrelated, closer-by-Nominatim's-own-metric feature. Found
-    in practice twice: moored just outside a marina's own mapped basin (Nominatim matched an
-    unrelated nearby slipway instead, using *its* address hierarchy, a village over a km away);
-    anchored a couple hundred meters off a named islet (Nominatim matched an unrelated pier
+def _nearby_islet_name(lat: float, lon: float, user_agent: str) -> Tuple[Optional[str], bool]:
+    """Looks for the nearest named islet within _LANDMARK_SEARCH_RADIUS_M via Overpass, since
+    Nominatim's own reverse geocode doesn't recognize islets at all -- it matches whatever
+    unrelated feature happens to be nearest by its own metric instead (found in practice:
+    anchored a couple hundred meters off a named islet, Nominatim matched an unrelated pier
     instead, using a real but different nearby hamlet). A separate service (not Nominatim) since
     Nominatim's own search endpoint can't filter by OSM tag, only match free-text against a name
     we'd have to already know.
 
-    ``has_village``: whether Nominatim's own plain address already names a real village/town/city
-    (see _VILLAGE_LEVEL_ADDRESS_KEYS) -- if so, a nearby *marina*'s own name is skipped in favour
-    of that village name (found in practice: at an actual town with its own real marina moored
-    right there, e.g. Port-Louis, the marina's own name -- "Port de la Pointe" -- replaced the
-    already-correct, more recognizable town name; unlike Piriac, where the plain match was a
-    village a km away and genuinely wrong). An islet is never skipped this way even when a
-    village is also nearby -- an anchorage's whole point is usually the island, and being
-    anchored a couple hundred meters off one doesn't make the nearest inland village more
-    relevant the way it would for a marina actually moored at a town.
+    This used to also look for nearby marinas (to override a wrong or missing plain Nominatim
+    match), but that's been dropped: it duplicated work Nominatim's own address usually already
+    does today, and the remaining gap -- a marina genuinely missing from Nominatim's own address
+    entirely -- is meant to be fixed by improving OpenStreetMap's own data for that spot, not
+    worked around here.
+
+    Only a plain name *node* is used, never the coastline *way* that usually also exists for the
+    same islet -- found in practice: anchored well within a pier's own address match (38 m away,
+    genuinely at that harbour), yet a large islet's coastline way still had *some* point of its
+    shape within the search radius, so its own "center" (the way's geometric centroid, not the
+    nearest point of its actual coastline) ended up nearly 680 m away and wrongly won outright
+    over the harbour the boat was actually moored at. A node's coordinates are exact and single,
+    so it doesn't have this problem -- a way's reported distance can be arbitrarily misleading
+    for a large/elongated shape, so it's not trusted for this at all, even as a fallback.
 
     Returns ``(name, ok)`` -- ``ok`` is False only if the check itself never completed (every
     retry failed), as opposed to completing and simply finding nothing nearby, so the caller can
@@ -104,13 +104,9 @@ def _nearby_landmark_name(
     caller should retry it on a later run instead of being stuck with today's plain Nominatim
     fallback forever -- see Geocoder._lookup)."""
     query = (
-        "[out:json][timeout:10];"
-        "("
-        f'way(around:{_LANDMARK_SEARCH_RADIUS_M:.0f},{lat:.6f},{lon:.6f})["leisure"="marina"]["name"];'
-        f'node(around:{_LANDMARK_SEARCH_RADIUS_M:.0f},{lat:.6f},{lon:.6f})["place"="islet"]["name"];'
-        f'way(around:{_LANDMARK_SEARCH_RADIUS_M:.0f},{lat:.6f},{lon:.6f})["place"="islet"]["name"];'
-        ");"
-        "out center tags;"
+        f'node(around:{_LANDMARK_SEARCH_RADIUS_M:.0f},{lat:.6f},{lon:.6f})'
+        '["place"="islet"]["name"];'
+        "out tags;"
     )
     data = urllib.parse.urlencode({"data": query}).encode()
     payload = None
@@ -132,33 +128,28 @@ def _nearby_landmark_name(
         # whole run instead of triggering the fallback below).
         except (urllib.error.URLError, OSError, ValueError) as exc:
             log(
-                f"[geocode] Overpass landmark check failed ({exc}) "
+                f"[geocode] Overpass islet check failed ({exc}) "
                 f"-- attempt {attempt + 1}/{_LANDMARK_MAX_RETRIES + 1}",
                 file=sys.stderr,
             )
     if payload is None:
         return None, False  # best-effort: caller falls back to the plain Nominatim result
 
-    best_marina: Optional[Tuple[str, float]] = None
-    best_islet: Optional[Tuple[str, float]] = None
+    best_node: Optional[Tuple[str, float]] = None
     for element in payload.get("elements", []):
         tags = element.get("tags", {})
-        name = tags.get("name")
-        center = element.get("center")
-        if not name or not center:
+        if tags.get("place") != "islet":
             continue
-        distance = _distance_m(lat, lon, center["lat"], center["lon"])
-        if tags.get("place") == "islet":
-            if best_islet is None or distance < best_islet[1]:
-                best_islet = (name, distance)
-        elif tags.get("leisure") == "marina":
-            if best_marina is None or distance < best_marina[1]:
-                best_marina = (name, distance)
+        name = tags.get("name")
+        node_lat, node_lon = element.get("lat"), element.get("lon")
+        if not name or node_lat is None or node_lon is None:
+            continue
+        distance = _distance_m(lat, lon, node_lat, node_lon)
+        if best_node is None or distance < best_node[1]:
+            best_node = (name, distance)
 
-    if best_islet is not None:
-        return best_islet[0], True
-    if best_marina is not None and not has_village:
-        return best_marina[0], True
+    if best_node is not None:
+        return best_node[0], True
     return None, True
 
 
@@ -242,21 +233,17 @@ class Geocoder:
 
         self._last_request = time.monotonic()
         # A nearby islet's own name always beats whatever Nominatim's plain reverse lookup
-        # happened to match instead; a nearby marina's own name only does when Nominatim's own
-        # address doesn't already name a real village/town/city -- see _nearby_landmark_name.
-        has_village = any(key in payload.get("address", {}) for key in _VILLAGE_LEVEL_ADDRESS_KEYS)
-        landmark_name, landmark_check_ok = _nearby_landmark_name(
-            lat, lon, self.user_agent, has_village=has_village
-        )
+        # happened to match instead -- see _nearby_islet_name.
+        islet_name, islet_check_ok = _nearby_islet_name(lat, lon, self.user_agent)
         self._last_request = time.monotonic()
-        if landmark_name:
-            return landmark_name, True
+        if islet_name:
+            return islet_name, True
         place = _describe_place(payload, lat, lon)
-        # Not cacheable if the landmark check itself failed (as opposed to completing and simply
+        # Not cacheable if the islet check itself failed (as opposed to completing and simply
         # finding nothing nearby): otherwise this run's plain Nominatim fallback -- possibly the
         # wrong name, that's the whole reason the check exists -- would get permanently stuck in
         # the cache even once Overpass is reachable again on a later run.
-        return place, landmark_check_ok
+        return place, islet_check_ok
 
     def _save_cache(self) -> None:
         if self.cache_file is None:
@@ -274,10 +261,26 @@ class NoGeocoder:
 
 
 def _pick_place_name(payload: dict, lat: float, lon: float) -> str:
-    if payload.get("category") == "leisure" and payload.get("name"):
+    address = payload.get("address", {})
+    is_leisure_match = payload.get("category") == "leisure" and payload.get("name")
+
+    # A leisure match mapped as a bare point node (no polygon/area of its own) is often a small,
+    # specific sub-feature -- e.g. one named quay -- rather than the harbour a boat is really
+    # moored at, so a real village/town/city name is trusted over it instead (found in practice:
+    # "Darse de Castéro", a single OSM node, replacing the correct and far more recognizable
+    # "Port Haliguen" village name). A way/relation match (an actually mapped area, e.g. a real
+    # marina basin) is trusted as before -- unlike a bare node, its shape is real evidence the
+    # boat is genuinely inside it, not just near a named point (found in practice: Port Olona,
+    # Port de Plaisance de Pornichet, Port du Crouesty are all real mapped areas and keep their
+    # own name here, unaffected).
+    if is_leisure_match and payload.get("osm_type") == "node":
+        for key in _VILLAGE_LEVEL_ADDRESS_KEYS:
+            if key in address:
+                return address[key]
+
+    if is_leisure_match:
         return payload["name"]
 
-    address = payload.get("address", {})
     for key in _PREFERRED_ADDRESS_KEYS:
         if key in address:
             return address[key]

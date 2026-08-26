@@ -30,6 +30,85 @@ def test_place_name_prefers_village_over_quarter(monkeypatch, tmp_path):
     assert geocoder.place_name(47.7108, -3.3551) == "Port-Louis"
 
 
+def test_place_name_prefers_a_real_village_over_a_bare_node_leisure_match(monkeypatch, tmp_path):
+    """Regression test for a real case: Nominatim's own reverse lookup matched a marina tagged as
+    a bare point node -- "Darse de Castéro", a single named quay -- instead of the actual harbour
+    village right there, "Port Haliguen", which was also present in the address. Unlike a real
+    mapped marina area (a way/relation, see the next test), a bare node isn't trusted as "the"
+    place we're at when a real village name is also available."""
+    def fake_urlopen(request, timeout=10):
+        if "overpass-api.de" in request.full_url:
+            return _FakeResponse({"elements": []})
+        return _FakeResponse(
+            {
+                "lat": "47.488900",
+                "lon": "-3.101200",
+                "category": "leisure",
+                "type": "marina",
+                "osm_type": "node",
+                "name": "Darse de Castéro",
+                "address": {"leisure": "Darse de Castéro", "village": "Port Haliguen"},
+            }
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    geocoder = Geocoder(cache_file=tmp_path / "cache.json")
+
+    assert geocoder.place_name(47.4889, -3.1012) == "Port Haliguen"
+
+
+def test_place_name_keeps_a_marinas_own_name_when_its_a_real_mapped_area(monkeypatch, tmp_path):
+    """A leisure match that's a way/relation (an actually mapped area, not just a point) keeps its
+    own name even when a village is also present in the address -- unlike a bare node, its shape
+    is real evidence the boat is genuinely inside it. Real case: Port Olona, Port de Plaisance de
+    Pornichet and Port du Crouesty are all mapped this way and must stay unaffected."""
+    def fake_urlopen(request, timeout=10):
+        if "overpass-api.de" in request.full_url:
+            return _FakeResponse({"elements": []})
+        return _FakeResponse(
+            {
+                "lat": "47.544600",
+                "lon": "-2.894200",
+                "category": "leisure",
+                "type": "marina",
+                "osm_type": "way",
+                "name": "Port du Crouesty",
+                "address": {"leisure": "Port du Crouesty", "village": "Kerners"},
+            }
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    geocoder = Geocoder(cache_file=tmp_path / "cache.json")
+
+    assert geocoder.place_name(47.5446, -2.8942) == "Port du Crouesty"
+
+
+def test_place_name_keeps_a_bare_node_leisure_matchs_own_name_when_no_village_present(
+    monkeypatch, tmp_path
+):
+    """A bare-node leisure match still wins when there's no real village/town/city to prefer
+    instead -- this only ever defers to an address key that's actually there."""
+    def fake_urlopen(request, timeout=10):
+        if "overpass-api.de" in request.full_url:
+            return _FakeResponse({"elements": []})
+        return _FakeResponse(
+            {
+                "lat": "47.488900",
+                "lon": "-3.101200",
+                "category": "leisure",
+                "type": "marina",
+                "osm_type": "node",
+                "name": "Darse de Castéro",
+                "address": {"leisure": "Darse de Castéro"},
+            }
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    geocoder = Geocoder(cache_file=tmp_path / "cache.json")
+
+    assert geocoder.place_name(47.4889, -3.1012) == "Darse de Castéro"
+
+
 def test_failed_lookup_is_not_cached(monkeypatch, tmp_path):
     """Regression test for a real bug found in practice: a transient network failure (no
     internet on the boat, DNS lookup failing) got permanently written to the cache file, so even
@@ -92,74 +171,27 @@ def test_successful_lookup_is_cached_and_not_looked_up_again(monkeypatch, tmp_pa
     assert geocoder.place_name(47.8387, -4.1759) == "Loctudy"
     assert geocoder.place_name(47.8387, -4.1759) == "Loctudy"
 
-    assert call_count == 2  # Nominatim + the nearby-landmark check (see _nearby_landmark_name), once
+    assert call_count == 2  # Nominatim + the nearby-islet check (see _nearby_islet_name), once
     saved = json.loads(cache_file.read_text(encoding="utf-8"))
     assert saved == {"47.8387,-4.1759": "Loctudy"}
-
-
-def test_place_name_prefers_a_nearby_marina_over_nominatims_own_match(monkeypatch, tmp_path):
-    """Regression test for a real case: moored just outside a marina's own mapped basin, so
-    Nominatim's plain reverse lookup matched an unrelated nearby feature with no usable village
-    of its own (just a road) instead of the marina itself. The separate nearby-landmark check
-    (see _nearby_landmark_name) must win over that plain match."""
-    def fake_urlopen(request, timeout=10):
-        if "overpass-api.de" in request.full_url:
-            return _FakeResponse(
-                {
-                    "elements": [
-                        {
-                            "tags": {"leisure": "marina", "name": "Port de Piriac-sur-Mer"},
-                            "center": {"lat": 47.3824, "lon": -2.5440},
-                        }
-                    ]
-                }
-            )
-        return _FakeResponse({"address": {"road": "Place du Port"}})
-
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-    geocoder = Geocoder(cache_file=tmp_path / "cache.json")
-
-    assert geocoder.place_name(47.382706, -2.544722) == "Port de Piriac-sur-Mer"
-
-
-def test_place_name_prefers_a_real_village_over_a_nearby_marina(monkeypatch, tmp_path):
-    """Regression test for a real case: at an actual town with a real marina moored right there
-    (Port-Louis, next to the "Port de la Pointe" marina), Nominatim's plain reverse lookup already
-    correctly named the town -- the marina check must not replace an already-correct, more
-    recognizable village/town name with a more specific but less recognizable marina name.
-    Unlike Piriac above, where the plain match had no usable village of its own at all."""
-    def fake_urlopen(request, timeout=10):
-        if "overpass-api.de" in request.full_url:
-            return _FakeResponse(
-                {
-                    "elements": [
-                        {
-                            "tags": {"leisure": "marina", "name": "Port de la Pointe"},
-                            "center": {"lat": 47.7101, "lon": -3.3543},
-                        }
-                    ]
-                }
-            )
-        return _FakeResponse({"address": {"village": "Port-Louis"}})
-
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-    geocoder = Geocoder(cache_file=tmp_path / "cache.json")
-
-    assert geocoder.place_name(47.7108, -3.3551) == "Port-Louis"
 
 
 def test_place_name_prefers_a_nearby_islet_over_nominatims_own_match(monkeypatch, tmp_path):
     """Regression test for a real case: anchored a couple hundred meters off a named islet, so
     Nominatim's plain reverse lookup matched an unrelated nearby pier (and used *its* address
-    hierarchy, a real but different nearby hamlet) instead of the islet itself."""
+    hierarchy, a real but different nearby hamlet) instead of the islet itself. An islet always
+    wins here, even though it isn't necessarily the closer of the two (see
+    _nearby_islet_name's own docstring for why marinas no longer get this same treatment)."""
     def fake_urlopen(request, timeout=10):
         if "overpass-api.de" in request.full_url:
             return _FakeResponse(
                 {
                     "elements": [
                         {
+                            "type": "node",
                             "tags": {"place": "islet", "name": "Île de la Jument"},
-                            "center": {"lat": 47.5686912, "lon": -2.8875040},
+                            "lat": 47.5686912,
+                            "lon": -2.8875040,
                         }
                     ]
                 }
@@ -170,6 +202,70 @@ def test_place_name_prefers_a_nearby_islet_over_nominatims_own_match(monkeypatch
     geocoder = Geocoder(cache_file=tmp_path / "cache.json")
 
     assert geocoder.place_name(47.5706676, -2.8852789) == "Île de la Jument"
+
+
+def test_place_name_ignores_the_islets_coastline_way_even_when_only_it_is_found(monkeypatch, tmp_path):
+    """Regression test for a real case: anchored 38 m from a pier -- genuinely at that harbour --
+    yet a large islet's coastline way still had *some* point of its shape within the search
+    radius, so Overpass returned it too. Its own "center" (the way's geometric centroid, not the
+    nearest point of its actual coastline) was reported nearly 680 m away and would have wrongly
+    won outright over the harbour the boat was actually moored at, if trusted. A way is never
+    used for this, even as a fallback when no node is found -- only a plain name node has a
+    single, exact coordinate that can be trusted for "is this genuinely nearby"."""
+    def fake_urlopen(request, timeout=10):
+        if "overpass-api.de" in request.full_url:
+            return _FakeResponse(
+                {
+                    "elements": [
+                        {
+                            "type": "way",
+                            "tags": {"place": "islet", "name": "Île Garo"},
+                            "center": {"lat": 47.8440, "lon": -4.1820},
+                        }
+                    ]
+                }
+            )
+        return _FakeResponse({"address": {"village": "Loctudy"}})
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    geocoder = Geocoder(cache_file=tmp_path / "cache.json")
+
+    assert geocoder.place_name(47.8387, -4.1759) == "Loctudy"
+
+
+def test_place_name_prefers_the_islets_own_name_node_over_its_coastline_way(monkeypatch, tmp_path):
+    """Regression test for a real case: an islet is usually mapped as both a plain name node (its
+    own short name) and a separate coastline way outlining its shape -- which OSM convention
+    allows to carry a different, more elaborate name (an alt_name tacked on, e.g. a local cove
+    name). Found in practice: "Île de la Jument" (node) vs "Île de la Jument (Er Gazeg)" (way,
+    291 m away vs the node's 276 m) -- the way's name read as needlessly specific for a boat
+    simply anchored off the island, not literally in that one cove. The node wins even when it
+    isn't the closer of the two -- the way is ignored entirely, not just deprioritized."""
+    def fake_urlopen(request, timeout=10):
+        if "overpass-api.de" in request.full_url:
+            return _FakeResponse(
+                {
+                    "elements": [
+                        {
+                            "type": "way",
+                            "tags": {"place": "islet", "name": "Île de la Jument (Er Gazeg)"},
+                            "center": {"lat": 47.5686589, "lon": -2.887956},
+                        },
+                        {
+                            "type": "node",
+                            "tags": {"place": "islet", "name": "Île de la Jument"},
+                            "lat": 47.5688692,
+                            "lon": -2.8872895,
+                        },
+                    ]
+                }
+            )
+        return _FakeResponse({"address": {"hamlet": "Le Graniol", "village": "Kerners"}})
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    geocoder = Geocoder(cache_file=tmp_path / "cache.json")
+
+    assert geocoder.place_name(47.5705, -2.8852) == "Île de la Jument"
 
 
 def test_place_name_falls_back_to_nominatim_when_no_landmark_nearby(monkeypatch, tmp_path):
@@ -233,7 +329,8 @@ def test_place_name_retries_the_landmark_check_after_a_transient_failure(monkeyp
                     "elements": [
                         {
                             "tags": {"place": "islet", "name": "Île de la Jument"},
-                            "center": {"lat": 47.5687, "lon": -2.8875},
+                            "lat": 47.5687,
+                            "lon": -2.8875,
                         }
                     ]
                 }
@@ -280,7 +377,7 @@ def test_landmark_check_logs_each_failed_attempt(monkeypatch, tmp_path, capsys):
     geocoder.place_name(47.5707, -2.8853)
 
     err = capsys.readouterr().err
-    assert err.count("Overpass landmark check failed") == 11
+    assert err.count("Overpass islet check failed") == 11
 
 
 def test_result_is_not_cached_when_the_landmark_check_fails_entirely(monkeypatch, tmp_path):
