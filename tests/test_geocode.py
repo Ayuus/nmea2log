@@ -234,6 +234,45 @@ def test_place_name_ignores_the_islets_coastline_way_even_when_only_it_is_found(
     assert geocoder.place_name(47.8387, -4.1759) == "Loctudy"
 
 
+def test_place_name_retries_when_overpass_times_out_server_side(monkeypatch, tmp_path):
+    """Regression test for a real case: under load, Overpass answers HTTP 200 with valid,
+    parseable JSON even when the query itself only partially ran server-side -- signalled by a
+    top-level "remark" key, with "elements" empty or incomplete. Found in practice: this looked
+    exactly like a confirmed "no islet nearby" and got cached as that permanently, silently
+    losing a real islet match (Île de la Jument) to Kerners on a later run, instead of being
+    retried like any other failed attempt."""
+    overpass_call_count = 0
+
+    def fake_urlopen(request, timeout=10):
+        nonlocal overpass_call_count
+        if "overpass-api.de" in request.full_url:
+            overpass_call_count += 1
+            if overpass_call_count == 1:
+                return _FakeResponse(
+                    {"elements": [], "remark": "runtime error: Query timed out in \"around\" ..."}
+                )
+            return _FakeResponse(
+                {
+                    "elements": [
+                        {
+                            "type": "node",
+                            "tags": {"place": "islet", "name": "Île de la Jument"},
+                            "lat": 47.5687,
+                            "lon": -2.8875,
+                        }
+                    ]
+                }
+            )
+        return _FakeResponse({"address": {"village": "Kerners"}})
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr("nmea2000processor.geocode.time.sleep", lambda s: None)
+    geocoder = Geocoder(cache_file=tmp_path / "cache.json")
+
+    assert geocoder.place_name(47.5706676, -2.8852789) == "Île de la Jument"
+    assert overpass_call_count == 2
+
+
 def test_place_name_prefers_the_islets_own_name_node_over_its_coastline_way(monkeypatch, tmp_path):
     """Regression test for a real case: an islet is usually mapped as both a plain name node (its
     own short name) and a separate coastline way outlining its shape -- which OSM convention

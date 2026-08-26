@@ -129,6 +129,15 @@ def _nearby_islet_name(lat: float, lon: float, user_agent: str) -> Tuple[Optiona
             with urllib.request.urlopen(request, timeout=15) as response:
                 status = response.status
                 payload = json.loads(response.read().decode("utf-8"))
+            if payload.get("remark"):
+                # Overpass answers HTTP 200 with valid, parseable JSON even when the query
+                # itself timed out server-side and only partially ran -- a "remark" key is how
+                # it signals that (found in practice: under load, an empty "elements" list from
+                # a timed-out query looked exactly like a confirmed "no islet here", and got
+                # cached as that permanently instead of being retried).
+                remark = payload["remark"]
+                payload = None
+                raise ValueError(remark)
             break
         # OSError alongside URLError: some connection failures (e.g. the server dropping the
         # connection mid-response) surface as a raw ConnectionResetError/http.client exception,
