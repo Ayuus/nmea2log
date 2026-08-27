@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Autopilot course-keeping analysis</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         max-width: 780px; margin: 2rem auto; padding: 0 1rem; color: #1a2a3a; line-height: 1.5; }
+  h1 { font-size: 1.5rem; }
+  h2 { font-size: 1.15rem; margin-top: 2.2rem; border-bottom: 1px solid #e0e6ec; padding-bottom: 0.3rem; }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.92rem; }
+  th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #e0e6ec; }
+  th { color: #5a6b7a; font-weight: 600; }
+  tr:hover td { background: #f4f8fc; }
+  .highlight td { font-weight: 600; }
+  code { background: #f0f4f8; padding: 0.1rem 0.35rem; border-radius: 3px; font-size: 0.9em; }
+  .note { color: #5a6b7a; font-size: 0.92rem; }
+  .method { background: #f7f9fb; border-left: 3px solid #1a4a7a; padding: 0.8rem 1rem; margin: 1rem 0; }
+  a { color: #1a4a7a; }
+</style>
+</head>
+<body>
+
+<h1>Autopilot course-keeping analysis</h1>
+<p class="note">Prepared from the raw NMEA2000 log data (Actisense W2K-2), covering trips 1&ndash;13.
+Trip 14 was excluded (very short, engine only, autopilot never engaged).</p>
+
+<h2>Question</h2>
+<p>During trips 3 and 13 (and, as it turned out, every other trip too) the autopilot was observed
+weaving left-right-left-right around the intended course while steering a straight leg. The goal
+was to measure that weaving &mdash; its period and amplitude &mdash; from the logged data, as a
+starting point for tuning the autopilot to reduce it.</p>
+
+<h2>Method</h2>
+<div class="method">
+<p>Two NMEA2000 PGNs not currently decoded by the logbook app were decoded for this analysis:</p>
+<ul>
+<li><strong>PGN 127237 (Heading/Track Control)</strong> &mdash; the autopilot's own steering
+mode (Main Steering / Heading Control / Track Control / &hellip;) and its currently commanded
+course.</li>
+<li><strong>PGN 127250 (Vessel Heading)</strong> &mdash; the boat's actual compass heading. (PGN
+127237 also defines a vessel-heading field of its own, but this autopilot never populates it, so
+127250 was used instead.)</li>
+</ul>
+<p>The first attempt compared GPS course-over-ground (COG) against a smoothed local average of
+itself, as a stand-in for "the intended course". That turned out to be a noisier, laggier proxy
+&mdash; COG reflects the boat's actual track over the ground, affected by current, leeway, wave
+action and GPS lag, not just the autopilot's own steering behaviour. The analysis below instead
+compares the boat's actual compass heading directly against the autopilot's own commanded course
+&mdash; literally the error signal the autopilot itself is trying to drive to zero &mdash;
+restricted to periods where the autopilot was confirmed to be actively holding a heading
+("Heading Control" mode), split into continuous runs, with any dropout longer than 60 seconds
+starting a new run and runs shorter than 30 samples discarded as too short to measure reliably.</p>
+<p>For each continuous run: the heading error (actual heading minus commanded course) was
+detrended against a short local average (to remove any slowly-drifting offset from current/leeway
+without hiding the oscillation itself), then period was measured as the time between successive
+zero-crossings of that detrended error, and amplitude as the peak absolute error within each
+half-cycle.</p>
+</div>
+
+<h2>Results</h2>
+<table>
+<thead><tr><th>Trip</th><th>Time engaged</th><th>Period (median)</th><th>Amplitude (median)</th><th>Amplitude (p90)</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>65 min</td><td>3.8 s</td><td>0.30&deg;</td><td>1.40&deg;</td></tr>
+<tr><td>2</td><td>10 min</td><td>2.0 s</td><td>0.26&deg;</td><td>1.69&deg;</td></tr>
+<tr class="highlight"><td>3</td><td>137 min</td><td>4.2 s</td><td>1.34&deg;</td><td>3.92&deg;</td></tr>
+<tr><td>4</td><td>77 min</td><td>4.4 s</td><td>0.30&deg;</td><td>1.21&deg;</td></tr>
+<tr><td>5</td><td>54 min</td><td>4.2 s</td><td>0.48&deg;</td><td>1.48&deg;</td></tr>
+<tr><td>6</td><td>55 min</td><td>4.7 s</td><td>0.50&deg;</td><td>1.48&deg;</td></tr>
+<tr><td>7</td><td>32 min</td><td>3.9 s</td><td>0.36&deg;</td><td>1.10&deg;</td></tr>
+<tr class="highlight"><td>8</td><td>81 min</td><td>4.4 s</td><td>1.23&deg;</td><td>3.21&deg;</td></tr>
+<tr class="highlight"><td>9</td><td>30 min</td><td>4.5 s</td><td>1.27&deg;</td><td>4.15&deg;</td></tr>
+<tr class="highlight"><td>10</td><td>82 min</td><td>4.2 s</td><td>1.06&deg;</td><td>4.00&deg;</td></tr>
+<tr><td>11</td><td>70 min</td><td>4.5 s</td><td>0.57&deg;</td><td>2.05&deg;</td></tr>
+<tr class="highlight"><td>12</td><td>67 min</td><td>4.7 s</td><td>1.05&deg;</td><td>3.08&deg;</td></tr>
+<tr><td>13</td><td>247 min</td><td>4.7 s</td><td>0.72&deg;</td><td>2.12&deg;</td></tr>
+</tbody>
+</table>
+<p class="note">Highlighted rows (3, 8, 9, 10, 12) had a noticeably larger median amplitude
+(&sim;1&ndash;1.3&deg;, p90 up to 4&deg;) than the rest (&sim;0.3&ndash;0.6&deg;) &mdash; a
+concrete lead for a tuning investigation, e.g. checking wind/sea state on those specific days.</p>
+
+<h2>Aside: is "Navigation" mode visible in the data?</h2>
+<p>Alongside "Heading Control" (holding a fixed compass course), an autopilot/plotter combination
+can usually also be set to "Navigation" (follow a programmed route). PGN 127237 has a dedicated
+steering-mode value for this, "Track Control" &mdash; but across the <em>entire</em> logged
+history (not just these 13 trips), that value was never once seen. Only Main Steering, Heading
+Control, and Follow-Up Device appeared.</p>
+<p>However, route/waypoint navigation data (PGN 129284, PGN 129283 &mdash; distance and bearing
+to the destination waypoint, cross-track error) was present hundreds of thousands of times, so
+route-following clearly was happening at times. Cross-referencing the two: whenever navigation
+data and "Heading Control" mode were both present at the same time, the autopilot's commanded
+course tracked the plotter's own computed bearing to the destination waypoint closely &mdash; a
+median difference of only 3.1&deg; across 263,256 paired samples. In other words: this
+autopilot/plotter combination signals "Navigation" mode not through a distinct steering-mode
+value, but by the plotter continuously feeding the current route bearing into the same "Heading
+Control" commanded-course field a human would otherwise dial in by hand.</p>
+
+<h2>Caveats</h2>
+<ul>
+<li>This is exploratory analysis code, written directly against the raw log files for this
+question &mdash; it is not (yet) part of the shipped logbook app's own PGN decoding.</li>
+<li>The 10% tail of larger course-tracking differences in the Navigation-mode check (p90 =
+161&deg;) is most likely waypoint-transition moments (bearing jumps to the next leg before the
+commanded course catches up) and/or periods where a route happened to be loaded but the autopilot
+was actually being steered manually &mdash; not evidence against the overall pattern.</li>
+</ul>
+
+</body>
+</html>
