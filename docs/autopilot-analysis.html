@@ -23,8 +23,10 @@
 <body>
 
 <h1>Autopilot course-keeping analysis</h1>
-<p class="note">Prepared from the raw NMEA2000 log data (Actisense W2K-2), covering trips 1&ndash;13.
-Trip 14 was excluded (very short, engine only, autopilot never engaged).</p>
+<p class="note">Prepared from the raw NMEA2000 log data (Actisense W2K-2). The original analysis below
+covered trips 1&ndash;13; a season overview extending through trip 15 (with rudder gain/counter
+rudder settings and a sea-state correlation check) follows further down. Trip 14 is excluded
+throughout (very short, engine only, autopilot never engaged).</p>
 
 <h2>Question</h2>
 <p>During trips 3 and 13 (and, as it turned out, every other trip too) the autopilot was observed
@@ -82,6 +84,61 @@ half-cycle.</p>
 (&sim;1&ndash;1.3&deg;, p90 up to 4&deg;) than the rest (&sim;0.3&ndash;0.6&deg;) &mdash; a
 concrete lead for a tuning investigation, e.g. checking wind/sea state on those specific days.</p>
 
+<h2>Season overview: rudder gain, counter rudder, and oscillation by trip</h2>
+<p>Both tuning parameters were identified from a separate, generic Simrad/Navico "Key Value"
+settings protocol (PGN 130845/130846, not previously documented) by matching known before/after
+values the skipper reported changing: <strong>Rudder Gain</strong> is key 3354, <strong>Counter
+Rudder</strong> is key 3866 (both resolution 0.01). Where a value range is shown, the setting was
+being actively adjusted by hand during that trip itself; a single value means it was stable
+throughout (using the last known value from before departure when no reading fell inside the trip
+itself).</p>
+<table>
+<thead><tr><th>Trip</th><th>Date</th><th>Rudder gain</th><th>Counter rudder</th><th>Time engaged</th><th>Period (median)</th><th>Amplitude (median)</th><th>Amplitude (p90)</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>2026-07-30</td><td>1.00</td><td>1.19</td><td>65 min</td><td>3.8 s</td><td>0.30&deg;</td><td>1.40&deg;</td></tr>
+<tr><td>2</td><td>2026-07-31</td><td>0.50&ndash;1.00 (adjusted underway)</td><td>0.90&ndash;1.19 (adjusted underway)</td><td>10 min</td><td>2.0 s</td><td>0.26&deg;</td><td>1.69&deg;</td></tr>
+<tr class="highlight"><td>3</td><td>2026-08-05</td><td>0.50</td><td>1.19</td><td>137 min</td><td>4.2 s</td><td>1.34&deg;</td><td>3.92&deg;</td></tr>
+<tr><td>4</td><td>2026-08-08</td><td>1.00</td><td>0.90</td><td>77 min</td><td>4.4 s</td><td>0.30&deg;</td><td>1.21&deg;</td></tr>
+<tr><td>5</td><td>2026-08-09</td><td>0.50&ndash;1.00 (adjusted underway)</td><td>0.90&ndash;1.19 (adjusted underway)</td><td>54 min</td><td>4.2 s</td><td>0.48&deg;</td><td>1.48&deg;</td></tr>
+<tr><td>6</td><td>2026-08-09</td><td>1.00</td><td>1.19</td><td>55 min</td><td>4.7 s</td><td>0.50&deg;</td><td>1.48&deg;</td></tr>
+<tr><td>7</td><td>2026-08-17</td><td>0.50&ndash;1.00 (adjusted underway)</td><td>0.90&ndash;1.19 (adjusted underway)</td><td>32 min</td><td>3.9 s</td><td>0.36&deg;</td><td>1.10&deg;</td></tr>
+<tr class="highlight"><td>8</td><td>2026-08-18</td><td>0.16&ndash;1.00 (adjusted underway)</td><td>0.34&ndash;1.54 (adjusted underway)</td><td>81 min</td><td>4.4 s</td><td>1.23&deg;</td><td>3.21&deg;</td></tr>
+<tr class="highlight"><td>9</td><td>2026-08-19</td><td>0.60</td><td>1.17</td><td>30 min</td><td>4.5 s</td><td>1.27&deg;</td><td>4.15&deg;</td></tr>
+<tr class="highlight"><td>10</td><td>2026-08-20</td><td>0.50</td><td>1.17</td><td>82 min</td><td>4.2 s</td><td>1.06&deg;</td><td>4.00&deg;</td></tr>
+<tr><td>11</td><td>2026-08-22</td><td>0.60</td><td>1.17</td><td>70 min</td><td>4.5 s</td><td>0.57&deg;</td><td>2.04&deg;</td></tr>
+<tr class="highlight"><td>12</td><td>2026-08-23</td><td>0.50&ndash;0.60 (adjusted underway)</td><td>0.90&ndash;1.17 (adjusted underway)</td><td>67 min</td><td>4.7 s</td><td>1.05&deg;</td><td>3.08&deg;</td></tr>
+<tr><td>13</td><td>2026-08-25</td><td>0.23&ndash;0.50 (adjusted underway)</td><td>0.98&ndash;3.29 (adjusted underway)</td><td>247 min</td><td>4.7 s</td><td>0.72&deg;</td><td>2.12&deg;</td></tr>
+<tr><td>15</td><td>2026-08-28</td><td>0.60</td><td>0.90</td><td>24 min</td><td>5.5 s</td><td>1.12&deg;</td><td>8.05&deg; (rough weather)</td></tr>
+</tbody>
+</table>
+
+<h2>Does sea state explain the amplitude better than the tuning does?</h2>
+<p>The app already computes roll and pitch variation per trip (standard deviation and peak-to-peak
+range of PGN 127257 during the trip) as a sea-state proxy &mdash; no wind sensor was found on this
+boat's NMEA2000 network (PGN 130306 never appears anywhere in the logged data), so roll/pitch is
+the only motion-based proxy available. Correlating each trip's median oscillation amplitude
+against these (Pearson r, n=14 trips with autopilot engagement):</p>
+<table>
+<thead><tr><th>Compared against amplitude</th><th>Pearson r</th></tr></thead>
+<tbody>
+<tr class="highlight"><td>Roll (standard deviation)</td><td>0.91 &mdash; very strong</td></tr>
+<tr><td>Pitch (standard deviation)</td><td>0.75 &mdash; strong</td></tr>
+<tr><td>Roll (peak-to-peak range)</td><td>0.72 &mdash; strong</td></tr>
+<tr><td>Pitch (peak-to-peak range)</td><td>0.28 &mdash; weak</td></tr>
+</tbody>
+</table>
+<p><strong>Roll is by far the strongest predictor of oscillation amplitude</strong> &mdash;
+unsurprising, since roll (side-to-side motion from beam/quartering seas) is exactly the disturbance
+the autopilot has to counter-steer against to hold a heading; pitch (fore-aft, head/following seas)
+couples into yaw much less directly. The high-amplitude trips (3, 8, 9, 10, 12, 15) all have
+roll standard deviations at or above 1.26&deg;; the calm trips (1, 2, 4, 5, 6, 7) all stay under
+1.3&deg; and mostly well under 1.0&deg;.</p>
+<p class="note">Practical takeaway: sea state (specifically roll) explains the amplitude
+differences between trips far better than the rudder gain/counter rudder values tried so far do
+&mdash; the tuning attempts up to trip 15 don't show a clean, consistent relationship with
+amplitude on their own. Any future tuning comparison should control for roll (compare settings
+tried in similar sea states), otherwise it mostly measures the weather, not the setting.</p>
+
 <h2>Aside: is "Navigation" mode visible in the data?</h2>
 <p>Alongside "Heading Control" (holding a fixed compass course), an autopilot/plotter combination
 can usually also be set to "Navigation" (follow a programmed route). PGN 127237 has a dedicated
@@ -97,6 +154,31 @@ median difference of only 3.1&deg; across 263,256 paired samples. In other words
 autopilot/plotter combination signals "Navigation" mode not through a distinct steering-mode
 value, but by the plotter continuously feeding the current route bearing into the same "Heading
 Control" commanded-course field a human would otherwise dial in by hand.</p>
+
+<h2>Appendix: raw correlation data</h2>
+<table>
+<thead><tr><th>Trip</th><th>Date</th><th>Amplitude (median)</th><th>Roll stdev</th><th>Pitch stdev</th><th>Roll range</th><th>Pitch range</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>2026-07-30</td><td>0.30&deg;</td><td>0.81&deg;</td><td>0.47&deg;</td><td>12.42&deg;</td><td>6.33&deg;</td></tr>
+<tr><td>2</td><td>2026-07-31</td><td>0.26&deg;</td><td>0.55&deg;</td><td>0.34&deg;</td><td>8.85&deg;</td><td>8.06&deg;</td></tr>
+<tr><td>3</td><td>2026-08-05</td><td>1.34&deg;</td><td>2.50&deg;</td><td>0.71&deg;</td><td>22.95&deg;</td><td>7.81&deg;</td></tr>
+<tr><td>4</td><td>2026-08-08</td><td>0.30&deg;</td><td>1.01&deg;</td><td>0.55&deg;</td><td>17.89&deg;</td><td>9.49&deg;</td></tr>
+<tr><td>5</td><td>2026-08-09</td><td>0.48&deg;</td><td>0.83&deg;</td><td>0.52&deg;</td><td>13.42&deg;</td><td>4.57&deg;</td></tr>
+<tr><td>6</td><td>2026-08-09</td><td>0.50&deg;</td><td>1.02&deg;</td><td>0.53&deg;</td><td>14.52&deg;</td><td>4.20&deg;</td></tr>
+<tr><td>7</td><td>2026-08-17</td><td>0.36&deg;</td><td>0.92&deg;</td><td>0.63&deg;</td><td>13.61&deg;</td><td>4.45&deg;</td></tr>
+<tr><td>8</td><td>2026-08-18</td><td>1.23&deg;</td><td>2.18&deg;</td><td>0.67&deg;</td><td>24.00&deg;</td><td>6.12&deg;</td></tr>
+<tr><td>9</td><td>2026-08-19</td><td>1.27&deg;</td><td>1.70&deg;</td><td>0.70&deg;</td><td>16.42&deg;</td><td>8.03&deg;</td></tr>
+<tr><td>10</td><td>2026-08-20</td><td>1.06&deg;</td><td>2.15&deg;</td><td>0.94&deg;</td><td>22.36&deg;</td><td>9.10&deg;</td></tr>
+<tr><td>11</td><td>2026-08-22</td><td>0.57&deg;</td><td>1.28&deg;</td><td>0.55&deg;</td><td>11.93&deg;</td><td>9.09&deg;</td></tr>
+<tr><td>12</td><td>2026-08-23</td><td>1.05&deg;</td><td>1.26&deg;</td><td>0.76&deg;</td><td>18.32&deg;</td><td>5.27&deg;</td></tr>
+<tr><td>13</td><td>2026-08-25</td><td>0.72&deg;</td><td>1.41&deg;</td><td>0.50&deg;</td><td>16.28&deg;</td><td>9.00&deg;</td></tr>
+<tr><td>15</td><td>2026-08-28</td><td>1.12&deg;</td><td>1.94&deg;</td><td>0.89&deg;</td><td>33.22&deg;</td><td>13.88&deg;</td></tr>
+</tbody>
+</table>
+<p class="note">Roll/pitch stdev and range come straight from the app's own existing per-trip
+fields (<code>roll_variation_deg</code>, <code>pitch_variation_deg</code>, <code>roll_range_deg</code>,
+<code>pitch_range_deg</code> in <code>tripbuilder.py</code>) &mdash; no new decoding needed for
+those. Pearson r computed directly from this table (plain Python, no external stats library).</p>
 
 <h2>Caveats</h2>
 <ul>
