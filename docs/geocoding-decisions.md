@@ -113,6 +113,44 @@ rejected):
 | Separate Overpass search for nearby marinas (with a `has_village` exception, once built in commit `01f5758`) | Worked, but mostly duplicated what Nominatim's own address already did | Fully removed this session: a marina genuinely missing from Nominatim's address is an OSM data gap, to be fixed via an OSM edit, not extra code (see the Piriac precedent) |
 | One hardcoded exception for exactly this coordinate | Would work, affects nothing else | Rejected in favour of the node/way rule: that one is generic and covers a whole class of problems, not just this one point |
 
+## Decision 3: obscure vs. well-known leisure match, by Nominatim's own "importance" score
+
+**What**: `_pick_place_name` no longer checks `osm_type` (node vs way) to decide whether to prefer
+a village name over a leisure match. Instead it checks Nominatim's own `importance` score: below
+`0.001`, the match counts as obscure and a real village/town/city (if present) wins; missing or
+`None` defaults to `1.0` (not obscure), so an absent score never silently triggers the swap.
+
+**Why**:
+- **Real case**: "Port de Plaisance de Pornichet" is a real mapped area (`osm_type: way`), so the
+  old node-vs-way rule left it alone -- yet the skipper wanted "Pornichet" (the town) shown
+  instead, matching what already happened for the node-based "Darse de Castéro" case. A `way` on
+  its own doesn't mean "well-known"; `osm_type` was the wrong signal for that question.
+- **Verified on real data**: every leisure match found across the 15 reference positions falls
+  cleanly into one of two groups, three orders of magnitude apart -- obscure (Darse de Castéro
+  0.0000555, Port de Plaisance de Pornichet 0.000059, Concarneau 0.0000626) or well-known (Port
+  Olona 0.173, Port du Crouesty 0.186). The `0.001` threshold sits anywhere in that gap; it isn't
+  a fine line tuned to one case.
+- **Net effect on the 15 reference positions**: exactly one visible change (Pornichet). Port
+  Haliguen was already showing correctly (it's also obscure, so the new rule keeps it); Port
+  Olona and Port du Crouesty are both well-known and stay on their own marina name, unaffected;
+  Concarneau's village and marina name are identical so switching is invisible there.
+
+**What didn't work / was rejected**:
+- *A tooltip showing the marina name alongside the village name* (for both Pornichet and Port
+  Olona, as first requested): explored, but Port Olona and Port du Crouesty turned out to be
+  indistinguishable from each other under every signal tried (`osm_type`, then `importance`) --
+  both real, well-known, way-mapped marinas. Making Pornichet switch while leaving Port Olona
+  alone (as wanted) is only possible because Port Olona's `importance` is high, not low; asking
+  for Port Olona to *also* switch while Crouesty stays put would need a one-off exception again,
+  which was explicitly rejected ("I don't want exceptions, purely rule-based"). Building a whole
+  tooltip UI for the one name that does change (Pornichet) wasn't judged worth it either --
+  dropped in favour of the plain name swap.
+- *A "bassin" (named water basin) detection rule via Overpass, similar to islets*: found a real,
+  named `water=basin` feature ("Bassin à Flot") near the skipper's own home mooring in Les
+  Sables-d'Olonne -- but the same name also appears at Piriac-sur-Mer, ~150 km away. It's a
+  generic French term, not a unique identifier, so using it would have replaced a correct,
+  specific "Piriac-sur-Mer" with an ambiguous name shared with an unrelated harbour. Rejected.
+
 ## Why not just fix it via OpenStreetMap?
 
 For a **missing** marina (like the historical Piriac case), the agreement is: fix that via an OSM

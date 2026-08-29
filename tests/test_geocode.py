@@ -31,12 +31,11 @@ def test_place_name_prefers_village_over_quarter(monkeypatch, tmp_path):
     assert geocoder.place_name(47.7108, -3.3551) == "Port-Louis"
 
 
-def test_place_name_prefers_a_real_village_over_a_bare_node_leisure_match(monkeypatch, tmp_path):
-    """Regression test for a real case: Nominatim's own reverse lookup matched a marina tagged as
-    a bare point node -- "Darse de Castéro", a single named quay -- instead of the actual harbour
-    village right there, "Port Haliguen", which was also present in the address. Unlike a real
-    mapped marina area (a way/relation, see the next test), a bare node isn't trusted as "the"
-    place we're at when a real village name is also available."""
+def test_place_name_prefers_a_real_village_over_an_obscure_leisure_match(monkeypatch, tmp_path):
+    """Regression test for a real case: Nominatim's own reverse lookup matched a marina it itself
+    scores as obscure (importance 0.0000555, four orders of magnitude below a well-known match,
+    see the next test) -- "Darse de Castéro", a single named quay -- instead of the actual harbour
+    village right there, "Port Haliguen", which was also present in the address."""
     def fake_urlopen(request, timeout=10):
         if "overpass-api.de" in request.full_url:
             return _FakeResponse({"elements": []})
@@ -46,7 +45,7 @@ def test_place_name_prefers_a_real_village_over_a_bare_node_leisure_match(monkey
                 "lon": "-3.101200",
                 "category": "leisure",
                 "type": "marina",
-                "osm_type": "node",
+                "importance": 0.0000555,
                 "name": "Darse de Castéro",
                 "address": {"leisure": "Darse de Castéro", "village": "Port Haliguen"},
             }
@@ -58,11 +57,39 @@ def test_place_name_prefers_a_real_village_over_a_bare_node_leisure_match(monkey
     assert geocoder.place_name(47.4889, -3.1012) == "Port Haliguen"
 
 
-def test_place_name_keeps_a_marinas_own_name_when_its_a_real_mapped_area(monkeypatch, tmp_path):
-    """A leisure match that's a way/relation (an actually mapped area, not just a point) keeps its
-    own name even when a village is also present in the address -- unlike a bare node, its shape
-    is real evidence the boat is genuinely inside it. Real case: Port Olona, Port de Plaisance de
-    Pornichet and Port du Crouesty are all mapped this way and must stay unaffected."""
+def test_place_name_prefers_a_real_village_over_an_obscure_leisure_match_even_as_a_mapped_area(
+    monkeypatch, tmp_path
+):
+    """Regression test for a real case: "Port de Plaisance de Pornichet" is a real mapped area
+    (a way, not a bare point) yet still scores as obscure (importance 0.000059) -- being an
+    actually mapped area on its own doesn't make a match well-known, so the village name
+    ("Pornichet") is preferred here too, the same as for a bare-point obscure match."""
+    def fake_urlopen(request, timeout=10):
+        if "overpass-api.de" in request.full_url:
+            return _FakeResponse({"elements": []})
+        return _FakeResponse(
+            {
+                "lat": "47.257900",
+                "lon": "-2.350700",
+                "category": "leisure",
+                "type": "marina",
+                "importance": 0.000059,
+                "name": "Port de Plaisance de Pornichet",
+                "address": {"leisure": "Port de Plaisance de Pornichet", "town": "Pornichet"},
+            }
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    geocoder = Geocoder(cache_file=tmp_path / "cache.json")
+
+    assert geocoder.place_name(47.2579, -2.3507) == "Pornichet"
+
+
+def test_place_name_keeps_a_well_known_marinas_own_name(monkeypatch, tmp_path):
+    """A leisure match Nominatim itself scores as well-known (importance far above the obscure
+    threshold) keeps its own name even when a village is also present in the address. Real case:
+    Port Olona (0.173) and Port du Crouesty (0.186) both score three orders of magnitude above
+    the obscure matches above and must stay unaffected."""
     def fake_urlopen(request, timeout=10):
         if "overpass-api.de" in request.full_url:
             return _FakeResponse({"elements": []})
@@ -72,7 +99,7 @@ def test_place_name_keeps_a_marinas_own_name_when_its_a_real_mapped_area(monkeyp
                 "lon": "-2.894200",
                 "category": "leisure",
                 "type": "marina",
-                "osm_type": "way",
+                "importance": 0.186,
                 "name": "Port du Crouesty",
                 "address": {"leisure": "Port du Crouesty", "village": "Kerners"},
             }
@@ -84,10 +111,10 @@ def test_place_name_keeps_a_marinas_own_name_when_its_a_real_mapped_area(monkeyp
     assert geocoder.place_name(47.5446, -2.8942) == "Port du Crouesty"
 
 
-def test_place_name_keeps_a_bare_node_leisure_matchs_own_name_when_no_village_present(
+def test_place_name_keeps_an_obscure_leisure_matchs_own_name_when_no_village_present(
     monkeypatch, tmp_path
 ):
-    """A bare-node leisure match still wins when there's no real village/town/city to prefer
+    """An obscure leisure match still wins when there's no real village/town/city to prefer
     instead -- this only ever defers to an address key that's actually there."""
     def fake_urlopen(request, timeout=10):
         if "overpass-api.de" in request.full_url:
@@ -98,7 +125,7 @@ def test_place_name_keeps_a_bare_node_leisure_matchs_own_name_when_no_village_pr
                 "lon": "-3.101200",
                 "category": "leisure",
                 "type": "marina",
-                "osm_type": "node",
+                "importance": 0.0000555,
                 "name": "Darse de Castéro",
                 "address": {"leisure": "Darse de Castéro"},
             }
@@ -108,6 +135,30 @@ def test_place_name_keeps_a_bare_node_leisure_matchs_own_name_when_no_village_pr
     geocoder = Geocoder(cache_file=tmp_path / "cache.json")
 
     assert geocoder.place_name(47.4889, -3.1012) == "Darse de Castéro"
+
+
+def test_place_name_keeps_leisure_matchs_own_name_when_importance_is_missing(monkeypatch, tmp_path):
+    """A leisure match with no "importance" field at all (some real Nominatim responses omit it)
+    must not be treated as obscure by default -- that would silently prefer the village for every
+    match missing the field, not just genuinely obscure ones."""
+    def fake_urlopen(request, timeout=10):
+        if "overpass-api.de" in request.full_url:
+            return _FakeResponse({"elements": []})
+        return _FakeResponse(
+            {
+                "lat": "47.544600",
+                "lon": "-2.894200",
+                "category": "leisure",
+                "type": "marina",
+                "name": "Port du Crouesty",
+                "address": {"leisure": "Port du Crouesty", "village": "Kerners"},
+            }
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    geocoder = Geocoder(cache_file=tmp_path / "cache.json")
+
+    assert geocoder.place_name(47.5446, -2.8942) == "Port du Crouesty"
 
 
 def test_failed_lookup_is_not_cached(monkeypatch, tmp_path):

@@ -69,9 +69,16 @@ def _distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 _LANDMARK_MAX_RETRIES = 9
 
 # Address levels that count as "a village name" -- used by _pick_place_name (a real village/
-# town/city beats a leisure match that's just a bare point node, see there) and shared here so
-# anything else that needs the same definition of "a real village/town/city" can reuse it.
+# town/city beats an obscure leisure match, see there) and shared here so anything else that
+# needs the same definition of "a real village/town/city" can reuse it.
 _VILLAGE_LEVEL_ADDRESS_KEYS = ("town", "village", "city", "municipality", "suburb", "quarter")
+
+# Below this, a leisure match's own Nominatim "importance" score counts as obscure enough that a
+# real village/town/city name is preferred instead (see _pick_place_name). Chosen from real data,
+# not tuned to a single case: every leisure match seen in practice fell cleanly into one of two
+# widely separated groups -- ~0.00005-0.0001 (obscure) or ~0.17-0.19 (well-known) -- so this only
+# needs to sit somewhere in the three-orders-of-magnitude gap between them, not on a fine line.
+_OBSCURE_IMPORTANCE_THRESHOLD = 0.001
 
 
 def _nearby_islet_name(lat: float, lon: float, user_agent: str) -> Tuple[Optional[str], bool]:
@@ -292,16 +299,21 @@ def _pick_place_name(payload: dict, lat: float, lon: float) -> str:
     address = payload.get("address", {})
     is_leisure_match = payload.get("category") == "leisure" and payload.get("name")
 
-    # A leisure match mapped as a bare point node (no polygon/area of its own) is often a small,
-    # specific sub-feature -- e.g. one named quay -- rather than the harbour a boat is really
-    # moored at, so a real village/town/city name is trusted over it instead (found in practice:
-    # "Darse de Castéro", a single OSM node, replacing the correct and far more recognizable
-    # "Port Haliguen" village name). A way/relation match (an actually mapped area, e.g. a real
-    # marina basin) is trusted as before -- unlike a bare node, its shape is real evidence the
-    # boat is genuinely inside it, not just near a named point (found in practice: Port Olona,
-    # Port de Plaisance de Pornichet, Port du Crouesty are all real mapped areas and keep their
-    # own name here, unaffected).
-    if is_leisure_match and payload.get("osm_type") == "node":
+    # A leisure match Nominatim itself considers obscure (a low "importance" score, its own
+    # measure of how well-known a place is) is often a small, specific sub-feature -- e.g. one
+    # named quay -- rather than the harbour a boat is really moored at, so a real village/town/
+    # city name is trusted over it instead (found in practice: "Darse de Castéro" and "Port de
+    # Plaisance de Pornichet", both importance < 0.0001, replacing the correct and far more
+    # recognizable "Port Haliguen"/"Pornichet"). A well-known match is trusted as before --
+    # Port Olona and Port du Crouesty both score two orders of magnitude higher (~0.17-0.19) and
+    # keep their own name here, unaffected, same as any match Nominatim doesn't consider obscure
+    # at all (e.g. Concarneau, whose marina and village name happen to be identical anyway).
+    # Defaults to 1.0 (i.e. not obscure) when the field is missing or null -- some real Nominatim
+    # responses omit it -- so an absent score never silently triggers the village swap on its own.
+    importance = payload.get("importance")
+    if importance is None:
+        importance = 1.0
+    if is_leisure_match and importance < _OBSCURE_IMPORTANCE_THRESHOLD:
         for key in _VILLAGE_LEVEL_ADDRESS_KEYS:
             if key in address:
                 return address[key]
