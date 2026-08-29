@@ -89,6 +89,16 @@ class TripLeg:
     arrive_time: datetime
     depart_place: str
     arrive_place: str
+    # The averaged position of the stay this trip departed from/arrived at (mean of every
+    # stationary GPS fix during that stay, same value the place name itself was looked up from --
+    # see Stay/build_trips), not a single fix from the moment the boat started/stopped moving.
+    # A lone fix has real GPS jitter (found in practice: ~10 m off from the actual berth) that
+    # averaging over the whole stay cancels out; falls back to the trip's own first/last fix only
+    # when there's no stay at all (started/ended outside the log file).
+    depart_lat: float
+    depart_lon: float
+    arrive_lat: float
+    arrive_lon: float
     duration: timedelta  # time underway, excluding any gaps in the data (see _moving_duration)
     distance_nm: float
     avg_speed_kn: Optional[float]
@@ -884,6 +894,10 @@ def build_trips(
         arrive_time = next_stay.start if next_stay else group[-1].time
         depart_place = prev_stay.place if prev_stay else "Unknown (start outside log file)"
         arrive_place = next_stay.place if next_stay else "Unknown (end outside log file)"
+        depart_lat = prev_stay.lat if prev_stay else group[0].lat
+        depart_lon = prev_stay.lon if prev_stay else group[0].lon
+        arrive_lat = next_stay.lat if next_stay else group[-1].lat
+        arrive_lon = next_stay.lon if next_stay else group[-1].lon
 
         distance_nm = sum(
             _haversine_nm(a.lat, a.lon, b.lat, b.lon) for a, b in zip(group, group[1:])
@@ -904,6 +918,10 @@ def build_trips(
                 arrive_time=arrive_time,
                 depart_place=depart_place,
                 arrive_place=arrive_place,
+                depart_lat=depart_lat,
+                depart_lon=depart_lon,
+                arrive_lat=arrive_lat,
+                arrive_lon=arrive_lon,
                 duration=_moving_duration(group, max_gap),
                 distance_nm=distance_nm,
                 avg_speed_kn=avg_speed_kn,

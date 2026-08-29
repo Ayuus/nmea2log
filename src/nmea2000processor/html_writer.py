@@ -372,17 +372,17 @@ def _map_log_points(trip: TripLeg, offset_hours: float, interval_minutes: float)
     return points
 
 
-def _place_cell_html(place: str, sample: Optional[NavSample], map_id: str) -> str:
+def _place_cell_html(place: str, lat: float, lon: float, map_id: str) -> str:
     """The place name shown in the trips table; hovering shows a small map of the surroundings
     (~500 m radius) so a name that's hard to picture at a glance (or a bare coordinate, with
     --no-geocode) can still be located without opening the trip's own full route map. Reuses the
     .temp-hover/.temp-tooltip positioning mechanism (see there) and the same Leaflet library/tile
-    source already loaded for the route map, so this doesn't add another external dependency."""
+    source already loaded for the route map, so this doesn't add another external dependency.
+    Centered on the stay's own averaged position (see TripLeg.depart_lat/arrive_lat), not a
+    single GPS fix -- noticeably more accurate for where the boat was actually moored."""
     escaped = escape(place)
-    if sample is None:
-        return escaped
     return (
-        f'<span class="temp-hover place-hover" data-lat="{sample.lat:.6f}" data-lon="{sample.lon:.6f}" '
+        f'<span class="temp-hover place-hover" data-lat="{lat:.6f}" data-lon="{lon:.6f}" '
         f'data-map-id="{map_id}">{escaped}'
         f'<span class="temp-tooltip place-tooltip"><div class="place-map" id="{map_id}"></div></span>'
         f"</span>"
@@ -565,16 +565,13 @@ def _trip_row_html(
         if trip.track
         else ""
     )
-    depart_sample = trip.track[0] if trip.track else None
-    arrive_sample = trip.track[-1] if trip.track else None
-
     cells = [
         str(seq) if seq is not None else "",
         depart_local.strftime("%Y-%m-%d"),
         depart_local.strftime("%H:%M"),
-        _place_cell_html(trip.depart_place, depart_sample, f"place-map-{idx}-d"),
+        _place_cell_html(trip.depart_place, trip.depart_lat, trip.depart_lon, f"place-map-{idx}-d"),
         arrive_local.strftime("%H:%M"),
-        _place_cell_html(trip.arrive_place, arrive_sample, f"place-map-{idx}-a"),
+        _place_cell_html(trip.arrive_place, trip.arrive_lat, trip.arrive_lon, f"place-map-{idx}-a"),
         _format_duration(trip.duration),
         f"{_nl_num(trip.distance_nm)} nm",
         _nl_num(trip.avg_speed_kn) + " kn" if trip.avg_speed_kn is not None else "",
@@ -1028,7 +1025,23 @@ window.addEventListener('resize', layoutTotals);
 document.querySelectorAll('.temp-hover').forEach(function(el) {{
   var tooltip = el.querySelector('.temp-tooltip');
   if (!tooltip) return;
+  // The tooltip is positioned separately from el (position: fixed, see below), so moving the
+  // mouse from el into the tooltip briefly crosses screen space that belongs to neither -- a
+  // straight mouseleave-on-el would then hide it before the pointer ever arrives, found in
+  // practice once the tooltip itself became something worth moving the mouse into (the map,
+  // below). A short cancellable delay on hide (not on show) bridges that gap without making
+  // every other tooltip feel sluggish to appear.
+  var hideTimer = null;
+  function showNow() {{
+    if (hideTimer) {{ clearTimeout(hideTimer); hideTimer = null; }}
+  }}
+  function hideSoon() {{
+    hideTimer = setTimeout(function() {{ tooltip.style.display = ''; }}, 150);
+  }}
+  tooltip.addEventListener('mouseenter', showNow);
+  tooltip.addEventListener('mouseleave', hideSoon);
   el.addEventListener('mouseenter', function() {{
+    showNow();
     tooltip.style.display = 'block';
     var rect = el.getBoundingClientRect();
     var tooltipRect = tooltip.getBoundingClientRect();
@@ -1045,11 +1058,14 @@ document.querySelectorAll('.temp-hover').forEach(function(el) {{
     if (el.classList.contains('place-hover') && !el.dataset.mapInitialized) {{
       el.dataset.mapInitialized = '1';
       var lat = parseFloat(el.dataset.lat), lon = parseFloat(el.dataset.lon);
-      var placeMap = L.map(el.dataset.mapId, {{
-        zoomControl: false, dragging: false, scrollWheelZoom: false, doubleClickZoom: false,
-        attributionControl: false, keyboard: false, boxZoom: false, touchZoom: false
-      }});
-      L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{maxZoom: 19}}).addTo(placeMap);
+      // Fully interactive (drag, scroll-wheel zoom on desktop, pinch/tap zoom on touch) --
+      // these are Leaflet's own defaults, so only zoomControl is set explicitly, for the
+      // visible +/- buttons a touch user has no other obvious way to find.
+      var placeMap = L.map(el.dataset.mapId, {{zoomControl: true}});
+      L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+        maxZoom: 19,
+        attribution: '&copy; OpenStreetMap contributors'
+      }}).addTo(placeMap);
       L.marker([lat, lon]).addTo(placeMap);
       // A fixed distance in metres, not a fixed zoom level -- converting to degrees here keeps
       // the shown radius the same real-world size regardless of latitude (a degree of longitude
@@ -1060,9 +1076,7 @@ document.querySelectorAll('.temp-hover').forEach(function(el) {{
       setTimeout(function() {{ placeMap.invalidateSize(); }}, 0);
     }}
   }});
-  el.addEventListener('mouseleave', function() {{
-    tooltip.style.display = '';
-  }});
+  el.addEventListener('mouseleave', hideSoon);
 }});
 document.querySelectorAll('.show-map').forEach(function(btn) {{
   btn.addEventListener('click', function() {{

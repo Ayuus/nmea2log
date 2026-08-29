@@ -85,6 +85,45 @@ def test_build_trips_single_leg():
     assert len(geocoder.calls) == 2
 
 
+def test_trip_depart_and_arrive_lat_lon_are_the_stays_averaged_position_not_a_single_fix():
+    """Regression test: depart_lat/lon and arrive_lat/lon used to come from the trip's own first/
+    last GPS fix (the exact moment the boat started/stopped moving) -- a single fix, with real GPS
+    jitter (found in practice: ~10 m off from the actual berth). The stay itself already averages
+    every stationary fix during the port visit for its own place-name lookup (see Stay in
+    tripbuilder.py); depart/arrive_lat/lon must use that same averaged position, not reintroduce
+    the single-fix jitter for anything that shows the position on a map."""
+    fixes = []
+    sogs = []
+    # stationary, but not at one exact point -- small jitter around 52.30/4.90, alternating so the
+    # mean differs from every individual fix (found in practice: consumer GPS jitter even at rest)
+    for m in range(0, 12):
+        jitter = 0.0002 if m % 2 == 0 else -0.0002
+        fixes.append(PositionFix(_dt(m), 52.30 + jitter, 4.90 + jitter))
+        sogs.append(SogSample(_dt(m), 0.0))
+    for i, m in enumerate(range(12, 42)):
+        frac = i / 29
+        fixes.append(PositionFix(_dt(m), 52.30 + 0.10 * frac, 4.90 + 0.05 * frac))
+        sogs.append(SogSample(_dt(m), 3.0))
+    for m in range(42, 54):
+        jitter = 0.0003 if m % 2 == 0 else -0.0003
+        fixes.append(PositionFix(_dt(m), 52.40 + jitter, 4.95 + jitter))
+        sogs.append(SogSample(_dt(m), 0.0))
+
+    geocoder = _StubGeocoder()
+    trips = build_trips(
+        fixes, sogs, [], geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10
+    )
+
+    assert len(trips) == 1
+    trip = trips[0]
+    # the mean of an equal number of +jitter/-jitter fixes is the unjittered centre point --
+    # nowhere near any single fix actually recorded (each was 0.0002/0.0003 deg off-centre)
+    assert trip.depart_lat == pytest.approx(52.30, abs=1e-9)
+    assert trip.depart_lon == pytest.approx(4.90, abs=1e-9)
+    assert trip.arrive_lat == pytest.approx(52.40, abs=1e-9)
+    assert trip.arrive_lon == pytest.approx(4.95, abs=1e-9)
+
+
 def test_reject_gps_outliers_drops_a_single_corrupted_fix():
     """Regression test for a real incident, values taken from the actual corrupted record found
     in a real .ebl file: the correct 8-byte position payload (46.916294, -2.3801566) with its
