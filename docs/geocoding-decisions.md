@@ -1,137 +1,137 @@
-# Havennaam-beslissingen (`geocode.py`)
+# Port name decisions (`geocode.py`)
 
-Dit document legt vast **welke keuzes** er gemaakt zijn in hoe `geocode.py` een GPS-positie omzet
-in een havennaam, en vooral **waarom** — inclusief wat er geprobeerd is en niet werkte. Bedoeld om
-een volgende wijziging niet opnieuw dezelfde doodlopende paden te laten bewandelen.
+This document records **which choices** were made in how `geocode.py` turns a GPS position into a
+port name, and above all **why** — including what was tried and didn't work. Meant to keep a
+future change from walking down the same dead ends again.
 
-Alle claims hieronder zijn geverifieerd tegen echte Nominatim/Overpass-data voor de 15 echte
-reis-stops uit een echt logboek (zie "Referentieset" onderaan) — niet tegen aannames.
+All claims below are verified against real Nominatim/Overpass data for the 15 real trip stops
+from a real logbook (see "Reference set" at the bottom) — not against assumptions.
 
-## Huidige regels (stand van commit `1b567e9`)
+## Current rules (as of commit `1b567e9`)
 
-1. **Eilandje via Overpass wint altijd**, ongeacht afstand. Alleen een losse naam-**node** telt
-   mee; een kustlijn-**way** wordt genegeerd, ook niet als fallback.
-2. **Marina/leisure-match van Nominatim zelf wint**, tenzij die match een losse punt-**node** is
-   (geen vlak/way) én er ook een echt dorp/stad in het adres staat — dan wint het dorp.
-3. Voor de rest: Nominatim's eigen `_PREFERRED_ADDRESS_KEYS`-volgorde (leisure/marina/harbour vóór
-   town/village/city/...), ongewijzigd sinds het begin van het project.
-4. Een match verder dan 250 m weg krijgt een prefix ("aan de kant, bij" / "op het water, bij")
-   in plaats van te doen alsof de boot er precies is.
+1. **An islet found via Overpass always wins**, regardless of distance. Only a plain name
+   **node** counts; a coastline **way** is ignored, even as a fallback.
+2. **Nominatim's own marina/leisure match wins**, unless that match is a bare point **node**
+   (no polygon/way) *and* the address also contains a real village/town/city — then the village
+   wins.
+3. Otherwise: Nominatim's own `_PREFERRED_ADDRESS_KEYS` order (leisure/marina/harbour before
+   town/village/city/...), unchanged since the start of the project.
+4. A match more than 250 m away gets a prefix ("alongside, near" / "on the water, near") instead
+   of implying the boat is right there.
 
-## Beslissing 1: eilandje — node wint altijd, way wordt genegeerd
+## Decision 1: islet — node always wins, way is ignored
 
-**Wat**: `_nearby_islet_name` vraagt Overpass nu alleen nog naar `node["place"="islet"]`. De
-`way`-variant (kustlijn) wordt niet meer opgevraagd en, waar ooit wel opgevraagd, nooit gebruikt —
-ook niet als er geen node gevonden wordt.
+**What**: `_nearby_islet_name` now only asks Overpass for `node["place"="islet"]`. The `way`
+variant (coastline) is no longer queried, and where it once was, is never used — not even when no
+node is found.
 
-**Waarom**:
-- Een eilandje wordt in OSM meestal dubbel gemapt: een simpele naam-node (bv. "Île de la Jument")
-  én een aparte kustlijn-way die een uitgebreidere naam kan dragen (bv. "Île de la Jument (Er
-  Gazeg)"). De node-naam is korter en herkenbaarder voor een boot die er gewoon voor anker ligt,
-  niet letterlijk in die ene inham — expliciet zo gewenst ("altijd node gebruiken").
-- Een **way** se gerapporteerde afstand is onbetrouwbaar: Overpass' `out center` geeft het
-  geometrische **centroïde** van de hele vorm terug, niet het dichtstbijzijnde punt van de
-  kustlijn. Bij een groot/langgerekt eiland kan dat centroïde ver van de boot liggen, terwijl een
-  randje van de kustlijn wél binnen de zoekstraal (300 m) valt — waardoor Overpass de way toch
-  teruggeeft. **Echt geval**: bij Loctudy lag de boot 38 m van de haven-pier (overduidelijk
-  daar), maar Île Garo's way-centroïde werd op ~680 m berekend en zou de haven onterecht hebben
-  overstemd als de way als fallback was gebruikt.
-- Een node heeft één exact punt, dus dat probleem speelt daar niet.
+**Why**:
+- An islet is usually mapped twice in OSM: a plain name node (e.g. "Île de la Jument") and a
+  separate coastline way that can carry a more elaborate name (e.g. "Île de la Jument (Er
+  Gazeg)"). The node's name is shorter and more recognizable for a boat simply anchored off it,
+  not literally in that one cove — explicitly requested this way ("always use the node").
+- A **way**'s reported distance is unreliable: Overpass' `out center` returns the geometric
+  **centroid** of the whole shape, not the nearest point of the coastline. For a large/elongated
+  island, that centroid can be far from the boat while an edge of the coastline still falls within
+  the search radius (300 m) — so Overpass returns the way anyway. **Real case**: at Loctudy the
+  boat was 38 m from the harbour pier (clearly there), but Île Garo's way centroid computed to
+  ~680 m and would have wrongly outvoted the harbour if the way had been used as a fallback.
+- A node has one exact point, so this problem doesn't apply to it.
 
-**Wat niet werkte / verworpen**:
-- *Way als fallback met een afstandsgrens*: leek een optie, maar Overpass' eigen `around:300`-
-  filter garandeert al dat de way-geometrie zelf binnen 300 m ligt — het probleem zit in het
-  centroïde-punt, niet in de werkelijke afstand. Een afstandsgrens op het centroïde had Île Garo
-  dus niet betrouwbaar tegengehouden.
-- *Eilandje wint alleen als het dichterbij is dan het dorp*: expliciet afgewezen bij Kerners —
-  "eilandje wint alleen als dichterbij kan toch niet in dit geval" / "altijd node gebruiken". Het
-  hele punt van voor anker liggen bij een eilandje is vaak juist het eilandje zelf, ook als het
-  dorp toevallig net iets dichterbij ligt.
+**What didn't work / was rejected**:
+- *Way as a fallback with a distance cutoff*: seemed like an option, but Overpass' own
+  `around:300` filter already guarantees the way's geometry itself is within 300 m — the problem
+  is the centroid point, not the real distance. A distance cutoff on the centroid would not have
+  reliably stopped Île Garo.
+- *Islet only wins if it's closer than the village*: explicitly rejected at Kerners — "islet only
+  winning when closer doesn't work in this case either" / "always use the node". The whole point
+  of anchoring near an islet is often the islet itself, even if the village happens to be slightly
+  closer.
 
-## Drie regressies bij de live uitrol (gevonden tijdens een echte productierun)
+## Three regressions in the live rollout (found during a real production run)
 
-De Overpass-queryvereenvoudiging uit Beslissing 1 hierboven introduceerde, naast de bedoelde
-wijziging, drie losse bugs — pas zichtbaar tijdens een echte run met duizenden `.ebl`-bestanden,
-niet in de tests (die werken met gemockte antwoorden) en ook niet in de eerdere verificaties
-vóór het uitrollen (die een lokaal gecachet Overpass-antwoord hergebruikten, opgebouwd met een
-eigen, apart geschreven queryfunctie — niet de queryfunctie uit `geocode.py` zelf).
+The Overpass query simplification from Decision 1 above introduced, alongside the intended
+change, three separate bugs — only visible during a real run against thousands of `.ebl` files,
+not in the tests (which use mocked responses) and not in the pre-rollout verification either
+(which reused a locally cached Overpass answer, built from a separate, independently written
+query function — not `geocode.py`'s own).
 
-1. **Ontbrekend `[out:json]`** (commit `3c0b757`): zonder die instructie antwoordt Overpass met
-   zijn eigen standaardformaat (XML, HTTP 200) in plaats van een foutmelding — elke aanroep
-   faalde daardoor gegarandeerd op `json.loads`, niet incidenteel onder belasting. Zichtbaar in
-   het logbestand als `Expecting value: line 1 column 1 (char 0)`, telkens opnieuw.
-2. **Een server-side timeout die eruitziet als "niets gevonden"** (commit `bb2c241`): Overpass
-   antwoordt óók met HTTP 200 en geldige JSON als de query zelf op de server is afgebroken door
-   tijdslimiet — met een `"remark"`-veld en een lege/onvolledige `"elements"`-lijst. Dat werd
-   voorheen niet herkend en dus permanent gecachet als een bevestigd "geen eilandje hier".
-3. **`out tags;` levert geen coördinaten** (commit `1b567e9`): zonder het `center`-modifier geeft
-   Overpass voor een node alleen `id` + `tags` terug, geen `lat`/`lon` — de node werd dus wél
-   gevonden, maar zonder positie om een afstand mee te berekenen, en viel daardoor stil weg
-   alsof er niets gevonden was. Ook dit resultaat werd (ten onrechte) permanent gecachet.
+1. **Missing `[out:json]`** (commit `3c0b757`): without that instruction Overpass answers with
+   its own default format (XML, HTTP 200) instead of an error — every call therefore failed
+   guaranteed on `json.loads`, not just occasionally under load. Visible in the log file as
+   `Expecting value: line 1 column 1 (char 0)`, over and over.
+2. **A server-side timeout that looks like "nothing found"** (commit `bb2c241`): Overpass also
+   answers with HTTP 200 and valid JSON when the query itself was aborted server-side by a time
+   limit — with a `"remark"` field and an empty/incomplete `"elements"` list. That wasn't
+   recognized before, and so got permanently cached as a confirmed "no islet here".
+3. **`out tags;` returns no coordinates** (commit `1b567e9`): without the `center` modifier,
+   Overpass returns only `id` + `tags` for a node, no `lat`/`lon` — so the node *was* found, but
+   without a position to compute a distance from, and silently dropped out as if nothing had been
+   found. This result, too, was (wrongly) cached permanently.
 
-**Les voor volgende keer**: alle drie zijn precies het soort fout die een gemockte test of een
-hergebruikt lokaal cachebestand niet vangt, omdat beide ervan uitgaan dat de queryconstructie zelf
-al correct is. De enige manier waarop dit aan het licht kwam was een **echte, volledige run tegen
-de live Overpass-dienst** met de daadwerkelijke queryfunctie uit `geocode.py` zelf — niet een
-losstaand testscript met een eigen, apart geschreven query. Bij een toekomstige wijziging aan de
-Overpass-query: minstens één keer een losse `_nearby_islet_name(...)`-aanroep rechtstreeks tegen
-de live dienst doen, niet alleen `pytest` en niet alleen een simulatie op eerder gecachete data.
+**Lesson for next time**: all three are exactly the kind of bug that a mocked test or a reused
+local cache file won't catch, because both assume the query construction itself is already
+correct. The only way this came to light was a **real, full run against the live Overpass
+service** using the actual query function from `geocode.py` itself — not a standalone test script
+with its own, separately written query. For a future change to the Overpass query: run at least
+one standalone `_nearby_islet_name(...)` call directly against the live service (as under
+"Reference set" above), not just `pytest` and not just a simulation on previously cached data.
 
-Bijkomend, apart probleem tijdens dezelfde sessie: een oude, nooit verklaarde upload van
-testfixture-data (1 reis, ronde coördinaten uit `tests/test_trip_ids.py`) stond enige tijd live —
-niet veroorzaakt door code in dit project, en verdween vanzelf zodra een echte run opnieuw
-uploadde. Oorzaak nooit gevonden; geen actie ondernomen buiten het herbevestigen dat geen van de
-bovenstaande fixes of testruns dit kan veroorzaken (alle upload-tests isoleren zich expliciet van
-de echte `nmea2log.ini`, zie `tests/test_cli.py`).
+Separate, unrelated issue during the same session: an old, never-explained upload of test-fixture
+data (1 trip, round coordinates from `tests/test_trip_ids.py`) was live for a while — not caused
+by any code in this project, and disappeared on its own once a real run uploaded again. Root
+cause never found; no action taken beyond reconfirming that none of the fixes or test runs above
+could have caused it (every upload test explicitly isolates itself from the real `nmea2log.ini`,
+see `tests/test_cli.py`).
 
-## Beslissing 2: marina-node vs. dorp
+## Decision 2: marina node vs. village
 
-**Wat**: `_pick_place_name` gebruikt Nominatim's eigen `leisure`-match (marina, meestal) zoals
-altijd — **behalve** wanneer die match een losse punt-node is (`osm_type == "node"`, geen vlak)
-én het adres ook een echt dorp/stad/gemeente bevat. Dan wint het dorp.
+**What**: `_pick_place_name` uses Nominatim's own `leisure` match (usually a marina) as always —
+**except** when that match is a bare point node (`osm_type == "node"`, no polygon) *and* the
+address also contains a real village/town/municipality. Then the village wins.
 
-**Waarom**:
-- **Echt geval**: op 47.4889,-3.1012 (Quiberon) matcht Nominatim een OSM-node genaamd "Darse de
-  Castéro" (een specifiek, klein benoemd hoekje) in plaats van het bekende, herkenbare "Port
-  Haliguen" — dat wél in hetzelfde adres stond, maar nooit werd gebruikt omdat de `leisure`-
-  shortcut in `_pick_place_name` altijd als eerste checkt.
-- **Onderscheidend kenmerk gevonden**: hoe de marina zelf in OSM gemapt is.
-  - Port Olona, Port de Plaisance de Pornichet, Port du Crouesty, Concarneau: allemaal
-    `osm_type: way` — een echt getekend havenbekken (bounding box van honderden meters).
-  - Darse de Castéro: `osm_type: node` — een los puntje (bounding box ~11×11 m, geen echt vlak).
-  - Dit is een **stabiele, tag-gebaseerde** eigenschap (hoe het element gemapt is), niet iets dat
-    per Nominatim-aanroep kan wisselen.
+**Why**:
+- **Real case**: at 47.4889,-3.1012 (Quiberon), Nominatim matches an OSM node called "Darse de
+  Castéro" (a small, specifically named corner) instead of the well-known, recognizable "Port
+  Haliguen" — which *was* present in the same address, but never used because the `leisure`
+  shortcut in `_pick_place_name` always checks first.
+- **Distinguishing feature found**: how the marina itself is mapped in OSM.
+  - Port Olona, Port de Plaisance de Pornichet, Port du Crouesty, Concarneau: all `osm_type:
+    way` — a real drawn harbour basin (bounding box hundreds of metres across).
+  - Darse de Castéro: `osm_type: node` — a bare point (bounding box ~11×11 m, no real polygon).
+  - This is a **stable, tag-based** property (how the element is mapped), not something that can
+    vary between Nominatim calls.
 
-**Wat niet werkte / verworpen** (elk getest tegen alle 15 echte posities voordat verworpen):
+**What didn't work / was rejected** (each tested against all 15 real positions before being
+rejected):
 
-| Poging | Resultaat | Waarom verworpen |
+| Attempt | Result | Why rejected |
 |---|---|---|
-| `_PREFERRED_ADDRESS_KEYS` herordenen (village vóór leisure/marina/harbour, altijd) | Fixt Darse de Castéro, maar verandert ook Port Olona → "aan de kant, bij Les Sables-d'Olonne", Pornichet → "Pornichet" (verliest de marinanaam) | Expliciet afgewezen: "aan de kant bij Port Olona is prima, niet wijzigen svp" |
-| Algemene regel: skip `leisure`-shortcut zodra er een dorp/stad in het adres staat | Zelfde probleem als hierboven, plus Crouesty gaf bij twee losse live-aanroepen twee verschillende antwoorden ("Kerners" vs. "Port Navalo") — Nominatim's publieke dienst bleek hier zelf inconsistent tussen aanroepen | Onvoorspelbaar, naast dat het ook Port Olona/Pornichet raakt |
-| `marina`/`harbour`-sleutel prefereren boven `leisure` (binnen `_PREFERRED_ADDRESS_KEYS`) | Geen enkel effect | Voor alle 15 posities komt een marina-match altijd alleen via het `leisure`-veld terug; `marina`/`harbour` komen in de praktijk nooit apart voor in deze dataset |
-| Losse Overpass-zoekopdracht naar nabije marina's (met `has_village`-uitzondering, ooit gebouwd in commit `01f5758`) | Werkte, maar dupliceerde grotendeels wat Nominatim's eigen adres al deed | Volledig verwijderd deze sessie: een marina die écht ontbreekt in Nominatim's adres is een OSM-datahiaat, op te lossen via een OSM-edit, niet via extra code (zie Piriac-precedent) |
-| Eén hardcoded uitzondering voor precies deze coördinaat | Zou werken, raakt niets anders | Verworpen ten gunste van de node/way-regel: die is generiek en dekt een hele klasse problemen, niet alleen dit ene punt |
+| Reorder `_PREFERRED_ADDRESS_KEYS` (village always before leisure/marina/harbour) | Fixes Darse de Castéro, but also changes Port Olona → "alongside, near Les Sables-d'Olonne", Pornichet → "Pornichet" (loses the marina name) | Explicitly rejected: "alongside near Port Olona is fine, please don't change it" |
+| General rule: skip the `leisure` shortcut whenever a village/town is in the address | Same problem as above, plus Crouesty gave two different answers on two separate live calls ("Kerners" vs. "Port Navalo") — Nominatim's public service turned out to be inconsistent between calls here | Unpredictable, on top of also affecting Port Olona/Pornichet |
+| Prefer the `marina`/`harbour` key over `leisure` (within `_PREFERRED_ADDRESS_KEYS`) | No effect whatsoever | For all 15 positions a marina match only ever comes back via the `leisure` field; `marina`/`harbour` never occur separately in this dataset in practice |
+| Separate Overpass search for nearby marinas (with a `has_village` exception, once built in commit `01f5758`) | Worked, but mostly duplicated what Nominatim's own address already did | Fully removed this session: a marina genuinely missing from Nominatim's address is an OSM data gap, to be fixed via an OSM edit, not extra code (see the Piriac precedent) |
+| One hardcoded exception for exactly this coordinate | Would work, affects nothing else | Rejected in favour of the node/way rule: that one is generic and covers a whole class of problems, not just this one point |
 
-## Waarom niet gewoon via OpenStreetMap oplossen?
+## Why not just fix it via OpenStreetMap?
 
-Voor een **ontbrekende** marina (zoals het historische Piriac-geval) is de afspraak: dat lossen we
-via een OSM-edit op, niet via code — zie de policy-beslissing hierboven bij de Overpass-marina-
-zoekopdracht.
+For a **missing** marina (like the historical Piriac case), the agreement is: fix that via an OSM
+edit, not code — see the policy decision above regarding the Overpass marina search.
 
-Voor Darse de Castéro lag het anders: de data zelf is niet fout (het is een legitieme, correct
-getagde marina-node), het is alleen **minder relevant** dan het dorp ernaast voor iemand die het
-logboek leest. Dat is geen datafout om in OSM te repareren, maar een presentatiekeuze — vandaar de
-code-oplossing.
+For Darse de Castéro it was different: the data itself isn't wrong (it's a legitimate, correctly
+tagged marina node), it's just **less relevant** than the village next to it for someone reading
+the logbook. That's not a data error to fix in OSM, but a presentation choice — hence the code
+fix.
 
-## Referentieset: de 15 echte reis-stops
+## Reference set: the 15 real trip stops
 
-Gebruikt om elke voorgestelde regel tegen te toetsen voordat die gebouwd werd. Bij een toekomstige
-wijziging: eerst deze tabel opnieuw genereren en vergelijken voordat iets aangepast wordt.
+Used to check every proposed rule against before it was built. For a future change: regenerate
+this table first and compare before changing anything.
 
-| Coördinaat | Resultaat (stand van `6aa7f02`) |
+| Coordinate | Result (as of `6aa7f02`) |
 |---|---|
 | 46.4968,-1.7899 | Les Sables-d'Olonne |
-| 46.5005,-1.7950 | aan de kant, bij Port Olona |
+| 46.5005,-1.7950 | alongside, near Port Olona |
 | 47.1080,-2.1157 | Pornic |
 | 47.2579,-2.3507 | Port de Plaisance de Pornichet |
 | 47.2749,-2.4246 | La Baule-Escoublac |
@@ -146,17 +146,16 @@ wijziging: eerst deze tabel opnieuw genereren en vergelijken voordat iets aangep
 | 47.8704,-3.9147 | Concarneau |
 | 47.8776,-4.1213 | Sainte-Marine |
 
-**Praktische tip voor een volgende sessie**: Overpass rate-limit't zwaar bij herhaald testen
-(vaak `429`/`504`). Snel itereren gaat het best door eenmalig de ruwe Nominatim- én
-Overpass-antwoorden voor deze 15 punten lokaal weg te schrijven (JSON, per coördinaat de twee
-volledige payloads), en daarna elke variant van de logica direct tegen dat lokale bestand te
-simuleren — geen verdere netwerkoproepen nodig totdat er een echt nieuwe positie bij komt.
+**Practical tip for a future session**: Overpass rate-limits heavily under repeated testing (often
+`429`/`504`). The fastest way to iterate is to write the raw Nominatim and Overpass answers for
+these 15 points to disk once (JSON, both full payloads per coordinate), then simulate every
+variant of the logic directly against that local file — no further network calls needed until a
+genuinely new position is added.
 
-## Nog open (bewust uitgesteld)
+## Still open (deliberately deferred)
 
-- **Sluizen/bruggen herkennen** ("De sluis bij ...", "De Ketelbrug") — nog geen echte data van
-  beschikbaar; voorbeeld verwacht bij Barrage d'Arzal. Wachten op echte coördinaten voordat dit
-  gebouwd wordt.
-- Of het "eiland altijd node, way genegeerd"-principe ook voor andere featuretypes dan eilandjes
-  zou moeten gelden, is nog niet onderzocht — nu bewust beperkt gehouden tot eilandjes, waar het
-  concrete probleem zich voordeed.
+- **Recognizing locks/bridges** ("The lock at ...", "The Ketelbrug") — no real data available yet;
+  an example is expected at Barrage d'Arzal. Waiting for real coordinates before this gets built.
+- Whether the "islet always node, way ignored" principle should also apply to other feature types
+  besides islets hasn't been investigated yet — deliberately kept scoped to islets for now, where
+  the concrete problem actually occurred.
