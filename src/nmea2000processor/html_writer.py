@@ -372,6 +372,23 @@ def _map_log_points(trip: TripLeg, offset_hours: float, interval_minutes: float)
     return points
 
 
+def _place_cell_html(place: str, sample: Optional[NavSample], map_id: str) -> str:
+    """The place name shown in the trips table; hovering shows a small map of the surroundings
+    (~500 m radius) so a name that's hard to picture at a glance (or a bare coordinate, with
+    --no-geocode) can still be located without opening the trip's own full route map. Reuses the
+    .temp-hover/.temp-tooltip positioning mechanism (see there) and the same Leaflet library/tile
+    source already loaded for the route map, so this doesn't add another external dependency."""
+    escaped = escape(place)
+    if sample is None:
+        return escaped
+    return (
+        f'<span class="temp-hover place-hover" data-lat="{sample.lat:.6f}" data-lon="{sample.lon:.6f}" '
+        f'data-map-id="{map_id}">{escaped}'
+        f'<span class="temp-tooltip place-tooltip"><div class="place-map" id="{map_id}"></div></span>'
+        f"</span>"
+    )
+
+
 def _trip_title(trip: TripLeg, depart_local: datetime) -> str:
     """Shared with the map popup's own title (see _trip_row_html) -- the Details popup needs the
     same "which trip is this" context, since unlike the always-visible table row it replaces a
@@ -548,14 +565,16 @@ def _trip_row_html(
         if trip.track
         else ""
     )
+    depart_sample = trip.track[0] if trip.track else None
+    arrive_sample = trip.track[-1] if trip.track else None
 
     cells = [
         str(seq) if seq is not None else "",
         depart_local.strftime("%Y-%m-%d"),
         depart_local.strftime("%H:%M"),
-        escape(trip.depart_place),
+        _place_cell_html(trip.depart_place, depart_sample, f"place-map-{idx}-d"),
         arrive_local.strftime("%H:%M"),
-        escape(trip.arrive_place),
+        _place_cell_html(trip.arrive_place, arrive_sample, f"place-map-{idx}-a"),
         _format_duration(trip.duration),
         f"{_nl_num(trip.distance_nm)} nm",
         _nl_num(trip.avg_speed_kn) + " kn" if trip.avg_speed_kn is not None else "",
@@ -899,6 +918,9 @@ def write_html_logbook(
     box-shadow: 0 1px 4px rgba(0,0,0,0.25);
   }}
   .temp-hover:hover .temp-tooltip {{ display: block; }}
+  .place-hover {{ cursor: default; border-bottom: 1px dotted #999; }}
+  .place-tooltip {{ padding: 0; white-space: normal; }}
+  .place-map {{ width: 220px; height: 220px; border-radius: 8px; }}
   /* The map's own <td> spans every column of the (often much wider than the viewport, already
      horizontally-scrolled) trips table, so without a width cap the map itself would render just
      as wide -- on a narrow screen, only a thin vertical slice of that ends up actually visible
@@ -1017,6 +1039,26 @@ document.querySelectorAll('.temp-hover').forEach(function(el) {{
     var left = Math.min(rect.left, window.innerWidth - tooltipRect.width - 8);
     tooltip.style.top = Math.max(top, 4) + 'px';
     tooltip.style.left = Math.max(left, 4) + 'px';
+    // A place-name tooltip additionally carries its own small map (~500 m radius), built lazily
+    // on first hover just like the trip's own route map -- Leaflet needs the container to
+    // already be visible (display:block, set just above) to measure it correctly.
+    if (el.classList.contains('place-hover') && !el.dataset.mapInitialized) {{
+      el.dataset.mapInitialized = '1';
+      var lat = parseFloat(el.dataset.lat), lon = parseFloat(el.dataset.lon);
+      var placeMap = L.map(el.dataset.mapId, {{
+        zoomControl: false, dragging: false, scrollWheelZoom: false, doubleClickZoom: false,
+        attributionControl: false, keyboard: false, boxZoom: false, touchZoom: false
+      }});
+      L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{maxZoom: 19}}).addTo(placeMap);
+      L.marker([lat, lon]).addTo(placeMap);
+      // A fixed distance in metres, not a fixed zoom level -- converting to degrees here keeps
+      // the shown radius the same real-world size regardless of latitude (a degree of longitude
+      // shrinks towards the poles).
+      var dLat = 500 / 111320;
+      var dLon = 500 / (111320 * Math.cos(lat * Math.PI / 180));
+      placeMap.fitBounds([[lat - dLat, lon - dLon], [lat + dLat, lon + dLon]]);
+      setTimeout(function() {{ placeMap.invalidateSize(); }}, 0);
+    }}
   }});
   el.addEventListener('mouseleave', function() {{
     tooltip.style.display = '';
