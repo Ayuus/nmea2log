@@ -1078,6 +1078,17 @@ document.querySelectorAll('.temp-hover').forEach(function(el) {{
   }});
   el.addEventListener('mouseleave', hideSoon);
 }});
+// A place-name tooltip has no mouseleave equivalent on a touch device (there's no mouse to move
+// away) -- tapping the map inside it to pan/zoom would otherwise leave no way to dismiss it at
+// all. Tapping/clicking anywhere outside both the trigger and its own tooltip closes it, on any
+// input device.
+document.addEventListener('click', function(e) {{
+  document.querySelectorAll('.place-hover').forEach(function(el) {{
+    if (!el.contains(e.target)) {{
+      el.querySelector('.temp-tooltip').style.display = '';
+    }}
+  }});
+}});
 document.querySelectorAll('.show-map').forEach(function(btn) {{
   btn.addEventListener('click', function() {{
     var idx = btn.dataset.trip;
