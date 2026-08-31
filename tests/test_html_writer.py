@@ -5,6 +5,7 @@ from pathlib import Path
 
 from nmea2000processor.html_writer import write_html_logbook
 from nmea2000processor.tripbuilder import BatteryHealth, EngineHealth, NavSample, TripLeg
+from nmea2000processor.weather import HourlyWeather
 
 
 def _trip(**overrides) -> TripLeg:
@@ -512,6 +513,39 @@ def test_write_html_logbook_no_log_table_with_a_single_track_point(tmp_path: Pat
 
     html = out_path.read_text(encoding="utf-8")
     assert 'class="show-log"' not in html
+
+
+def test_write_html_logbook_shows_weather_columns_in_the_log_when_a_weather_fetcher_is_given(
+    tmp_path: Path,
+):
+    class _FakeWeather:
+        def hour(self, lat, lon, when):
+            return HourlyWeather(wind_kn=8.3, wind_deg=292, precip_mm=0.1, cloud_pct=7)
+
+    track = _track_every_10_minutes(10)  # 0..90 minutes
+    trip = _trip(track=track)
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([trip], out_path, utc_offset_hours=0, weather=_FakeWeather())
+
+    log_table = _log_table_html(out_path.read_text(encoding="utf-8"))
+    assert "Wind" in log_table and "Neerslag" in log_table and "Bewolking" in log_table
+    assert "8,3 kn WNW" in log_table  # 292 deg rounds to the WNW compass point
+    assert "0,1 mm" in log_table
+    assert "7%" in log_table
+
+
+def test_write_html_logbook_no_weather_columns_without_a_weather_fetcher(tmp_path: Path):
+    track = _track_every_10_minutes(10)
+    trip = _trip(track=track)
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([trip], out_path, utc_offset_hours=0)
+
+    log_table = _log_table_html(out_path.read_text(encoding="utf-8"))
+    assert "Wind" in log_table  # the column header is always shown
+    # but every data cell for it is empty -- no stray "kn"/"mm"/"%" values with nothing behind them
+    assert "kn WNW" not in log_table
 
 
 def test_write_html_logbook_shows_the_latest_trips_arrival_as_last_updated(tmp_path: Path):

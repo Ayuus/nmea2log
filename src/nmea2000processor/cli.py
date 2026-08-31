@@ -11,6 +11,7 @@ from .ascii_reader import iter_frames
 from .config import load_section
 from .ebl_reader import iter_frames as iter_frames_ebl
 from .geocode import Geocoder, NoGeocoder
+from .weather import NoWeather, WeatherFetcher
 from .gpx_writer import write_gpx
 from .html_writer import _DEFAULT_LOG_INTERVAL_MINUTES, _DEFAULT_REMARKS_API_URL, write_html_logbook
 from .log import DEFAULT_LOG_RETENTION_DAYS, log, set_log_file
@@ -401,6 +402,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--language", type=str, default="nl", help="Language for port names (default nl)")
     parser.add_argument(
+        "--no-weather",
+        action="store_true",
+        help="Skip the online historical weather lookup; the log table's wind/precipitation/"
+        "cloud cover columns stay empty",
+    )
+    parser.add_argument(
+        "--weather-cache-file",
+        type=Path,
+        default=Path(".weather_cache.json"),
+        help="Cache file for historical weather (default .weather_cache.json)",
+    )
+    parser.add_argument(
         "--download-failed",
         action="store_true",
         help="Marks the 'Laatst bijgewerkt' timestamp in the HTML logbook in red -- pass this "
@@ -567,6 +580,7 @@ def _apply_config_defaults(parser: argparse.ArgumentParser) -> None:
         ("max_gap_minutes", float),
         ("min_trip_distance_nm", float),
         ("cache_file", Path),
+        ("weather_cache_file", Path),
         ("language", str),
         ("utc_offset", float),
         ("boat_name", str),
@@ -586,6 +600,8 @@ def _apply_config_defaults(parser: argparse.ArgumentParser) -> None:
             defaults[key] = caster(section[key])
     if "no_geocode" in section:
         defaults["no_geocode"] = _bool(section["no_geocode"])
+    if "no_weather" in section:
+        defaults["no_weather"] = _bool(section["no_weather"])
     if "no_sample_cache" in section:
         defaults["no_sample_cache"] = _bool(section["no_sample_cache"])
     if "csv" in section:
@@ -767,6 +783,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         all_engine, all_trip_fuel, all_rpm = _filter_to_dominant_engine(all_engine, all_trip_fuel, all_rpm)
 
     geocoder = NoGeocoder() if args.no_geocode else Geocoder(cache_file=args.cache_file, language=args.language)
+    weather = NoWeather() if args.no_weather else WeatherFetcher(cache_file=args.weather_cache_file)
 
     trips = build_trips(
         all_fixes,
@@ -821,6 +838,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         fetch_failed=args.download_failed,
         log_interval_minutes=args.log_interval_minutes,
         remarks_api_url=args.remarks_api_url,
+        weather=weather,
     )
     log(f"[ok] HTML logbook written: {html_path} ({len(trips)} trip(s))")
 

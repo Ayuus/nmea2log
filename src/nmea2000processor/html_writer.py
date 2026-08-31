@@ -44,6 +44,7 @@ from .logbook_writer import (
 )
 from .translations import MONTH_ABBR_NL, NL as T
 from .tripbuilder import NavSample, TripLeg
+from .weather import NoWeather
 
 _LEAFLET_CSS = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
 _LEAFLET_JS = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
@@ -388,7 +389,19 @@ def _details_row_html(icon: str, label: str, value: str) -> str:
     )
 
 
-def _details_cell_html(trip: TripLeg, idx: int, interval_minutes: float, offset_hours: float) -> str:
+_COMPASS_POINTS = (
+    "N", "NNO", "NO", "ONO", "O", "OZO", "ZO", "ZZO",
+    "Z", "ZZW", "ZW", "WZW", "W", "WNW", "NW", "NNW",
+)
+
+
+def _compass_abbr(deg: float) -> str:
+    return _COMPASS_POINTS[round(deg / 22.5) % 16]
+
+
+def _details_cell_html(
+    trip: TripLeg, idx: int, interval_minutes: float, offset_hours: float, weather
+) -> str:
     """Button + <dialog> popup (like the map, not inline) bundling water temperature, motion
     (roll/pitch), and the periodic course/speed/position log together -- these each used to be
     their own always-visible column, which blew the trips table's width out badly (found in
@@ -424,9 +437,21 @@ def _details_cell_html(trip: TripLeg, idx: int, interval_minutes: float, offset_
             cog_text = f"{_nl_num(entry.cog_deg, 0)}&deg;" if entry.cog_deg is not None else ""
             sog_text = f"{_nl_num(entry.sog_ms / _KNOT_IN_MS)} kn"
             position_text = f"{entry.lat:.4f}, {entry.lon:.4f}"
+            # Not a measurement from the boat itself -- regional weather-model data for the
+            # nearest grid cell at this hour (see weather.py), one lookup per log row rather than
+            # one per trip, since wind in particular can change a lot over a longer trip (found in
+            # practice: 1.8 to 9.7 kn across a single ~4.5 hour trip).
+            hourly = weather.hour(entry.lat, entry.lon, entry.time)
+            if hourly is not None and hourly.wind_kn is not None and hourly.wind_deg is not None:
+                wind_text = f"{_nl_num(hourly.wind_kn)} kn {_compass_abbr(hourly.wind_deg)}"
+            else:
+                wind_text = ""
+            precip_text = f"{_nl_num(hourly.precip_mm, 1)} mm" if hourly and hourly.precip_mm is not None else ""
+            cloud_text = f"{_nl_num(hourly.cloud_pct, 0)}%" if hourly and hourly.cloud_pct is not None else ""
             rows.append(
                 f"<tr><td>{number_text}</td><td>{local_time:%H:%M}</td><td>{position_text}</td>"
-                f"<td>{cog_text}</td><td>{sog_text}</td></tr>"
+                f"<td>{cog_text}</td><td>{sog_text}</td>"
+                f"<td>{wind_text}</td><td>{precip_text}</td><td>{cloud_text}</td></tr>"
             )
         sections.append(
             f'<div class="detail-row"><span class="detail-icon">🧭</span>'
@@ -435,6 +460,8 @@ def _details_cell_html(trip: TripLeg, idx: int, interval_minutes: float, offset_
             f"<th>{escape(T['log_header_number'])}</th>"
             f"<th>{escape(T['log_header_time'])}</th><th>{escape(T['log_header_position'])}</th>"
             f"<th>{escape(T['log_header_cog'])}</th><th>{escape(T['log_header_sog'])}</th>"
+            f"<th>{escape(T['log_header_wind'])}</th><th>{escape(T['log_header_precip'])}</th>"
+            f"<th>{escape(T['log_header_cloud'])}</th>"
             f'</tr></thead><tbody>{"".join(rows)}</tbody></table>'
         )
 
@@ -539,7 +566,10 @@ def _trip_row_html(
     log_interval_minutes: float = _DEFAULT_LOG_INTERVAL_MINUTES,
     seq: Optional[int] = None,
     remarks_api_url: str = _DEFAULT_REMARKS_API_URL,
+    weather=None,
 ) -> str:
+    if weather is None:
+        weather = NoWeather()
     offset = _trip_utc_offset_hours(trip, utc_offset_hours)
     depart_local = _to_local(trip.depart_time, offset)
     arrive_local = _to_local(trip.arrive_time, offset)
@@ -567,7 +597,7 @@ def _trip_row_html(
         _typical_rpm_html(trip),
         _warnings_html(trip, battery_warning_voltage, offset),
         map_cell,
-        _details_cell_html(trip, idx, log_interval_minutes, offset),
+        _details_cell_html(trip, idx, log_interval_minutes, offset, weather),
     ]
     if remarks_api_url:
         cells.append(_remarks_cell_html(trip_uid, idx, remarks_api_url))
@@ -661,6 +691,7 @@ def write_html_logbook(
     fetch_failed: bool = False,
     log_interval_minutes: float = _DEFAULT_LOG_INTERVAL_MINUTES,
     remarks_api_url: str = _DEFAULT_REMARKS_API_URL,
+    weather=None,
 ) -> None:
     """``trip_uids``: one id per trip, in the same order as ``trips`` *before* sorting -- e.g.
     from ``trip_ids.assign_trip_ids(trips)``. Embedded as an invisible ``data-uid`` attribute on
@@ -681,7 +712,12 @@ def write_html_logbook(
     the caller (see --download-failed) knows whether the fetch step itself succeeded.
 
     ``remarks_api_url``: URL of the WordPress REST endpoint that stores per-trip remarks (see
-    ``wordpress-plugin/``). Empty (default) disables the whole Remarks column."""
+    ``wordpress-plugin/``). Empty (default) disables the whole Remarks column.
+
+    ``weather``: a weather.WeatherFetcher (or weather.NoWeather, the default) -- adds wind/
+    precipitation/cloud-cover columns to each trip's own periodic log table (see
+    _details_cell_html), one lookup per log row rather than one per trip, since wind especially
+    can change a lot over a longer trip."""
     trips = list(trips)
     uid_by_trip = {id(trip): uid for trip, uid in zip(trips, trip_uids)} if trip_uids is not None else {}
     trips = sorted(trips, key=lambda t: t.depart_time)
@@ -766,6 +802,7 @@ def write_html_logbook(
                     log_interval_minutes,
                     seq_by_index[i],
                     remarks_api_url,
+                    weather=weather,
                 )
                 for i in indices
             )

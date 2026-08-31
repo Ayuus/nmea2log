@@ -134,13 +134,17 @@ the tests.
    the matched feature's OSM type is something boats actually tie up to (marina, harbour, quay,
    ...) or not. This is a coarse heuristic (there's no coastline data to check against), not a
    real "is the boat touching the shore" measurement.
-5. **Writing the logbook** (`logbook_writer.py`, only with `--csv`): CSV with English column names
+5. **Weather** (`weather.py`): each row of the periodic "Log" table also gets wind speed/direction,
+   precipitation and cloud cover for that position and hour, looked up from Open-Meteo's free
+   historical weather archive (a regional weather model, not an on-board sensor -- so treat it as
+   indicative, not exact) and cached locally so the same position/hour is never looked up twice.
+6. **Writing the logbook** (`logbook_writer.py`, only with `--csv`): CSV with English column names
    but Dutch Excel convention for the values (`;` as the delimiter, `,` as the decimal separator)
    — opens correctly right away in Dutch-locale Excel.
-6. **Writing the route** (`gpx_writer.py`, only with `--gpx`): a GPX file (same file name, `.gpx`
+7. **Writing the route** (`gpx_writer.py`, only with `--gpx`): a GPX file (same file name, `.gpx`
    extension) with one track per trip. Click a track in a map program and you see a name and
    description with duration, distance, fuel, and engine hours for that trip.
-7. **HTML logbook** (`html_writer.py`): one self-contained `.html` file (same file name, `.html`
+8. **HTML logbook** (`html_writer.py`): one self-contained `.html` file (same file name, `.html`
    extension) — no separate map file or workbook needed anymore. At the top, the boat name
    (`--boat-name`, or the `boat_name` setting in the config file) and totals: trip count, total
    distance, fuel, average consumption, top speed, **engine hour meter** (the absolute reading
@@ -154,9 +158,10 @@ the tests.
    a CDN, so **viewing** requires internet (generating doesn't). Trips with a logged water
    temperature also get a colored badge (blue → red by temperature). Each trip with a track also
    has a "Log" button — a traditional periodic logbook table (time, position, course over ground,
-   speed), sampled every `--log-interval-minutes` (default 30) plus always the trip's own start
-   and end. Unlike the map, this needs no JavaScript or internet to display (native HTML
-   `<details>`), so it also works when the file is opened from an email attachment.
+   speed, and, unless `--no-weather` is passed, wind/precipitation/cloud cover), sampled every
+   `--log-interval-minutes` (default 30) plus always the trip's own start and end. Unlike the map,
+   this needs no JavaScript or internet to display (native HTML `<details>`), so it also works
+   when the file is opened from an email attachment.
 
 ## Installation
 
@@ -376,6 +381,8 @@ the popup itself.
 | `--lock-max-duration-minutes` | Max engine-off duration for a confined stop to still count as a lock/bridge (default 120, i.e. 2 hours) |
 | `--no-geocode` | No internet needed; shows coordinates instead of port names |
 | `--cache-file` | Path to the cache file for port names (default `.geocode_cache.json`) |
+| `--no-weather` | No internet needed; the Log table's wind/precipitation/cloud cover columns stay empty |
+| `--weather-cache-file` | Path to the cache file for historical weather (default `.weather_cache.json`) |
 | `--start-date` | Force the start date of the first log file (`YYYY-MM-DD`); not applicable with `--live` |
 | `--utc-offset HOURS` | Fixed timezone offset (e.g. `2` for CEST) for the displayed times. Default: automatically estimated per trip from the departure position |
 | `--boat-name NAME` | Boat name at the top of the HTML logbook (default: none, or the `boat_name` setting from the config file) |
@@ -460,6 +467,11 @@ pytest
   usage policy allows at most 1 request/second; that's respected, but for heavy/commercial use a
   dedicated Nominatim instance or a paid service is better. If you get wrong names, check the raw
   cache in `.geocode_cache.json`.
+- **Weather data** comes from Open-Meteo's historical archive, which snaps each lookup to the
+  nearest weather-model grid cell — confirmed in practice to be several km off from the requested
+  position — so treat it as "roughly what conditions were like nearby", not a precise reading at
+  the boat's exact spot. If you get wrong-looking values, check the raw cache in
+  `.weather_cache.json`.
 - **Multiple engines**: the code supports multiple `instance` numbers (fuel is summed, engine
   hours shown per engine separately), but hasn't been tested with a real twin-engine
   installation.

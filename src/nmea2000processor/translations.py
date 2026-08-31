@@ -46,7 +46,7 @@ NL: Dict[str, str] = {
     "header_water_temp": "Watertemperatuur",
     "header_motion": "Beweging",
     "header_route": "Route",
-    "header_details": "Details",
+    "header_details": "Log",
     "header_remarks": "Opmerkingen",
     # Week divider row, e.g. "Week 32 (11 aug - 17 aug)"
     "week_label_prefix": "Week",
@@ -80,7 +80,7 @@ NL: Dict[str, str] = {
     "map_marker_departure": "Vertrek",
     "map_marker_arrival": "Aankomst",
     # Details popup (water temperature, motion, periodic log)
-    "details_button": "Details",
+    "details_button": "Log",
     "details_log_heading": "Log",
     "log_close_button": "Sluiten",
     "log_header_number": "Nr.",
@@ -88,6 +88,9 @@ NL: Dict[str, str] = {
     "log_header_position": "Positie",
     "log_header_cog": "Koers",
     "log_header_sog": "Snelheid",
+    "log_header_wind": "Wind",
+    "log_header_precip": "Neerslag",
+    "log_header_cloud": "Bewolking",
     # Remarks button + popup. Auth for both reading and saving rides on the WordPress login
     # session that got you to the (login-gated) logbook page in the first place -- no separate
     # username/password step here, see wordpress-plugin/little_endian-index.php.
