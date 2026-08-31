@@ -37,4 +37,3 @@ if defined VIEW_URL (
 ) else (
     start "" "%OUTPUT:.csv=.html%"
 )
-pause
