@@ -22,17 +22,13 @@ the tests.
 
 ## How it works
 
-1. **Reading** — two file formats, chosen automatically by extension:
-   - `.ebl` (`ebl_reader.py`): the binary format of the W2K-2's **SD card logging feature**
-     (BST-95 CAN-raw). The app has to reassemble NMEA2000 Fast Packet frames itself here. This
-     format is reverse-engineered (see "Assumptions & limitations"), but has since been
-     validated against real SD card logs from a W2K-2 with a Yanmar 4LV195Z engine: a complete
-     cold engine start (fuel rate, oil pressure buildup, warming up, engine-hour meter, even the
-     "Preheat Indicator" warning during glow-plug preheating) came out physically plausible and
-     internally consistent.
-   - everything else, e.g. `.raw`/`.n2k` (`ascii_reader.py`): an *N2K ASCII* log file, such as
-     you can capture with `--live --tee`. Each line has already been reassembled by the Actisense
-     hardware (fast-packet/multi-packet), so no reassembly is needed there.
+1. **Reading** (`ebl_reader.py`): `.ebl` files, the binary format of the W2K-2's **SD card
+   logging feature** (BST-95 CAN-raw). The app has to reassemble NMEA2000 Fast Packet frames
+   itself here. This format is reverse-engineered (see "Assumptions & limitations"), but has
+   since been validated against real SD card logs from a W2K-2 with a Yanmar 4LV195Z engine: a
+   complete cold engine start (fuel rate, oil pressure buildup, warming up, engine-hour meter,
+   even the "Preheat Indicator" warning during glow-plug preheating) came out physically
+   plausible and internally consistent.
 2. **Decoding** (`pgn_decode.py`): picks ten PGNs out of the stream:
    - **127489** (*Engine Parameters, Dynamic*) → fuel rate, engine-hour meter, and health
      indicators (oil pressure/temperature, coolant temperature, alternator voltage, engine load)
@@ -233,12 +229,11 @@ Once configured (see above), day-to-day use is one double-click, no terminal nee
 The rest of this section explains what these do underneath, and the full command-line options,
 for other platforms or more control.
 
-### Option A: stored log files
+### Processing log files
 
-**From the SD card** (no live connection needed — recommended if you don't want to depend on a
-connection while sailing): download the `.ebl` files, either manually via the W2K-2's web
-interface ("Download Logs"), or automatically with the included `nmea2log-download` command
-(reads `nmea2log.ini`, see "Configuration" above):
+**From the SD card**: download the `.ebl` files, either manually via the W2K-2's web interface
+("Download Logs"), or automatically with the included `nmea2log-download` command (reads
+`nmea2log.ini`, see "Configuration" above):
 
 ```bash
 nmea2log-download
@@ -261,47 +256,14 @@ This EBL path is reverse-engineered (see "Assumptions & limitations") and has si
 validated against real SD card logs — when in doubt, always check that the outcome feels
 plausible for your own boat/engine.
 
-**Alternative**: capture the N2K ASCII stream from a Data Server to a file, for example by
-running `nmea2log --live ... --tee 2026-07-15.raw` (see Option B), or with another terminal
-program that writes the TCP stream to a file. This needs one of the W2K-2's three independent
-"data servers" (in the device's web interface, default ports 60001-60003) set to **protocol TCP**
-and **format N2K ASCII** — the EBL/SD-card path above doesn't need this at all. Preferably name the file with a date in it, e.g.
-`2026-07-15.raw` — that's used to correctly detect midnight rollovers (the time-of-day in the
-format doesn't itself contain a date; `.ebl` files don't have this problem, they get their time
-from the data itself).
-
-```bash
-nmea2log 2026-07-15.raw -o logbook.csv
-```
-
 This writes `logbook.html` (the self-contained HTML logbook with totals, year/week grouping, and
 clickable maps). Add `--csv` and/or `--gpx` to also get `logbook.csv` and/or `logbook.gpx` (the
 route per trip).
 
-Processing multiple files at once (e.g. one per day, `.ebl` and `.raw` mixed together):
+Processing multiple files at once (e.g. one per day):
 
 ```bash
-nmea2log 2026-07-14.raw 2026-07-15.ebl 2026-07-16.raw -o logbook.csv
-```
-
-### Option B: live reading
-
-Connect directly to the W2K-2 while sailing. Needs the same data-server setup mentioned above
-(protocol TCP, format N2K ASCII). Replace `192.168.4.1` with the W2K-2's IP address on your
-network (found on the device's status page/web interface):
-
-```bash
-nmea2log --live 192.168.4.1 -o logbook.csv
-```
-
-The session keeps running until you press Ctrl+C (or `--duration` elapses); after that, the
-logbook is written with everything that came in up to that point — a trip that hasn't yet been
-closed off by a new port visit gets "Unknown (end outside log file)" as its arrival port. With
-`--tee` you also keep the raw ASCII stream to a file at the same time, so you get both live
-processing and a permanent log file:
-
-```bash
-nmea2log --live 192.168.4.1:60001 --tee 2026-07-16.raw -o logbook.csv
+nmea2log Actisense/EBL000000/000000_014.ebl Actisense/EBL000000/000000_015.ebl -o logbook.csv
 ```
 
 ### Uploading the logbook
@@ -370,9 +332,6 @@ the popup itself.
 |---|---|
 | `--csv` | Also write the CSV logbook (default: only the HTML logbook is written) |
 | `--gpx` | Also write the GPX route file (default: only the HTML logbook is written) |
-| `--live HOST[:PORT]` | Connect live to the W2K-2 over TCP instead of processing files (default port 60001) |
-| `--tee PATH` | Only with `--live`: also save the raw incoming ASCII lines to this file |
-| `--duration SECONDS` | Only with `--live`: stop automatically after this many seconds |
 | `--speed-threshold-kn` | Speed (kn) below which the boat counts as 'stationary' (default 0.5) |
 | `--min-stop-minutes` | Minimum stationary duration to count as a port visit (default 10) |
 | `--max-gap-minutes` | From how many minutes without data a trip gets cut short (default: same as `--min-stop-minutes`) |
@@ -383,7 +342,6 @@ the popup itself.
 | `--cache-file` | Path to the cache file for port names (default `.geocode_cache.json`) |
 | `--no-weather` | No internet needed; the Log table's wind/precipitation/cloud cover columns stay empty |
 | `--weather-cache-file` | Path to the cache file for historical weather (default `.weather_cache.json`) |
-| `--start-date` | Force the start date of the first log file (`YYYY-MM-DD`); not applicable with `--live` |
 | `--utc-offset HOURS` | Fixed timezone offset (e.g. `2` for CEST) for the displayed times. Default: automatically estimated per trip from the departure position |
 | `--boat-name NAME` | Boat name at the top of the HTML logbook (default: none, or the `boat_name` setting from the config file) |
 | `--mmsi MMSI` | MMSI at the top of the HTML logbook (default: none, or the `mmsi` setting from the config file) |
@@ -394,7 +352,7 @@ the popup itself.
 | `--remarks-api-url` | URL of a WordPress REST endpoint storing per-trip remarks (see "Per-trip remarks" above). Default: disabled |
 | `--download-failed` | Marks the "Laatst bijgewerkt" timestamp in the HTML logbook in red -- pass this when a preceding download step failed, so it's visible at a glance that this run didn't get new data (set automatically by `nmea2log.bat`) |
 | `--engine-count N` | Number of physical engines. With `1`, any extra engine instance in the data is ignored as noise (same idea as the GPS source-dominance filtering) |
-| `--ebl-dir DIR` | Folder to search recursively for `.ebl` files when no logfiles are given and `--live` isn't used either. Default: not set, or the `ebl_dir` setting from the config file |
+| `--ebl-dir DIR` | Folder to search recursively for `.ebl` files when no logfiles are given. Default: not set, or the `ebl_dir` setting from the config file |
 | `--battery-warning-voltage V` | Flags a trip's battery voltage as low in the 'Warnings' column if it drops below this at any point (default 12.2 V; a common threshold for a 12V lead-acid battery -- adjust for a 24V system or a different chemistry) |
 
 All NMEA2000 times are UTC; in the CSV, the HTML logbook, and the GPX track names this is
@@ -430,14 +388,6 @@ pytest
   confirmed (`w2k2_download.py` tries a number of common names, see `_TOKEN_KEYS`); if login
   succeeds but no token is found, the command shows the raw response so the right name can be
   added.
-- **Line format (N2K ASCII)**: the parser is built from Actisense's official documentation on
-  their website — the knowledge-base article
-  ["NMEA 2000 ASCII Output format"](https://actisense.com/knowledge-base/nmea-2000/w2k-1-nmea-2000-to-wifi-gateway/nmea-2000-ascii-output-format/)
-  and the [W2K-2 User Manual](https://actisense.com/products/w2k-2-nmea-2000-wifi-gateway/) (see
-  the product page, downloads tab) — and the [canboat](https://github.com/canboat/canboat) PGN
-  dictionary. I haven't been able to test this against a real log from your own W2K-2 — check
-  the first few lines of a real log file against the regex in `ascii_reader.py` (`_LINE_RE`) and
-  adjust it if it differs.
 - **EBL format (SD card log)**: this format has never been officially published by Actisense.
   `ebl_reader.py` is based on reverse-engineering by the open-source Go library
   [aldas/go-nmea-client](https://github.com/aldas/go-nmea-client) (Apache-2.0 license;
@@ -495,8 +445,6 @@ pytest
   CLI reports on stderr which source was chosen as primary whenever there's more than one.
   **Caveat**: "most messages" is a proxy, not a quality assessment — GPS accuracy (HDOP,
   satellite count, fix type) isn't taken into account.
-- **Date**: the N2K ASCII format only contains a time of day, no date. Make sure every log file
-  has a date in its name (`YYYY-MM-DD...`), otherwise the file's modification date is used.
 - **Water depth**: the app uses the raw "Depth" value from PGN 128267 (depth under the
   transducer), without adding the transducer offset — usually that's already the value
   instruments show by default, but check this against your own depth-sounder settings.
@@ -504,11 +452,6 @@ pytest
   standard list (canboat's ENGINE_STATUS_1/2). Some manufacturers use deviating or additional
   proprietary status bits for this — check this against your own engine documentation if a
   warning shows up unexpectedly or is missing.
-- **Live mode (`--live`)** only supports **TCP** (the W2K-2 manual also recommends this because
-  of built-in error correction; UDP-only isn't implemented). On a dropped connection, the session
-  stops and the logbook is written with whatever came in up to that point — there's no automatic
-  reconnect. The default port (60001) corresponds to "Data Server 1" on the W2K-2; check the
-  device's web interface for which server is set to TCP + N2K ASCII and which port it uses.
 
 ## Working with Claude Code on this project
 

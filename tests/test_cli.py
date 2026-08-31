@@ -289,10 +289,10 @@ def _stub_one_trip_samples(monkeypatch):
 
     fixed_samples = ({10: fixes}, {10: sogs}, [], [], {}, {}, {}, [], {})
     monkeypatch.setattr(
-        "nmea2000processor.cli._collect_samples", lambda frames, deadline=None: fixed_samples
+        "nmea2000processor.cli._collect_samples", lambda frames: fixed_samples
     )
     monkeypatch.setattr(
-        "nmea2000processor.cli._iter_frames_for_path", lambda path, start_date, state: iter([])
+        "nmea2000processor.cli._iter_frames_for_path", lambda path, state: iter([])
     )
 
 
@@ -436,14 +436,14 @@ def test_main_reuses_cached_samples_on_a_second_run(tmp_path, monkeypatch, capsy
         {},
     )
 
-    def fake_collect_samples(frames, deadline=None):
+    def fake_collect_samples(frames):
         nonlocal call_count
         call_count += 1
         return fixed_samples
 
     monkeypatch.setattr("nmea2000processor.cli._collect_samples", fake_collect_samples)
     monkeypatch.setattr(
-        "nmea2000processor.cli._iter_frames_for_path", lambda path, start_date, state: iter([])
+        "nmea2000processor.cli._iter_frames_for_path", lambda path, state: iter([])
     )
 
     cache_file = tmp_path / "cache.pkl"
@@ -497,10 +497,10 @@ def _run_with_one_trip(tmp_path: Path, monkeypatch, extra_args=()):
         {},
     )
     monkeypatch.setattr(
-        "nmea2000processor.cli._collect_samples", lambda frames, deadline=None: fixed_samples
+        "nmea2000processor.cli._collect_samples", lambda frames: fixed_samples
     )
     monkeypatch.setattr(
-        "nmea2000processor.cli._iter_frames_for_path", lambda path, start_date, state: iter([])
+        "nmea2000processor.cli._iter_frames_for_path", lambda path, state: iter([])
     )
     output = tmp_path / "logbook.csv"
     main([str(ebl_path), "-o", str(output), "--no-geocode", "--no-sample-cache", *extra_args])

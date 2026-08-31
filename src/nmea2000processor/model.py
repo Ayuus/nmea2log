@@ -7,7 +7,8 @@ from typing import FrozenSet, Optional
 
 @dataclass(frozen=True)
 class Frame:
-    """A single NMEA2000 message, already reassembled by the Actisense hardware (N2K ASCII format)."""
+    """A single, fully reassembled NMEA2000 message (Fast Packet frames already joined back
+    together, see ebl_reader.py)."""
 
     time: datetime
     source: int

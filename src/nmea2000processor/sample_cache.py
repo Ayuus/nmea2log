@@ -2,10 +2,6 @@
 have to re-parse the whole season's worth of log files every time -- only the file(s) that are
 new or have grown since the last run. A real multi-day log easily has hundreds of files, and in
 practice only the newest one or two ever change between runs.
-
-Not used for the N2K ASCII path (.raw/.n2k, --live --tee): those aren't the "hundreds of files"
-problem this exists for, and their decoding also depends on --start-date, which complicates
-caching for no real benefit there.
 """
 
 from __future__ import annotations

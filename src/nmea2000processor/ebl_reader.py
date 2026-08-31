@@ -6,7 +6,7 @@ implementation in github.com/aldas/go-nmea-client (actisense/eblreader.go) and v
 hand against the test vectors in it (including a PGN 129025 example that decodes exactly to
 priority=2, pgn=129025, source=0, destination=255).
 
-Important difference from the N2K ASCII path (``ascii_reader.py``):
+Two properties of the format that shape the reader below:
 
 1. EBL contains **raw CAN frames** (max. 8 data bytes), so PGNs larger than 8 bytes (for us:
    127489 and 127497) have to be reassembled ourselves via the NMEA2000 "Fast Packet"

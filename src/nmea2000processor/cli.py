@@ -2,12 +2,10 @@ from __future__ import annotations
 
 import argparse
 import sys
-import time
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple, TypeVar
 
-from .ascii_reader import iter_frames
 from .config import load_section
 from .ebl_reader import iter_frames as iter_frames_ebl
 from .geocode import Geocoder, NoGeocoder
@@ -28,7 +26,6 @@ from .model import (
     TripFuelSample,
     WaterTempSample,
 )
-from .network_reader import DEFAULT_PORT, iter_frames_tcp
 from .sample_cache import SampleCache
 from .pgn_decode import (
     PGN_ATTITUDE,
@@ -90,9 +87,9 @@ def _dominant_source_only(by_source: Dict[int, List[_T]]) -> List[_T]:
     send position or speed over ground). Without filtering, their independent, slightly
     differing readings get interleaved purely by time, which causes hundreds of small false
     "jumps" that together can significantly inflate the distance. We therefore only keep the
-    source that sent the most messages -- across the whole session (all files/the whole live
-    connection) together, not per file, otherwise a different source could "win" in each file
-    and the problem would just come back at the seam between files."""
+    source that sent the most messages -- across all files together, not per file, otherwise a
+    different source could "win" in each file and the problem would just come back at the seam
+    between files."""
     if not by_source:
         return []
     dominant_source = max(by_source, key=lambda source: len(by_source[source]))
@@ -152,7 +149,7 @@ def _select_primary_gps_source(
 
 
 def _collect_samples(
-    frames: Iterable[Frame], *, deadline: Optional[float] = None
+    frames: Iterable[Frame],
 ) -> Tuple[
     Dict[int, List[PositionFix]],
     Dict[int, List[SogSample]],
@@ -165,8 +162,8 @@ def _collect_samples(
     Dict[int, List[AttitudeSample]],
 ]:
     """Processes frames into samples, grouped by source address for PGNs that can come from
-    multiple devices at once. Stops cleanly on Ctrl+C or once the deadline passes, so a live
-    session always produces a logbook of whatever came in up to that point."""
+    multiple devices at once. Stops cleanly on Ctrl+C, so an interrupted run still produces a
+    logbook of whatever came in up to that point."""
     fixes_by_source: Dict[int, List[PositionFix]] = {}
     sogs_by_source: Dict[int, List[SogSample]] = {}
     depth_by_source: Dict[int, List[DepthSample]] = {}
@@ -178,9 +175,6 @@ def _collect_samples(
     rpm_samples: List[EngineRpmSample] = []
     try:
         for frame in frames:
-            if deadline is not None and time.monotonic() >= deadline:
-                log("[info] Duration elapsed; closing live session...", file=sys.stderr)
-                break
             if frame.pgn == PGN_POSITION_RAPID:
                 decoded = decode_position_rapid(frame.data)
                 if decoded is not None:
@@ -243,67 +237,33 @@ def _collect_samples(
 
 
 def _iter_frames_for_path(
-    path: Path, start_date: Optional[date], ebl_time_state: Optional[Dict[str, object]] = None
+    path: Path, ebl_time_state: Optional[Dict[str, object]] = None
 ) -> Iterable[Frame]:
-    """Picks the right parser based on the file extension: .ebl -> binary SD card log,
-    everything else -> N2K ASCII (live TCP stream captured to a file, see --tee).
-
-    ``ebl_time_state`` is passed to consecutive .ebl files so the last known time (PGN 126992)
+    """``ebl_time_state`` is passed to consecutive .ebl files so the last known time (PGN 126992)
     is preserved across file boundaries -- otherwise a file without its own System Time message
     (e.g. anchored for a long time, GPS/plotter idle) gets discarded entirely, even though the
     time is already known from the previous file (see ebl_reader.py)."""
-    if path.suffix.lower() == ".ebl":
-        return iter_frames_ebl(path, time_state=ebl_time_state, wanted_pgns=_WANTED_PGNS)
-    return iter_frames(path, start_date=start_date)
+    return iter_frames_ebl(path, time_state=ebl_time_state, wanted_pgns=_WANTED_PGNS)
 
 
 def _discover_ebl_files(ebl_dir: Path) -> List[Path]:
     """Every .ebl file found recursively under ``ebl_dir``, sorted -- used when nmea2log is
-    called without any logfiles/--live (see --ebl-dir), so you don't have to select or drag
-    files by hand after downloading them."""
+    called without any logfiles (see --ebl-dir), so you don't have to select or drag files by
+    hand after downloading them."""
     return sorted(ebl_dir.rglob("*.ebl"))
-
-
-def _parse_host_port(value: str, default_port: int) -> Tuple[str, int]:
-    if ":" in value:
-        host, _, port_str = value.rpartition(":")
-        return host, int(port_str)
-    return value, default_port
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="nmea2log",
-        description="Turn NMEA2000 data from an Actisense W2K-2 (N2K ASCII) into a sailing logbook (CSV), "
-        "from stored log files or live over a TCP connection.",
+        description="Turn NMEA2000 log files from an Actisense W2K-2 into a sailing logbook (CSV).",
     )
     parser.add_argument(
         "logfiles",
         nargs="*",
         type=Path,
-        help="One or more log files: .ebl (SD card log from the W2K-2) or .raw/.n2k (N2K ASCII, "
-        "e.g. captured via --live --tee). Do not combine with --live. If omitted (and --live "
-        "isn't used either), falls back to every .ebl file found under --ebl-dir.",
-    )
-    parser.add_argument(
-        "--live",
-        metavar="HOST[:PORT]",
-        default=None,
-        help=f"Connect live to the W2K-2 over TCP (e.g. 192.168.4.1 or 192.168.4.1:60001; "
-        f"default port {DEFAULT_PORT}). Runs until Ctrl+C or --duration elapses.",
-    )
-    parser.add_argument(
-        "--duration",
-        type=float,
-        default=None,
-        help="Only with --live: stop automatically after this many seconds",
-    )
-    parser.add_argument(
-        "--tee",
-        type=Path,
-        default=None,
-        help="Only with --live: also write the raw incoming ASCII lines to this file "
-        "(appending), so alongside live processing you also end up with a log file",
+        help="One or more .ebl log files (SD card log from the W2K-2). If omitted, falls back to "
+        "every .ebl file found under --ebl-dir.",
     )
     parser.add_argument(
         "-o", "--output", type=Path, default=Path("logbook.csv"), help="Path to the CSV file (default: logbook.csv)"
@@ -325,13 +285,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=f"How long to keep lines in nmea2log.log (next to the output file) before they're "
         f"automatically dropped -- otherwise that file grows forever (default "
         f"{DEFAULT_LOG_RETENTION_DAYS:g} days)",
-    )
-    parser.add_argument(
-        "--start-date",
-        type=str,
-        default=None,
-        help="Start date YYYY-MM-DD for the first log file (otherwise guessed from the file name or "
-        "modification date). Not applicable with --live or .ebl files (those get their date/time from the data itself).",
     )
     parser.add_argument(
         "--speed-threshold-kn",
@@ -553,8 +506,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="Folder to search recursively for .ebl files when no logfiles are given on the "
-        "command line and --live isn't used either (e.g. the same folder nmea2log-download "
-        "downloads into). Default: not set, or the 'ebl_dir' setting from the config file.",
+        "command line (e.g. the same folder nmea2log-download downloads into). Default: not "
+        "set, or the 'ebl_dir' setting from the config file.",
     )
     _apply_config_defaults(parser)
     return parser
@@ -660,7 +613,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             "config file) to all be set"
         )
 
-    if not args.logfiles and not args.live and args.ebl_dir:
+    if not args.logfiles and args.ebl_dir:
         if not args.ebl_dir.is_dir():
             parser.error(f"--ebl-dir {args.ebl_dir} is not a directory")
         args.logfiles = _discover_ebl_files(args.ebl_dir)
@@ -668,15 +621,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             parser.error(f"no .ebl files found under {args.ebl_dir}")
         log(f"[info] Found {len(args.logfiles)} .ebl file(s) under {args.ebl_dir}.", file=sys.stderr)
 
-    if bool(args.logfiles) == bool(args.live):
-        parser.error(
-            "provide either one or more logfiles, --live HOST[:PORT], or set ebl_dir in the "
-            "config file (not more than one of these)"
-        )
-    if args.duration is not None and not args.live:
-        parser.error("--duration only applies together with --live")
-    if args.tee is not None and not args.live:
-        parser.error("--tee only applies together with --live")
+    if not args.logfiles:
+        parser.error("provide one or more logfiles, or set ebl_dir in the config file")
 
     fixes_by_source: Dict[int, List[PositionFix]] = {}
     sogs_by_source: Dict[int, List[SogSample]] = {}
@@ -688,79 +634,52 @@ def main(argv: Optional[List[str]] = None) -> int:
     all_trip_fuel: List[TripFuelSample] = []
     all_rpm: List[EngineRpmSample] = []
 
-    if args.live:
-        host, port = _parse_host_port(args.live, DEFAULT_PORT)
-        log(f"[info] Connecting live to {host}:{port}... (Ctrl+C to stop)", file=sys.stderr)
-        try:
-            frames = iter_frames_tcp(host, port, tee_to=args.tee)
-        except OSError as exc:
-            log(f"[error] Could not connect to {host}:{port}: {exc}", file=sys.stderr)
+    ebl_time_state: Dict[str, object] = {}
+    sample_cache = None if args.no_sample_cache else SampleCache(args.sample_cache_file)
+    cache_hits = 0
+    for path in args.logfiles:
+        if not path.exists():
+            log(f"[error] Log file not found: {path}", file=sys.stderr)
             return 1
-        deadline = time.monotonic() + args.duration if args.duration else None
-        (
-            fixes_by_source,
-            sogs_by_source,
-            all_engine,
-            all_trip_fuel,
-            depth_by_source,
-            water_temp_by_source,
-            battery_by_source,
-            all_rpm,
-            attitude_by_source,
-        ) = _collect_samples(frames, deadline=deadline)
-        # Live is real-time by definition -- there's no equivalent to ebl_time_state's running
-        # "last known System Time" to read back afterwards, but "now" is exactly what that would
-        # have converged to anyway.
-        latest_data_at = datetime.now(timezone.utc).replace(tzinfo=None)
-    else:
-        start_date = date.fromisoformat(args.start_date) if args.start_date else None
-        ebl_time_state: Dict[str, object] = {}
-        sample_cache = None if args.no_sample_cache else SampleCache(args.sample_cache_file)
-        cache_hits = 0
-        for index, path in enumerate(args.logfiles):
-            if not path.exists():
-                log(f"[error] Log file not found: {path}", file=sys.stderr)
-                return 1
 
-            is_ebl = path.suffix.lower() == ".ebl"
-            cached = sample_cache.get(path) if sample_cache is not None and is_ebl else None
-            if cached is not None:
-                samples, time_state_after = cached
-                fixes, sogs, engine, trip_fuel, depth, water_temp, battery, rpm, attitude = samples
-                ebl_time_state["current"] = time_state_after
-                cache_hits += 1
-            else:
-                frames = _iter_frames_for_path(path, start_date if index == 0 else None, ebl_time_state)
-                samples = _collect_samples(frames)
-                fixes, sogs, engine, trip_fuel, depth, water_temp, battery, rpm, attitude = samples
-                if sample_cache is not None and is_ebl:
-                    sample_cache.put(path, samples, ebl_time_state.get("current"))
+        cached = sample_cache.get(path) if sample_cache is not None else None
+        if cached is not None:
+            samples, time_state_after = cached
+            fixes, sogs, engine, trip_fuel, depth, water_temp, battery, rpm, attitude = samples
+            ebl_time_state["current"] = time_state_after
+            cache_hits += 1
+        else:
+            frames = _iter_frames_for_path(path, ebl_time_state)
+            samples = _collect_samples(frames)
+            fixes, sogs, engine, trip_fuel, depth, water_temp, battery, rpm, attitude = samples
+            if sample_cache is not None:
+                sample_cache.put(path, samples, ebl_time_state.get("current"))
 
-            _merge_by_source(fixes_by_source, fixes)
-            _merge_by_source(sogs_by_source, sogs)
-            all_engine += engine
-            all_trip_fuel += trip_fuel
-            _merge_by_source(depth_by_source, depth)
-            _merge_by_source(water_temp_by_source, water_temp)
-            _merge_by_source(battery_by_source, battery)
-            all_rpm += rpm
-            _merge_by_source(attitude_by_source, attitude)
+        _merge_by_source(fixes_by_source, fixes)
+        _merge_by_source(sogs_by_source, sogs)
+        all_engine += engine
+        all_trip_fuel += trip_fuel
+        _merge_by_source(depth_by_source, depth)
+        _merge_by_source(water_temp_by_source, water_temp)
+        _merge_by_source(battery_by_source, battery)
+        all_rpm += rpm
+        _merge_by_source(attitude_by_source, attitude)
 
-        if sample_cache is not None:
-            sample_cache.save()
-            if cache_hits:
-                log(
-                    f"[cache] reused decoded samples for {cache_hits}/{len(args.logfiles)} file(s), "
-                    f"only re-parsed {len(args.logfiles) - cache_hits}",
-                    file=sys.stderr,
-                )
+    if sample_cache is not None:
+        sample_cache.save()
+        if cache_hits:
+            log(
+                f"[cache] reused decoded samples for {cache_hits}/{len(args.logfiles)} file(s), "
+                f"only re-parsed {len(args.logfiles) - cache_hits}",
+                file=sys.stderr,
+            )
 
-        # When this run actually happened, not the latest timestamp found in the data -- the
-        # earlier version used the latter (PGN 126992's last known time), but that made "Laatst
-        # bijgewerkt" ambiguous: it looked unchanged after a fresh run whenever the boat itself
-        # hadn't produced new data since the previous run, when what it's actually meant to answer
-        # is "is this page showing a stale file" (found in practice, asked for explicitly).
-        latest_data_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    # When this run actually happened, not the latest timestamp found in the data -- the earlier
+    # version used the latter (PGN 126992's last known time), but that made "Laatst bijgewerkt"
+    # ambiguous: it looked unchanged after a fresh run whenever the boat itself hadn't produced
+    # new data since the previous run, when what it's actually meant to answer is "is this page
+    # showing a stale file" (found in practice, asked for explicitly).
+    latest_data_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
     all_fixes, all_sogs, primary_gps_source = _select_primary_gps_source(fixes_by_source, sogs_by_source)
     all_depth = _dominant_source_only(depth_by_source)
@@ -868,8 +787,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         # unfinished backup just continues from there rather than needing to be retried whole.
         backed_up_count = 0  # set before the try so the except below can always reference it
         try:
-            # Only ever the logfiles this run actually processed (empty in --live mode, since
-            # there are no discrete local files to back up there).
+            # Only ever the logfiles this run actually processed.
             already_backed_up = list_remote_filenames(
                 host=args.upload_host,
                 user=args.upload_user,
