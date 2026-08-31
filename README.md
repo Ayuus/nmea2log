@@ -182,8 +182,6 @@ checked in, since it holds your device password):
 
 ```ini
 [w2k2]
-; IP address or hostname of the W2K-2 on your network.
-url = http://10.164.231.101
 ; Username + password (the download command logs in with these automatically).
 user = admin
 password = your-password-here
@@ -199,9 +197,15 @@ boat_name = Zeevalk
 ebl_dir = Actisense
 ```
 
+The W2K-2's IP address is never configured -- `nmea2log-download` finds it automatically every
+run by scanning this machine's own local subnet for a host whose web interface identifies itself
+as Actisense/W2K-2 (see `discover_w2k2` in `w2k2_download.py`). This only works while this
+machine is on the same wifi network as the W2K-2 (either its own access point, or a shared boat/
+home wifi router both are joined to as clients).
+
 Every setting in `[nmea2log]` can also be passed as a command-line flag instead (see "Useful
 options" below); an explicit flag always overrides what's in the config file. `[w2k2]` only has
-the four keys shown above (see `w2k2_download.py` for the optional `token` alternative to
+the three keys shown above (see `w2k2_download.py` for the optional `token` alternative to
 user/password).
 
 Note: if the project directory is synced (e.g. OneDrive, as in the original setup this was built
@@ -388,6 +392,12 @@ pytest
   confirmed (`w2k2_download.py` tries a number of common names, see `_TOKEN_KEYS`); if login
   succeeds but no token is found, the command shows the raw response so the right name can be
   added.
+- **W2K-2 discovery**: `discover_w2k2` scans this machine's own /24 subnet (up to 254 addresses,
+  ~1 second with concurrent connections) for a host answering on port 80 whose page identifies
+  itself as Actisense/W2K-2. This assumes a /24 network (true for basically every home/boat
+  router) and that this machine is on the same subnet as the W2K-2 -- it won't find a device
+  behind a different router or VLAN. It can't distinguish between multiple W2K-2 units on the
+  same network (picks whichever answers first); not a concern with a single device per boat.
 - **EBL format (SD card log)**: this format has never been officially published by Actisense.
   `ebl_reader.py` is based on reverse-engineering by the open-source Go library
   [aldas/go-nmea-client](https://github.com/aldas/go-nmea-client) (Apache-2.0 license;

@@ -1,5 +1,11 @@
 """Downloads EBL log files from an Actisense W2K-2 via its local web API.
 
+The W2K-2's IP address is never configured -- it's found automatically every run by scanning
+this machine's own local /24 subnet for a host whose web interface identifies itself as
+Actisense/W2K-2 (see ``discover_w2k2``). This only works while this machine is on the same wifi
+network as the W2K-2 (either joined to its own access point, or both joined to the same boat/
+home wifi router).
+
 Validated API structure (observed in browser DevTools, firmware web app; not an official API,
 can change with firmware updates):
 
@@ -33,9 +39,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import getpass
 import json
 import os
+import socket
 import sys
 import time
 import urllib.error
@@ -68,10 +76,15 @@ NO_GPS_TIME_BEFORE = 631152000  # 1990-01-01 UTC
 # the W2K-2 uses, so we try the common variants.
 _TOKEN_KEYS = ("token", "bearer", "auth_token", "access_token", "sessionToken", "session")
 
+# Discovery: scan this machine's own /24 subnet for the W2K-2's web interface on port 80.
+_DISCOVERY_PORT = 80
+_DISCOVERY_CONNECT_TIMEOUT = 0.6  # per host -- short, since most of the 254 addresses are unused
+_DISCOVERY_HTTP_TIMEOUT = 2.0
+_DISCOVERY_MAX_WORKERS = 100  # scans the whole /24 in about a second, not 254x the per-host timeout
+
 
 @dataclass
 class W2K2Config:
-    url: str
     download_dir: Path
     token: Optional[str] = None
     user: Optional[str] = None
@@ -80,11 +93,11 @@ class W2K2Config:
 
 def load_config(path: Optional[Path] = None) -> W2K2Config:
     """Reads the config file. Fills in missing credentials from environment variables
-    (W2K2_URL/W2K2_TOKEN/W2K2_USER/W2K2_PASS/W2K2_DOWNLOAD_DIR), so the old way of working
-    (env vars, or interactive login) still works too."""
+    (W2K2_TOKEN/W2K2_USER/W2K2_PASS/W2K2_DOWNLOAD_DIR), so the old way of working (env vars, or
+    interactive login) still works too. The W2K-2's address itself is never read from here --
+    see ``discover_w2k2``."""
     section: Dict[str, str] = load_section("w2k2", path or DEFAULT_CONFIG_PATH)
 
-    url = os.environ.get("W2K2_URL") or section.get("url") or "http://10.164.231.101"
     download_dir = Path(
         os.environ.get("W2K2_DOWNLOAD_DIR") or section.get("download_dir") or "Actisense"
     )
@@ -92,7 +105,47 @@ def load_config(path: Optional[Path] = None) -> W2K2Config:
     user = os.environ.get("W2K2_USER") or section.get("user") or None
     password = os.environ.get("W2K2_PASS") or section.get("password") or None
 
-    return W2K2Config(url=url, download_dir=download_dir, token=token, user=user, password=password)
+    return W2K2Config(download_dir=download_dir, token=token, user=user, password=password)
+
+
+def _local_subnet_prefix() -> str:
+    """The first three octets of this machine's own local IPv4 address (e.g. "10.169.127."),
+    found by asking the OS which local address it would use to reach the internet -- no packet is
+    actually sent (UDP is connectionless), so this works offline too, as long as a default route
+    exists."""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.connect(("8.8.8.8", 80))
+        return sock.getsockname()[0].rsplit(".", 1)[0] + "."
+
+
+def _looks_like_w2k2(ip: str) -> bool:
+    try:
+        with socket.create_connection((ip, _DISCOVERY_PORT), timeout=_DISCOVERY_CONNECT_TIMEOUT):
+            pass
+    except OSError:
+        return False
+    try:
+        request = urllib.request.Request(
+            f"http://{ip}/", headers={"User-Agent": "nmea2log-discovery/0.1"}
+        )
+        with urllib.request.urlopen(request, timeout=_DISCOVERY_HTTP_TIMEOUT) as response:
+            body = response.read(4096).decode("utf-8", errors="replace")
+    except (urllib.error.URLError, OSError, ValueError):
+        return False
+    return "actisense" in body.lower() or "w2k" in body.lower()
+
+
+def discover_w2k2() -> Optional[str]:
+    """Finds the W2K-2 on the local network by scanning this machine's own /24 subnet for a host
+    whose web interface identifies itself as Actisense/W2K-2. Returns a base URL (e.g.
+    "http://10.169.127.101"), or None if nothing matched."""
+    prefix = _local_subnet_prefix()
+    hosts = [f"{prefix}{i}" for i in range(1, 255)]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=_DISCOVERY_MAX_WORKERS) as executor:
+        for ip, found in zip(hosts, executor.map(_looks_like_w2k2, hosts)):
+            if found:
+                return f"http://{ip}"
+    return None
 
 
 class _Session:
@@ -141,8 +194,8 @@ def _urlencode(params: Dict[str, str]) -> str:
     return urllib.parse.urlencode(params)
 
 
-def make_session(config: W2K2Config) -> _Session:
-    session = _Session(config.url)
+def make_session(host: str, config: W2K2Config) -> _Session:
+    session = _Session(host)
     if config.token:
         session.token = config.token
         return session
@@ -238,8 +291,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = build_arg_parser().parse_args(argv)
     config = load_config(args.config)
 
+    host = discover_w2k2()
+    if host is None:
+        sys.exit(
+            "[error] Could not find a W2K-2 on the local network -- make sure this device is "
+            "connected to the same wifi network as the W2K-2 (either its own access point, or "
+            "the boat/home wifi router it's joined to as a client)."
+        )
+    log(f"[info] Found W2K-2 at {host}", file=sys.stderr)
+
     try:
-        session = make_session(config)
+        session = make_session(host, config)
         for folder in get_folders(session):
             for info in get_files(session, folder["name"]):
                 download_file(session, config.download_dir, folder["name"], info)
