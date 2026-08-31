@@ -63,6 +63,41 @@ def test_upload_file_calls_sftp_in_batch_mode_with_the_key(tmp_path: Path, monke
     assert "site/logboek/logbook.html" in captured["batch_contents"]
 
 
+def test_upload_file_uploads_to_a_temp_name_then_renames_into_place(tmp_path: Path, monkeypatch):
+    """Regression test for a real bug: uploading straight to remote_path overwrites it in place,
+    which isn't atomic -- a page reading that file (e.g. the WordPress gatekeeper for the HTML
+    logbook, which reads it fresh on every request) can be served a truncated file if it's read
+    mid-upload. Uploading to a temp name and renaming it into place at the end (POSIX rename() is
+    atomic) means a concurrent read always gets either the complete old file or the complete new
+    one, never a partial one."""
+    local = tmp_path / "logbook.html"
+    local.write_text("hi", encoding="utf-8")
+    key_file = tmp_path / "id_ed25519"
+    key_file.write_text("fake key", encoding="utf-8")
+
+    captured = {}
+
+    def fake_run(cmd, capture_output, text):
+        batch_path = Path(cmd[cmd.index("-b") + 1])
+        captured["batch_contents"] = batch_path.read_text(encoding="utf-8")
+        return _FakeCompletedProcess(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    upload_file(
+        local, host="example.com", user="me", remote_path="private/little_endian/logbook.html",
+        key_file=key_file,
+    )
+
+    lines = captured["batch_contents"].splitlines()
+    assert lines[0] == (
+        f'put "{_local_to_sftp_path(local)}" "private/little_endian/logbook.html.tmp-upload"'
+    )
+    assert lines[1] == (
+        'rename "private/little_endian/logbook.html.tmp-upload" "private/little_endian/logbook.html"'
+    )
+
+
 def test_upload_file_uses_forward_slashes_for_a_windows_local_path(tmp_path: Path, monkeypatch):
     """Regression test for a real bug: sftp's own batch-file parser treats backslash as an
     escape character in "put" arguments, so a Windows path's backslashes silently vanished

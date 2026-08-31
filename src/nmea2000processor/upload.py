@@ -130,8 +130,20 @@ def upload_file(
 ) -> None:
     """Copies ``local_path`` to ``remote_path`` on ``host`` over SFTP. Raises ``UploadError``
     with the SFTP client's own message on failure (wrong key, host unreachable, remote path
-    doesn't exist, ...) instead of letting a raw ``CalledProcessError`` traceback through."""
-    lines = [f'put "{_local_to_sftp_path(local_path)}" "{remote_path}"']
+    doesn't exist, ...) instead of letting a raw ``CalledProcessError`` traceback through.
+
+    Uploads to a temporary name first, then renames it into place, rather than writing
+    ``remote_path`` directly -- a ``put`` overwriting an existing file in place is not atomic, so
+    a page (e.g. the WordPress gatekeeper for the HTML logbook, which reads this file fresh on
+    every single request) served to a visitor mid-upload can read a truncated/incomplete file --
+    found in practice: an empty-looking trips table on the live site, with no trace of it in
+    nmea2log.log since the upload itself still reported success. POSIX rename() is atomic, so a
+    concurrent read now always gets either the complete old file or the complete new one."""
+    remote_tmp_path = f"{remote_path}.tmp-upload"
+    lines = [
+        f'put "{_local_to_sftp_path(local_path)}" "{remote_tmp_path}"',
+        f'rename "{remote_tmp_path}" "{remote_path}"',
+    ]
     result = _run_sftp_batch(lines, host, user, key_file, port)
     if result.returncode != 0:
         raise UploadError(_sftp_error_message(result))
