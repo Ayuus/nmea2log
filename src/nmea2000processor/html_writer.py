@@ -372,21 +372,6 @@ def _map_log_points(trip: TripLeg, offset_hours: float, interval_minutes: float)
     return points
 
 
-def _place_cell_html(place: str, lat: float, lon: float, map_id: str) -> str:
-    """The place name shown in the trips table; hovering shows a small map of the surroundings
-    (~500 m radius) so a name that's hard to picture at a glance (or a bare coordinate, with
-    --no-geocode) can still be located without opening the trip's own full route map. Reuses the
-    .temp-hover/.temp-tooltip positioning mechanism (see there) and the same Leaflet library/tile
-    source already loaded for the route map, so this doesn't add another external dependency.
-    Centered on the stay's own averaged position (see TripLeg.depart_lat/arrive_lat), not a
-    single GPS fix -- noticeably more accurate for where the boat was actually moored."""
-    escaped = escape(place)
-    return (
-        f'<span class="temp-hover place-hover" data-lat="{lat:.6f}" data-lon="{lon:.6f}" '
-        f'data-map-id="{map_id}">{escaped}'
-        f'<span class="temp-tooltip place-tooltip"><div class="place-map" id="{map_id}"></div></span>'
-        f"</span>"
-    )
 
 
 def _trip_title(trip: TripLeg, depart_local: datetime) -> str:
@@ -569,9 +554,9 @@ def _trip_row_html(
         str(seq) if seq is not None else "",
         depart_local.strftime("%Y-%m-%d"),
         depart_local.strftime("%H:%M"),
-        _place_cell_html(trip.depart_place, trip.depart_lat, trip.depart_lon, f"place-map-{idx}-d"),
+        escape(trip.depart_place),
         arrive_local.strftime("%H:%M"),
-        _place_cell_html(trip.arrive_place, trip.arrive_lat, trip.arrive_lon, f"place-map-{idx}-a"),
+        escape(trip.arrive_place),
         _format_duration(trip.duration),
         f"{_nl_num(trip.distance_nm)} nm",
         _nl_num(trip.avg_speed_kn) + " kn" if trip.avg_speed_kn is not None else "",
@@ -794,6 +779,13 @@ def write_html_logbook(
     trip_data = {
         idx: {
             "points": _decimated_points(trip),
+            # The departure/arrival markers are placed from these, not points[0]/points[-1] --
+            # the stay's own averaged position (see TripLeg.depart_lat/arrive_lat), not the single
+            # GPS fix from the moment the boat started/stopped moving, which has real GPS jitter
+            # (found in practice: ~10 m off from the actual berth) that averaging cancels out. The
+            # route line itself still draws from the plain track, unaffected.
+            "departPos": [round(trip.depart_lat, 6), round(trip.depart_lon, 6)],
+            "arrivePos": [round(trip.arrive_lat, 6), round(trip.arrive_lon, 6)],
             "log": _map_log_points(
                 trip, _trip_utc_offset_hours(trip, utc_offset_hours), log_interval_minutes
             ),
@@ -915,9 +907,6 @@ def write_html_logbook(
     box-shadow: 0 1px 4px rgba(0,0,0,0.25);
   }}
   .temp-hover:hover .temp-tooltip {{ display: block; }}
-  .place-hover {{ cursor: default; border-bottom: 1px dotted #999; }}
-  .place-tooltip {{ padding: 0; white-space: normal; }}
-  .place-map {{ width: 220px; height: 220px; border-radius: 8px; }}
   /* The map's own <td> spans every column of the (often much wider than the viewport, already
      horizontally-scrolled) trips table, so without a width cap the map itself would render just
      as wide -- on a narrow screen, only a thin vertical slice of that ends up actually visible
@@ -1025,23 +1014,7 @@ window.addEventListener('resize', layoutTotals);
 document.querySelectorAll('.temp-hover').forEach(function(el) {{
   var tooltip = el.querySelector('.temp-tooltip');
   if (!tooltip) return;
-  // The tooltip is positioned separately from el (position: fixed, see below), so moving the
-  // mouse from el into the tooltip briefly crosses screen space that belongs to neither -- a
-  // straight mouseleave-on-el would then hide it before the pointer ever arrives, found in
-  // practice once the tooltip itself became something worth moving the mouse into (the map,
-  // below). A short cancellable delay on hide (not on show) bridges that gap without making
-  // every other tooltip feel sluggish to appear.
-  var hideTimer = null;
-  function showNow() {{
-    if (hideTimer) {{ clearTimeout(hideTimer); hideTimer = null; }}
-  }}
-  function hideSoon() {{
-    hideTimer = setTimeout(function() {{ tooltip.style.display = ''; }}, 150);
-  }}
-  tooltip.addEventListener('mouseenter', showNow);
-  tooltip.addEventListener('mouseleave', hideSoon);
   el.addEventListener('mouseenter', function() {{
-    showNow();
     tooltip.style.display = 'block';
     var rect = el.getBoundingClientRect();
     var tooltipRect = tooltip.getBoundingClientRect();
@@ -1052,41 +1025,9 @@ document.querySelectorAll('.temp-hover').forEach(function(el) {{
     var left = Math.min(rect.left, window.innerWidth - tooltipRect.width - 8);
     tooltip.style.top = Math.max(top, 4) + 'px';
     tooltip.style.left = Math.max(left, 4) + 'px';
-    // A place-name tooltip additionally carries its own small map (~500 m radius), built lazily
-    // on first hover just like the trip's own route map -- Leaflet needs the container to
-    // already be visible (display:block, set just above) to measure it correctly.
-    if (el.classList.contains('place-hover') && !el.dataset.mapInitialized) {{
-      el.dataset.mapInitialized = '1';
-      var lat = parseFloat(el.dataset.lat), lon = parseFloat(el.dataset.lon);
-      // Fully interactive (drag, scroll-wheel zoom on desktop, pinch/tap zoom on touch) --
-      // these are Leaflet's own defaults, so only zoomControl is set explicitly, for the
-      // visible +/- buttons a touch user has no other obvious way to find.
-      var placeMap = L.map(el.dataset.mapId, {{zoomControl: true}});
-      L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-        maxZoom: 19,
-        attribution: '&copy; OpenStreetMap contributors'
-      }}).addTo(placeMap);
-      L.marker([lat, lon]).addTo(placeMap);
-      // A fixed distance in metres, not a fixed zoom level -- converting to degrees here keeps
-      // the shown radius the same real-world size regardless of latitude (a degree of longitude
-      // shrinks towards the poles).
-      var dLat = 500 / 111320;
-      var dLon = 500 / (111320 * Math.cos(lat * Math.PI / 180));
-      placeMap.fitBounds([[lat - dLat, lon - dLon], [lat + dLat, lon + dLon]]);
-      setTimeout(function() {{ placeMap.invalidateSize(); }}, 0);
-    }}
   }});
-  el.addEventListener('mouseleave', hideSoon);
-}});
-// A place-name tooltip has no mouseleave equivalent on a touch device (there's no mouse to move
-// away) -- tapping the map inside it to pan/zoom would otherwise leave no way to dismiss it at
-// all. Tapping/clicking anywhere outside both the trigger and its own tooltip closes it, on any
-// input device.
-document.addEventListener('click', function(e) {{
-  document.querySelectorAll('.place-hover').forEach(function(el) {{
-    if (!el.contains(e.target)) {{
-      el.querySelector('.temp-tooltip').style.display = '';
-    }}
+  el.addEventListener('mouseleave', function() {{
+    tooltip.style.display = '';
   }});
 }});
 document.querySelectorAll('.show-map').forEach(function(btn) {{
@@ -1119,9 +1060,11 @@ document.querySelectorAll('.show-map').forEach(function(btn) {{
         return parts.join(' &middot; ');
       }}
       // A hover tooltip, not a click popup like before, for consistency with the numbered log
-      // markers below (and so it doesn't need dismissing to see the next one).
-      L.marker(points[0]).addTo(map).bindTooltip(entryTooltip(MAP_MARKER_DEPARTURE, log[0]));
-      L.marker(points[points.length - 1]).addTo(map)
+      // markers below (and so it doesn't need dismissing to see the next one). Positioned from
+      // departPos/arrivePos (the stay's own averaged position), not the route line's own first/
+      // last point -- see the trip_data comment in html_writer.py for why.
+      L.marker(TRIPS[idx].departPos).addTo(map).bindTooltip(entryTooltip(MAP_MARKER_DEPARTURE, log[0]));
+      L.marker(TRIPS[idx].arrivePos).addTo(map)
         .bindTooltip(entryTooltip(MAP_MARKER_ARRIVAL, log[log.length - 1]));
       // Same numbering as the Details popup's own log table (see _details_cell_html) -- only the
       // entries strictly between departure and arrival get their own numbered marker; those two
