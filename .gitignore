@@ -9,6 +9,7 @@ dist/
 .geocode_cache.json
 .weather_cache.json
 .ebl_sample_cache.pkl
+.nmea2log.lock
 logbook.csv
 logbook.gpx
 logbook.html

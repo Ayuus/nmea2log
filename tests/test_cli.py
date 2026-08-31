@@ -1,11 +1,18 @@
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import os
+
+import pytest
+
 from nmea2000processor.cli import (
+    _acquire_lock,
+    _AlreadyRunningError,
     _discover_ebl_files,
     _dominant_source_only,
     _filter_to_dominant_engine,
     _merge_by_source,
+    _release_lock,
     _select_primary_gps_source,
     build_arg_parser,
     main,
@@ -523,3 +530,94 @@ def test_main_writes_csv_and_gpx_when_requested(tmp_path: Path, monkeypatch):
     assert output.exists()
     assert output.with_suffix(".gpx").exists()
     assert output.with_suffix(".html").exists()
+
+
+def test_acquire_lock_creates_a_lock_file_with_the_current_pid(tmp_path: Path):
+    lock_path = tmp_path / ".nmea2log.lock"
+
+    _acquire_lock(lock_path)
+
+    assert lock_path.exists()
+    assert int(lock_path.read_text(encoding="utf-8")) == os.getpid()
+
+
+def test_acquire_lock_raises_when_another_process_still_holds_it(tmp_path: Path, monkeypatch):
+    """Regression test for the whole point of the lock: two nmea2log runs against the same
+    output directory race on the shared sample cache and HTML output -- found in practice, a
+    re-launched run while the first was still working silently produced a live logbook with only
+    1 of 15 real trips instead of a clear error."""
+    import nmea2000processor.cli as cli
+
+    lock_path = tmp_path / ".nmea2log.lock"
+    lock_path.write_text("4242", encoding="utf-8")
+    monkeypatch.setattr(cli, "_pid_is_running", lambda pid: pid == 4242)
+
+    with pytest.raises(_AlreadyRunningError) as exc_info:
+        _acquire_lock(lock_path)
+
+    assert exc_info.value.pid == 4242
+    assert lock_path.read_text(encoding="utf-8") == "4242"  # untouched, not stolen
+
+
+def test_acquire_lock_takes_over_a_stale_lock(tmp_path: Path, monkeypatch):
+    """A lock file left behind by a run that crashed or was killed without cleaning up must not
+    permanently block every future run -- its PID no longer being alive is what tells the
+    difference from a run that's still genuinely in progress."""
+    import nmea2000processor.cli as cli
+
+    lock_path = tmp_path / ".nmea2log.lock"
+    lock_path.write_text("4242", encoding="utf-8")
+    monkeypatch.setattr(cli, "_pid_is_running", lambda pid: False)
+
+    _acquire_lock(lock_path)
+
+    assert int(lock_path.read_text(encoding="utf-8")) == os.getpid()
+
+
+def test_acquire_lock_takes_over_an_unparseable_lock_file(tmp_path: Path):
+    """A corrupted/empty lock file (e.g. the process was killed mid-write) must not permanently
+    block every future run either -- same reasoning as a stale PID, just a different way for a
+    leftover lock to be unreadable rather than genuinely still held."""
+    lock_path = tmp_path / ".nmea2log.lock"
+    lock_path.write_text("not a pid", encoding="utf-8")
+
+    _acquire_lock(lock_path)
+
+    assert int(lock_path.read_text(encoding="utf-8")) == os.getpid()
+
+
+def test_release_lock_removes_the_file(tmp_path: Path):
+    lock_path = tmp_path / ".nmea2log.lock"
+    _acquire_lock(lock_path)
+
+    _release_lock(lock_path)
+
+    assert not lock_path.exists()
+
+
+def test_release_lock_is_a_noop_if_the_file_is_already_gone(tmp_path: Path):
+    lock_path = tmp_path / ".nmea2log.lock"
+
+    _release_lock(lock_path)  # must not raise
+
+
+def test_main_refuses_to_run_while_another_instance_holds_the_lock(tmp_path: Path, monkeypatch, capsys):
+    import nmea2000processor.cli as cli
+
+    ebl_path = tmp_path / "000000_000.ebl"
+    ebl_path.write_bytes(b"x" * 100)
+    monkeypatch.setattr(cli, "_pid_is_running", lambda pid: True)
+    (tmp_path / ".nmea2log.lock").write_text("4242", encoding="utf-8")
+
+    with pytest.raises(SystemExit):
+        main([str(ebl_path), "-o", str(tmp_path / "logbook.csv"), "--no-geocode"])
+
+    err = capsys.readouterr().err
+    assert "another nmea2log run" in err
+    assert "4242" in err
+
+
+def test_main_releases_the_lock_after_finishing(tmp_path: Path, monkeypatch):
+    output = _run_with_one_trip(tmp_path, monkeypatch)
+
+    assert not (output.parent / ".nmea2log.lock").exists()

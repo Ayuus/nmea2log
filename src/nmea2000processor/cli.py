@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -581,10 +582,73 @@ def _apply_config_defaults(parser: argparse.ArgumentParser) -> None:
     parser.set_defaults(**defaults)
 
 
+class _AlreadyRunningError(Exception):
+    def __init__(self, pid: int) -> None:
+        super().__init__(pid)
+        self.pid = pid
+
+
+def _pid_is_running(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _acquire_lock(lock_path: Path) -> None:
+    """Refuses to proceed if another nmea2log run against the same output directory is already
+    in progress -- concurrent runs race on the shared sample cache file, the HTML output file,
+    and (with --upload) the live site itself, and can silently produce a wrong result instead of
+    a clear error (found in practice: re-launching nmea2log.bat because a slow run looked stuck
+    raced with the still-running first instance, and the live site ended up showing only 1 of 15
+    real trips). A leftover lock file from a run that crashed or was killed without cleaning up
+    is detected by checking whether its PID is still alive, and silently taken over -- it's
+    evidence of an abandoned run, not one still in progress.
+
+    Uses an atomic exclusive-create (O_CREAT | O_EXCL) rather than a check-then-write, so two
+    processes starting within the same instant can't both conclude the lock is free."""
+    while True:
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            try:
+                other_pid = int(lock_path.read_text(encoding="utf-8").strip())
+            except (ValueError, OSError):
+                other_pid = None
+            if other_pid is not None and _pid_is_running(other_pid):
+                raise _AlreadyRunningError(other_pid)
+            lock_path.unlink(missing_ok=True)  # stale -- clean up and retry
+            continue
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(str(os.getpid()))
+        return
+
+
+def _release_lock(lock_path: Path) -> None:
+    lock_path.unlink(missing_ok=True)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
 
+    lock_path = args.output.parent / ".nmea2log.lock"
+    try:
+        _acquire_lock(lock_path)
+    except _AlreadyRunningError as exc:
+        parser.error(
+            f"another nmea2log run (pid {exc.pid}) is already in progress for "
+            f"{args.output.parent} -- wait for it to finish before starting another one, or "
+            f"delete {lock_path} if you're sure it isn't actually still running"
+        )
+    try:
+        return _run(parser, args)
+    finally:
+        _release_lock(lock_path)
+
+
+def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     # Next to the output file, not the current directory -- so it's found in the same place
     # regardless of how nmea2log.bat happened to be launched. Console output alone disappears the
     # moment the terminal window closes, which for a run started by double-clicking a .bat file

@@ -435,6 +435,14 @@ pytest
 - **Multiple engines**: the code supports multiple `instance` numbers (fuel is summed, engine
   hours shown per engine separately), but hasn't been tested with a real twin-engine
   installation.
+- **Only one run at a time**: `nmea2log` refuses to start if another run against the same output
+  directory is already in progress (a `.nmea2log.lock` file next to the output, holding that
+  run's process id) -- two runs racing on the shared sample cache and HTML output can otherwise
+  silently produce a wrong result instead of a clear error (found in practice: launching
+  `nmea2log.bat` again because a slow run looked stuck, while the first was still working,
+  produced a live logbook with only 1 of 15 real trips). If you get the "already in progress"
+  error and you're sure nothing is actually still running (e.g. a previous run was killed), delete
+  the `.nmea2log.lock` file mentioned in the error and try again.
 - **Multiple sources for the same PGN**: some boats have multiple devices sending position,
   speed over ground, or depth (e.g. two GPS antennas). This has been measured and confirmed with
   real data: on a boat with two GPS receivers, they gave a few meters of position difference at
