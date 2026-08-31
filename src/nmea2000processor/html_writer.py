@@ -411,12 +411,6 @@ def _details_cell_html(
     end up scrolled out of view off the right edge of the same .table-scroll region the button
     itself was in. More columns may move in here later."""
     sections = []
-    water_temp = _water_temp_detail_text(trip)
-    if water_temp:
-        sections.append(_details_row_html("🌡️", T["header_water_temp"], escape(water_temp)))
-    motion = _motion_detail_text(trip)
-    if motion:
-        sections.append(_details_row_html("〰️", T["header_motion"], escape(motion)))
 
     entries = _periodic_log_entries(trip.track, interval_minutes, offset_hours)
     if len(entries) >= 2:
@@ -454,8 +448,6 @@ def _details_cell_html(
                 f"<td>{wind_text}</td><td>{precip_text}</td><td>{cloud_text}</td></tr>"
             )
         sections.append(
-            f'<div class="detail-row"><span class="detail-icon">🧭</span>'
-            f'<span class="detail-label">{escape(T["details_log_heading"])}</span></div>'
             "<table class=\"log-table\"><thead><tr>"
             f"<th>{escape(T['log_header_number'])}</th>"
             f"<th>{escape(T['log_header_time'])}</th><th>{escape(T['log_header_position'])}</th>"
@@ -464,6 +456,13 @@ def _details_cell_html(
             f"<th>{escape(T['log_header_cloud'])}</th>"
             f'</tr></thead><tbody>{"".join(rows)}</tbody></table>'
         )
+
+    water_temp = _water_temp_detail_text(trip)
+    if water_temp:
+        sections.append(_details_row_html("🌡️", T["header_water_temp"], escape(water_temp)))
+    motion = _motion_detail_text(trip)
+    if motion:
+        sections.append(_details_row_html("〰️", T["header_motion"], escape(motion)))
 
     if not sections:
         return ""
