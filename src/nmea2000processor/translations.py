@@ -90,6 +90,8 @@ NL: Dict[str, str] = {
     "log_header_wind": "Wind",
     "log_header_precip": "Neerslag",
     "log_header_cloud": "Bewolking",
+    "log_header_wave": "Golven",
+    "log_header_current": "Stroming",
     # Remarks button + popup. Auth for both reading and saving rides on the WordPress login
     # session that got you to the (login-gated) logbook page in the first place -- no separate
     # username/password step here, see wordpress-plugin/little_endian-index.php.

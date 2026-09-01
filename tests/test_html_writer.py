@@ -5,6 +5,7 @@ from pathlib import Path
 
 from nmea2000processor.html_writer import write_html_logbook
 from nmea2000processor.tripbuilder import BatteryHealth, EngineHealth, NavSample, TripLeg
+from nmea2000processor.marine import HourlyMarine
 from nmea2000processor.weather import HourlyWeather
 
 
@@ -546,6 +547,42 @@ def test_write_html_logbook_no_weather_columns_without_a_weather_fetcher(tmp_pat
     assert "Wind" in log_table  # the column header is always shown
     # but every data cell for it is empty -- no stray "kn"/"mm"/"%" values with nothing behind them
     assert "kn WNW" not in log_table
+
+
+def test_write_html_logbook_shows_marine_columns_in_the_log_when_a_marine_fetcher_is_given(
+    tmp_path: Path,
+):
+    class _FakeMarine:
+        def hour(self, lat, lon, when):
+            return HourlyMarine(
+                wave_height_m=0.72, wave_direction_deg=254, wave_period_s=4.7,
+                current_kn=0.5, current_direction_deg=180,
+            )
+
+    track = _track_every_10_minutes(10)
+    trip = _trip(track=track)
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([trip], out_path, utc_offset_hours=0, marine=_FakeMarine())
+
+    log_table = _log_table_html(out_path.read_text(encoding="utf-8"))
+    assert "Golven" in log_table and "Stroming" in log_table
+    assert "0,7 m, 4,7 s, WZW" in log_table  # 254 deg rounds to the WZW compass point
+    assert "0,5 kn Z" in log_table  # 180 deg rounds to the Z compass point
+
+
+def test_write_html_logbook_no_marine_columns_without_a_marine_fetcher(tmp_path: Path):
+    track = _track_every_10_minutes(10)
+    trip = _trip(track=track)
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([trip], out_path, utc_offset_hours=0)
+
+    log_table = _log_table_html(out_path.read_text(encoding="utf-8"))
+    assert "Golven" in log_table  # the column header is always shown
+    # but every data cell for it is empty -- no stray "m,"/"kn" values with nothing behind them
+    assert "m, 4,7 s" not in log_table
+    assert "0,5 kn Z" not in log_table
 
 
 def test_write_html_logbook_shows_the_latest_trips_arrival_as_last_updated(tmp_path: Path):

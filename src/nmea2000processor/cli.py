@@ -10,6 +10,7 @@ from typing import Dict, Iterable, List, Optional, Tuple, TypeVar
 from .config import load_section
 from .ebl_reader import iter_frames as iter_frames_ebl
 from .geocode import Geocoder, NoGeocoder
+from .marine import MarineFetcher, NoMarine
 from .weather import NoWeather, WeatherFetcher
 from .gpx_writer import write_gpx
 from .html_writer import _DEFAULT_LOG_INTERVAL_MINUTES, _DEFAULT_REMARKS_API_URL, write_html_logbook
@@ -368,6 +369,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Cache file for historical weather (default .weather_cache.json)",
     )
     parser.add_argument(
+        "--no-marine",
+        action="store_true",
+        help="Skip the online historical wave/current lookup; the log table's wave/current "
+        "columns stay empty",
+    )
+    parser.add_argument(
+        "--marine-cache-file",
+        type=Path,
+        default=Path(".marine_cache.json"),
+        help="Cache file for historical wave/current data (default .marine_cache.json)",
+    )
+    parser.add_argument(
         "--download-failed",
         action="store_true",
         help="Marks the 'Laatst bijgewerkt' timestamp in the HTML logbook in red -- pass this "
@@ -535,6 +548,7 @@ def _apply_config_defaults(parser: argparse.ArgumentParser) -> None:
         ("min_trip_distance_nm", float),
         ("cache_file", Path),
         ("weather_cache_file", Path),
+        ("marine_cache_file", Path),
         ("language", str),
         ("utc_offset", float),
         ("boat_name", str),
@@ -556,6 +570,8 @@ def _apply_config_defaults(parser: argparse.ArgumentParser) -> None:
         defaults["no_geocode"] = _bool(section["no_geocode"])
     if "no_weather" in section:
         defaults["no_weather"] = _bool(section["no_weather"])
+    if "no_marine" in section:
+        defaults["no_marine"] = _bool(section["no_marine"])
     if "no_sample_cache" in section:
         defaults["no_sample_cache"] = _bool(section["no_sample_cache"])
     if "csv" in section:
@@ -767,6 +783,7 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
 
     geocoder = NoGeocoder() if args.no_geocode else Geocoder(cache_file=args.cache_file, language=args.language)
     weather = NoWeather() if args.no_weather else WeatherFetcher(cache_file=args.weather_cache_file)
+    marine = NoMarine() if args.no_marine else MarineFetcher(cache_file=args.marine_cache_file)
 
     trips = build_trips(
         all_fixes,
@@ -822,6 +839,7 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         log_interval_minutes=args.log_interval_minutes,
         remarks_api_url=args.remarks_api_url,
         weather=weather,
+        marine=marine,
     )
     log(f"[ok] HTML logbook written: {html_path} ({len(trips)} trip(s))")
 

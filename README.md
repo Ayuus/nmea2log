@@ -134,13 +134,16 @@ the tests.
    precipitation and cloud cover for that position and hour, looked up from Open-Meteo's free
    historical weather archive (a regional weather model, not an on-board sensor -- so treat it as
    indicative, not exact) and cached locally so the same position/hour is never looked up twice.
-6. **Writing the logbook** (`logbook_writer.py`, only with `--csv`): CSV with English column names
+6. **Marine data** (`marine.py`): the same "Log" table rows also get wave height/period/direction
+   and ocean current speed/direction, looked up from Open-Meteo's separate marine weather API
+   (same caching/indicative-not-exact caveats as the weather data above).
+7. **Writing the logbook** (`logbook_writer.py`, only with `--csv`): CSV with English column names
    but Dutch Excel convention for the values (`;` as the delimiter, `,` as the decimal separator)
    — opens correctly right away in Dutch-locale Excel.
-7. **Writing the route** (`gpx_writer.py`, only with `--gpx`): a GPX file (same file name, `.gpx`
+8. **Writing the route** (`gpx_writer.py`, only with `--gpx`): a GPX file (same file name, `.gpx`
    extension) with one track per trip. Click a track in a map program and you see a name and
    description with duration, distance, fuel, and engine hours for that trip.
-8. **HTML logbook** (`html_writer.py`): one self-contained `.html` file (same file name, `.html`
+9. **HTML logbook** (`html_writer.py`): one self-contained `.html` file (same file name, `.html`
    extension) — no separate map file or workbook needed anymore. At the top, the boat name
    (`--boat-name`, or the `boat_name` setting in the config file) and totals: trip count, total
    distance, fuel, average consumption, top speed, **engine hour meter** (the absolute reading
@@ -154,10 +157,10 @@ the tests.
    a CDN, so **viewing** requires internet (generating doesn't). Trips with a logged water
    temperature also get a colored badge (blue → red by temperature). Each trip with a track also
    has a "Log" button — a traditional periodic logbook table (time, position, course over ground,
-   speed, and, unless `--no-weather` is passed, wind/precipitation/cloud cover), sampled every
-   `--log-interval-minutes` (default 30) plus always the trip's own start and end. Unlike the map,
-   this needs no JavaScript or internet to display (native HTML `<details>`), so it also works
-   when the file is opened from an email attachment.
+   speed, and, unless `--no-weather`/`--no-marine` is passed, wind/precipitation/cloud cover and
+   wave/current data), sampled every `--log-interval-minutes` (default 30) plus always the trip's
+   own start and end. Unlike the map, this needs no JavaScript or internet to display (native HTML
+   `<details>`), so it also works when the file is opened from an email attachment.
 
 ## Installation
 
@@ -346,6 +349,8 @@ the popup itself.
 | `--cache-file` | Path to the cache file for port names (default `.geocode_cache.json`) |
 | `--no-weather` | No internet needed; the Log table's wind/precipitation/cloud cover columns stay empty |
 | `--weather-cache-file` | Path to the cache file for historical weather (default `.weather_cache.json`) |
+| `--no-marine` | No internet needed; the Log table's wave/current columns stay empty |
+| `--marine-cache-file` | Path to the cache file for historical wave/current data (default `.marine_cache.json`) |
 | `--utc-offset HOURS` | Fixed timezone offset (e.g. `2` for CEST) for the displayed times. Default: automatically estimated per trip from the departure position |
 | `--boat-name NAME` | Boat name at the top of the HTML logbook (default: none, or the `boat_name` setting from the config file) |
 | `--mmsi MMSI` | MMSI at the top of the HTML logbook (default: none, or the `mmsi` setting from the config file) |
@@ -432,6 +437,12 @@ pytest
   position — so treat it as "roughly what conditions were like nearby", not a precise reading at
   the boat's exact spot. If you get wrong-looking values, check the raw cache in
   `.weather_cache.json`.
+- **Marine data** (wave/current) comes from Open-Meteo's separate marine weather API, with the
+  same grid-snapping caveat as the weather data above -- indicative, not exact. Ocean current
+  velocity has no server-side knots conversion (confirmed against the real API: unlike wind's
+  `wind_speed_unit=kn`, a `current_velocity_unit=kn` parameter is silently ignored and km/h still
+  comes back), so it's converted to knots in `marine.py` instead. If you get wrong-looking values,
+  check the raw cache in `.marine_cache.json`.
 - **Multiple engines**: the code supports multiple `instance` numbers (fuel is summed, engine
   hours shown per engine separately), but hasn't been tested with a real twin-engine
   installation.

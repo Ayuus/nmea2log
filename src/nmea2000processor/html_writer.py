@@ -44,6 +44,7 @@ from .logbook_writer import (
 )
 from .translations import MONTH_ABBR_NL, NL as T
 from .tripbuilder import NavSample, TripLeg
+from .marine import NoMarine
 from .weather import NoWeather
 
 _LEAFLET_CSS = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -400,7 +401,7 @@ def _compass_abbr(deg: float) -> str:
 
 
 def _details_cell_html(
-    trip: TripLeg, idx: int, interval_minutes: float, offset_hours: float, weather
+    trip: TripLeg, idx: int, interval_minutes: float, offset_hours: float, weather, marine
 ) -> str:
     """Button + <dialog> popup (like the map, not inline) bundling water temperature, motion
     (roll/pitch), and the periodic course/speed/position log together -- these each used to be
@@ -442,10 +443,39 @@ def _details_cell_html(
                 wind_text = ""
             precip_text = f"{_nl_num(hourly.precip_mm, 1)} mm" if hourly and hourly.precip_mm is not None else ""
             cloud_text = f"{_nl_num(hourly.cloud_pct, 0)}%" if hourly and hourly.cloud_pct is not None else ""
+            # Not a measurement from the boat itself either -- regional wave/current-model data
+            # for the nearest sea grid cell at this hour, from a separate Open-Meteo dataset than
+            # the wind/precipitation/cloud data above (see marine.py).
+            hourly_marine = marine.hour(entry.lat, entry.lon, entry.time)
+            if (
+                hourly_marine is not None
+                and hourly_marine.wave_height_m is not None
+                and hourly_marine.wave_period_s is not None
+                and hourly_marine.wave_direction_deg is not None
+            ):
+                wave_text = (
+                    f"{_nl_num(hourly_marine.wave_height_m)} m, "
+                    f"{_nl_num(hourly_marine.wave_period_s)} s, "
+                    f"{_compass_abbr(hourly_marine.wave_direction_deg)}"
+                )
+            else:
+                wave_text = ""
+            if (
+                hourly_marine is not None
+                and hourly_marine.current_kn is not None
+                and hourly_marine.current_direction_deg is not None
+            ):
+                current_text = (
+                    f"{_nl_num(hourly_marine.current_kn)} kn "
+                    f"{_compass_abbr(hourly_marine.current_direction_deg)}"
+                )
+            else:
+                current_text = ""
             rows.append(
                 f"<tr><td>{number_text}</td><td>{local_time:%H:%M}</td><td>{position_text}</td>"
                 f"<td>{cog_text}</td><td>{sog_text}</td>"
-                f"<td>{wind_text}</td><td>{precip_text}</td><td>{cloud_text}</td></tr>"
+                f"<td>{wind_text}</td><td>{precip_text}</td><td>{cloud_text}</td>"
+                f"<td>{wave_text}</td><td>{current_text}</td></tr>"
             )
         sections.append(
             "<table class=\"log-table\"><thead><tr>"
@@ -454,6 +484,7 @@ def _details_cell_html(
             f"<th>{escape(T['log_header_cog'])}</th><th>{escape(T['log_header_sog'])}</th>"
             f"<th>{escape(T['log_header_wind'])}</th><th>{escape(T['log_header_precip'])}</th>"
             f"<th>{escape(T['log_header_cloud'])}</th>"
+            f"<th>{escape(T['log_header_wave'])}</th><th>{escape(T['log_header_current'])}</th>"
             f'</tr></thead><tbody>{"".join(rows)}</tbody></table>'
         )
 
@@ -566,9 +597,12 @@ def _trip_row_html(
     seq: Optional[int] = None,
     remarks_api_url: str = _DEFAULT_REMARKS_API_URL,
     weather=None,
+    marine=None,
 ) -> str:
     if weather is None:
         weather = NoWeather()
+    if marine is None:
+        marine = NoMarine()
     offset = _trip_utc_offset_hours(trip, utc_offset_hours)
     depart_local = _to_local(trip.depart_time, offset)
     arrive_local = _to_local(trip.arrive_time, offset)
@@ -596,7 +630,7 @@ def _trip_row_html(
         _typical_rpm_html(trip),
         _warnings_html(trip, battery_warning_voltage, offset),
         map_cell,
-        _details_cell_html(trip, idx, log_interval_minutes, offset, weather),
+        _details_cell_html(trip, idx, log_interval_minutes, offset, weather, marine),
     ]
     if remarks_api_url:
         cells.append(_remarks_cell_html(trip_uid, idx, remarks_api_url))
@@ -691,6 +725,7 @@ def write_html_logbook(
     log_interval_minutes: float = _DEFAULT_LOG_INTERVAL_MINUTES,
     remarks_api_url: str = _DEFAULT_REMARKS_API_URL,
     weather=None,
+    marine=None,
 ) -> None:
     """``trip_uids``: one id per trip, in the same order as ``trips`` *before* sorting -- e.g.
     from ``trip_ids.assign_trip_ids(trips)``. Embedded as an invisible ``data-uid`` attribute on
@@ -716,7 +751,11 @@ def write_html_logbook(
     ``weather``: a weather.WeatherFetcher (or weather.NoWeather, the default) -- adds wind/
     precipitation/cloud-cover columns to each trip's own periodic log table (see
     _details_cell_html), one lookup per log row rather than one per trip, since wind especially
-    can change a lot over a longer trip."""
+    can change a lot over a longer trip.
+
+    ``marine``: a marine.MarineFetcher (or marine.NoMarine, the default) -- adds wave and ocean-
+    current columns to the same periodic log table, from a separate Open-Meteo dataset than
+    ``weather``."""
     trips = list(trips)
     uid_by_trip = {id(trip): uid for trip, uid in zip(trips, trip_uids)} if trip_uids is not None else {}
     trips = sorted(trips, key=lambda t: t.depart_time)
@@ -802,6 +841,7 @@ def write_html_logbook(
                     seq_by_index[i],
                     remarks_api_url,
                     weather=weather,
+                    marine=marine,
                 )
                 for i in indices
             )
