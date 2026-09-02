@@ -145,6 +145,28 @@ def test_main_reports_a_clear_error_when_no_w2k2_is_found_on_the_network(monkeyp
     assert "Could not find a W2K-2" in str(exc_info.value)
 
 
+def test_main_reports_a_clear_error_when_discovery_has_no_network_route(monkeypatch, tmp_path):
+    """Regression test for a real crash: with no active network connection at all,
+    discover_w2k2() -> _local_subnet_prefix() raises a raw OSError ("network unreachable") when
+    it asks the OS for its own outbound-routing address -- that call happens before main()'s
+    try/except, so it surfaced as a raw traceback instead of the same clean "[error] network: ..."
+    message a connection failure during login/download already got."""
+    config_path = tmp_path / "w2k2.ini"
+    config_path.write_text("[w2k2]\nuser = skipper\npassword = geheim\n", encoding="utf-8")
+
+    import nmea2000processor.w2k2_download as w2k2_download
+
+    def fake_discover_w2k2():
+        raise OSError("[WinError 10051] network is unreachable")
+
+    monkeypatch.setattr(w2k2_download, "discover_w2k2", fake_discover_w2k2)
+
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--config", str(config_path)])
+
+    assert "network" in str(exc_info.value)
+
+
 def test_main_reports_a_clear_error_on_timeout_instead_of_a_raw_traceback(monkeypatch, tmp_path):
     """Regression test for a real crash: a read timeout while logging in (e.g. the boat's wifi
     isn't reachable) surfaced as a raw Python traceback instead of the same clean "[error]

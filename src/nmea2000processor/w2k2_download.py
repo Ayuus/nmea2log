@@ -307,7 +307,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = build_arg_parser().parse_args(argv)
     config = load_config(args.config)
 
-    host = discover_w2k2()
+    try:
+        host = discover_w2k2()
+    except OSError as exc:
+        # _local_subnet_prefix() asks the OS for its own outbound-routing address; that fails
+        # with a raw OSError ("network unreachable" etc.) when there's no active network
+        # connection at all, not just when the W2K-2 isn't on it (found in practice).
+        sys.exit(f"[error] network: {exc} -- make sure this device is connected to a network")
     if host is None:
         sys.exit(
             "[error] Could not find a W2K-2 on the local network -- make sure this device is "
