@@ -240,6 +240,44 @@ def test_download_file_gives_up_after_exhausting_retries(tmp_path, monkeypatch):
         )
 
 
+def test_download_file_skips_a_small_still_growing_file(tmp_path):
+    """The active file's reported size climbs a bit on every poll while the W2K-2 is still
+    writing to it -- fetching it while it's barely started just wastes a download+decode cycle on
+    data that'll be superseded by a bigger snapshot next run anyway."""
+    calls = []
+
+    class _Session:
+        def download_to(self, path, params, target):
+            calls.append(1)
+
+    download_file(
+        _Session(), tmp_path, "EBL000001",
+        {"file_name": "000001_005.ebl", "file_size": 1000, "file_time": 0},
+        skip_if_growing=True,
+    )
+
+    assert calls == []
+    assert not (tmp_path / "EBL000001" / "000001_005.ebl").exists()
+
+
+def test_download_file_does_not_skip_a_small_file_when_not_marked_growing(tmp_path):
+    """Only the very last file gets the size-based skip (see main()) -- a small file anywhere else
+    is provably already closed out (a newer file exists after it) and must always be fetched."""
+    calls = []
+
+    class _Session:
+        def download_to(self, path, params, target):
+            calls.append(1)
+            target.write_bytes(b"x" * 1000)
+
+    download_file(
+        _Session(), tmp_path, "EBL000001",
+        {"file_name": "000001_003.ebl", "file_size": 1000, "file_time": 0},
+    )
+
+    assert calls == [1]
+
+
 def test_needs_download_missing_file(tmp_path: Path):
     assert _needs_download(tmp_path / "nope.ebl", 1234) is True
 

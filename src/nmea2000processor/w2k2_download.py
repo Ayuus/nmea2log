@@ -68,6 +68,13 @@ DOWNLOAD_TIMEOUT = 300  # more headroom for the ~5 MB files
 _DOWNLOAD_MAX_RETRIES = 2
 _DOWNLOAD_RETRY_DELAY_S = 3.0
 
+# Below this, the very last file (the one the W2K-2 is actively still writing to right now, see
+# main()) is skipped for this run rather than downloaded -- avoids fetching a barely-started
+# snapshot that's just going to be superseded by a bigger one on the next run anyway. Only ever
+# applied to that one file: every other file is provably already closed out (a newer one exists
+# after it), regardless of how small it ended up.
+_MIN_ACTIVE_FILE_SIZE_BYTES = 500_000
+
 # file_time value the W2K-2 uses when there was no GPS time (1980-01-01). 10-year margin:
 # anything before 1990 is treated as "no real time".
 NO_GPS_TIME_BEFORE = 631152000  # 1990-01-01 UTC
@@ -235,10 +242,19 @@ def _needs_download(local: Path, remote_size: int) -> bool:
     return not local.exists() or local.stat().st_size != remote_size
 
 
-def download_file(session: _Session, download_dir: Path, folder: str, info: dict) -> None:
+def download_file(
+    session: _Session, download_dir: Path, folder: str, info: dict, *, skip_if_growing: bool = False
+) -> None:
     target_dir = download_dir / folder
     target_dir.mkdir(parents=True, exist_ok=True)
     target = target_dir / info["file_name"]
+
+    if skip_if_growing and info["file_size"] < _MIN_ACTIVE_FILE_SIZE_BYTES:
+        log(
+            f"[skip] {folder}/{info['file_name']} still growing ({info['file_size']} bytes) "
+            "-- waiting for a later run"
+        )
+        return
 
     if not _needs_download(target, info["file_size"]):
         log(f"[skip] {folder}/{info['file_name']} already complete locally")
@@ -302,9 +318,18 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     try:
         session = make_session(host, config)
-        for folder in get_folders(session):
-            for info in get_files(session, folder["name"]):
-                download_file(session, config.download_dir, folder["name"], info)
+        folders = get_folders(session)
+        # The very last file in the very last folder is the one the W2K-2 is presumably still
+        # actively writing to right now -- every other file is provably already closed out (a
+        # newer one exists after it), so the size-based skip only ever applies to that one.
+        last_folder_name = max((f["name"] for f in folders), default=None)
+        for folder in folders:
+            files = get_files(session, folder["name"])
+            is_last_folder = folder["name"] == last_folder_name
+            last_file_name = max((f["file_name"] for f in files), default=None) if is_last_folder else None
+            for info in files:
+                skip_if_growing = is_last_folder and info["file_name"] == last_file_name
+                download_file(session, config.download_dir, folder["name"], info, skip_if_growing=skip_if_growing)
     except urllib.error.HTTPError as exc:
         if exc.code == 401:
             sys.exit(
