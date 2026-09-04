@@ -14,11 +14,23 @@ from __future__ import annotations
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional, TextIO
+from typing import Callable, Optional, TextIO
 
 _log_file: Optional[TextIO] = None
+_log_sink: Optional[Callable[[str], None]] = None
 
 DEFAULT_LOG_RETENTION_DAYS = 90.0
+
+
+def set_log_sink(sink: Optional[Callable[[str], None]]) -> None:
+    """Lets a caller receive every log() line as it's produced, on top of the normal print (and
+    the log file, if set) -- used by android_entry.py so the Android app can show the exact same
+    messages the desktop CLI shows, instead of maintaining a separate set of Android-specific UI
+    text. Pass None to clear (android_entry.py does this once a sync finishes, so a later desktop
+    test run in the same process -- e.g. under pytest -- doesn't keep forwarding to a stale
+    sink)."""
+    global _log_sink
+    _log_sink = sink
 
 
 def set_log_file(path: Path, retention_days: float = DEFAULT_LOG_RETENTION_DAYS) -> None:
@@ -66,3 +78,5 @@ def log(message: str, *, file: TextIO = sys.stdout) -> None:
         # (e.g. the terminal window closed mid-run, the exact scenario this file exists to help
         # diagnose), whatever was logged right up to that point should still be on disk.
         print(line, file=_log_file, flush=True)
+    if _log_sink is not None:
+        _log_sink(line)
