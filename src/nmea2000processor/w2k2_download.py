@@ -52,12 +52,21 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .config import DEFAULT_CONFIG_PATH, load_section
 from .log import log
 
 SD_LOG_ROOT = "/sdcard/logs/ebl_data_logs"
+
+
+class DownloadCancelled(Exception):
+    """Raised (by _Session.download_to() and download_file()) when a caller-supplied
+    should_cancel() callback returns True -- deliberately NOT a subclass of OSError/URLError, so
+    it isn't caught by download_file()'s own retry-on-transient-failure loop and instead
+    propagates straight up. Only ever raised when should_cancel is explicitly passed (Android's
+    sync_from_w2k2(), see android_entry.py) -- the desktop CLI never passes one, so this never
+    happens there."""
 
 TIMEOUT = 30  # seconds per API request
 DOWNLOAD_TIMEOUT = 300  # more headroom for the ~5 MB files
@@ -68,12 +77,10 @@ DOWNLOAD_TIMEOUT = 300  # more headroom for the ~5 MB files
 _DOWNLOAD_MAX_RETRIES = 2
 _DOWNLOAD_RETRY_DELAY_S = 3.0
 
-# Below this, the very last file (the one the W2K-2 is actively still writing to right now, see
-# main()) is skipped for this run rather than downloaded -- avoids fetching a barely-started
-# snapshot that's just going to be superseded by a bigger one on the next run anyway. Only ever
-# applied to that one file: every other file is provably already closed out (a newer one exists
-# after it), regardless of how small it ended up.
-_MIN_ACTIVE_FILE_SIZE_BYTES = 500_000
+# Every folder the W2K-2 reports except the current (last) one is already closed out and always
+# ends up holding exactly this many files (observed in practice) -- used by build_download_plan()
+# to skip a folder's own file-list request entirely once we already have this many locally.
+_FILES_PER_FOLDER = 100
 
 # file_time value the W2K-2 uses when there was no GPS time (1980-01-01). 10-year margin:
 # anything before 1990 is treated as "no real time".
@@ -142,11 +149,18 @@ def _looks_like_w2k2(ip: str) -> bool:
     return "actisense" in body.lower() or "w2k" in body.lower()
 
 
-def discover_w2k2() -> Optional[str]:
-    """Finds the W2K-2 on the local network by scanning this machine's own /24 subnet for a host
-    whose web interface identifies itself as Actisense/W2K-2. Returns a base URL (e.g.
-    "http://10.169.127.101"), or None if nothing matched."""
-    prefix = _local_subnet_prefix()
+def discover_w2k2(subnet_prefix: Optional[str] = None) -> Optional[str]:
+    """Finds the W2K-2 on the local network by scanning a /24 subnet for a host whose web
+    interface identifies itself as Actisense/W2K-2. Returns a base URL (e.g.
+    "http://10.169.127.101"), or None if nothing matched.
+
+    By default (subnet_prefix=None) the subnet is this machine's own, self-detected via
+    _local_subnet_prefix() -- fine on desktop, where there's only ever one active network. On
+    Android, where the hotspot and the cellular uplink are both active at once, self-detection
+    would find the cellular subnet instead of the hotspot's -- callers there pass the hotspot's
+    own subnet explicitly (from NetworkInterface enumeration) to skip that self-detection.
+    """
+    prefix = subnet_prefix if subnet_prefix is not None else _local_subnet_prefix()
     hosts = [f"{prefix}{i}" for i in range(1, 255)]
     with concurrent.futures.ThreadPoolExecutor(max_workers=_DISCOVERY_MAX_WORKERS) as executor:
         for ip, found in zip(hosts, executor.map(_looks_like_w2k2, hosts)):
@@ -186,11 +200,25 @@ class _Session:
         with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
             return json.loads(response.read().decode("utf-8"))
 
-    def download_to(self, path: str, params: Dict[str, str], target: Path) -> None:
+    def download_to(
+        self,
+        path: str,
+        params: Dict[str, str],
+        target: Path,
+        *,
+        should_cancel: Optional[Callable[[], bool]] = None,
+    ) -> None:
         url = self.base_url + path + "?" + _urlencode(params)
         request = urllib.request.Request(url, headers=self._headers())
         with urllib.request.urlopen(request, timeout=DOWNLOAD_TIMEOUT) as response, target.open("wb") as fh:
             while True:
+                # Checked per chunk, not just once before the request -- otherwise cancelling
+                # mid-transfer of a single large/slow file (real ones take 30+ seconds, found in
+                # practice) wouldn't take effect until that whole transfer finished anyway. Leaves
+                # a partial file on disk, same as any other interrupted download -- the existing
+                # size-mismatch check in _needs_download() already re-fetches it next time.
+                if should_cancel is not None and should_cancel():
+                    raise DownloadCancelled()
                 chunk = response.read(65536)
                 if not chunk:
                     break
@@ -242,37 +270,122 @@ def _needs_download(local: Path, remote_size: int) -> bool:
     return not local.exists() or local.stat().st_size != remote_size
 
 
+def _will_download(target: Path, info: dict) -> bool:
+    """The same gating logic download_file() itself uses to decide whether to fetch a file --
+    factored out so main()'s pre-download summary can report an accurate count without a second,
+    separately-maintained copy of this condition."""
+    return _needs_download(target, info["file_size"])
+
+
 def download_file(
-    session: _Session, download_dir: Path, folder: str, info: dict, *, skip_if_growing: bool = False
+    session: _Session,
+    download_dir: Path,
+    folder: str,
+    info: dict,
+    *,
+    should_cancel: Optional[Callable[[], bool]] = None,
 ) -> None:
     target_dir = download_dir / folder
     target_dir.mkdir(parents=True, exist_ok=True)
     target = target_dir / info["file_name"]
 
-    if skip_if_growing and info["file_size"] < _MIN_ACTIVE_FILE_SIZE_BYTES:
-        log(
-            f"[skip] {folder}/{info['file_name']} still growing ({info['file_size']} bytes) "
-            "-- waiting for a later run"
-        )
-        return
-
-    if not _needs_download(target, info["file_size"]):
+    if not _will_download(target, info):
         log(f"[skip] {folder}/{info['file_name']} already complete locally")
         return
+
+    if should_cancel is not None and should_cancel():
+        raise DownloadCancelled()
 
     for attempt in range(_DOWNLOAD_MAX_RETRIES + 1):
         if attempt:
             time.sleep(_DOWNLOAD_RETRY_DELAY_S)
         try:
             session.download_to(
-                "/api/download", {"file_name": f"{SD_LOG_ROOT}/{folder}/{info['file_name']}"}, target
+                "/api/download",
+                {"file_name": f"{SD_LOG_ROOT}/{folder}/{info['file_name']}"},
+                target,
+                should_cancel=should_cancel,
             )
-            break
+            actual_size = target.stat().st_size
+            # >= rather than == : an .ebl file only ever grows or stays the same, never shrinks,
+            # so downloading at least as many bytes as the folder listing (fetched slightly
+            # earlier, in build_download_plan()) reported is always fine -- for a closed/static
+            # file this is just an exact match, and for the one file that's still actively being
+            # written on the device (found in practice: not always just the very last file in the
+            # very last folder, as previously assumed) it means "grew a bit more between the
+            # listing and the download", not an error. Only fewer bytes than expected is retried
+            # below -- that's the one direction a legitimate transfer can never produce.
+            if actual_size >= info["file_size"]:
+                break
+            # The transfer completed with no error (a clean EOF, no exception from download_to())
+            # but ended up short -- found in practice: the W2K-2 silently served a quarter of a
+            # file's real bytes for a file its own folder listing had just reported the full size
+            # of, and this got logged as a plain "[ok]" success since nothing here checked the
+            # actual result against what was expected. Treated the same as any other failed
+            # attempt: retried, and if it's still wrong after the normal retry budget, the short
+            # file is deleted (not left silently miscounted as "present" by anything that only
+            # checks existence, e.g. the folder-already-complete check above) -- the next run's
+            # own _needs_download() size check would have caught it anyway, but there's no reason
+            # to wait for a whole extra run when we already know it's wrong right now.
+            if attempt == _DOWNLOAD_MAX_RETRIES:
+                target.unlink(missing_ok=True)
+                log(
+                    f"[warning] {folder}/{info['file_name']} downloaded {actual_size} bytes, "
+                    f"expected at least {info['file_size']} -- giving up after "
+                    f"{_DOWNLOAD_MAX_RETRIES + 1} attempt(s), will retry next run",
+                    file=sys.stderr,
+                )
+                return
+            log(
+                f"[warning] {folder}/{info['file_name']} downloaded {actual_size} bytes, expected "
+                f"at least {info['file_size']} -- attempt {attempt + 1}/{_DOWNLOAD_MAX_RETRIES + 1}, "
+                "retrying...",
+                file=sys.stderr,
+            )
+            continue
+        # A 404 gets the same number of retries as any other error below -- found in practice
+        # that it isn't always "file genuinely gone" (the W2K-2's simple embedded web server can
+        # apparently return a spurious 404 under concurrent load, e.g. Android and the desktop
+        # CLI both hitting it at once, for a file that's still really there). Only treated as
+        # "gone, skip it and keep going" if it's still 404 after exhausting the normal retry
+        # budget -- never fatal to the rest of the run either way, unlike other errors.
+        except urllib.error.HTTPError as exc:
+            if attempt == _DOWNLOAD_MAX_RETRIES:
+                if exc.code == 404:
+                    # By this point target is guaranteed either absent or a truncated leftover
+                    # from an earlier attempt in this same loop (an attempt only ever reaches the
+                    # size check, and thus `break`s out having matched, once it fully succeeds --
+                    # found in practice: a 404 on attempt 2/3 happens inside urlopen(), before
+                    # target.open("wb") is ever reached that attempt, so a short file written by
+                    # attempt 1 was being left on disk here, silently miscounted as "present" by
+                    # anything that only checks existence even though "skipping" was logged).
+                    target.unlink(missing_ok=True)
+                    log(
+                        f"[skip] {folder}/{info['file_name']} still 404 after "
+                        f"{_DOWNLOAD_MAX_RETRIES + 1} attempts -- skipping for this run"
+                    )
+                    return
+                # Non-404 HTTP error, final attempt: same cleanup, then still raise (unlike a
+                # persistent 404, this is fatal to the rest of the run).
+                target.unlink(missing_ok=True)
+                raise
+            log(
+                f"[warning] download of {folder}/{info['file_name']} failed ({exc}) "
+                f"-- attempt {attempt + 1}/{_DOWNLOAD_MAX_RETRIES + 1}, retrying...",
+                file=sys.stderr,
+            )
         # OSError alongside URLError: a dropped wifi connection to the W2K-2 mid-transfer surfaces
         # as a raw ConnectionResetError, not wrapped in URLError (found in practice, same as the
-        # Overpass geocoding calls -- see geocode.py).
+        # Overpass geocoding calls -- see geocode.py). DownloadCancelled deliberately isn't caught
+        # here -- it's not a transient failure to retry, it propagates straight up.
         except (urllib.error.URLError, OSError) as exc:
             if attempt == _DOWNLOAD_MAX_RETRIES:
+                # Same cleanup as the 404 give-up path above: target may be a truncated leftover
+                # from an earlier attempt in this same loop, not touched by this attempt (which
+                # failed before ever reaching target.open("wb")) -- delete it rather than leave a
+                # wrong-size file that a size-only presence check (build_download_plan()'s
+                # already-complete-folder skip) can't tell apart from a real one.
+                target.unlink(missing_ok=True)
                 raise
             log(
                 f"[warning] download of {folder}/{info['file_name']} failed ({exc}) "
@@ -287,6 +400,74 @@ def download_file(
     else:
         stamp = "NO GPS TIME (1980 stamp)"
     log(f"[ok] {folder}/{info['file_name']} ({info['file_size']} bytes, {stamp})")
+
+
+def build_download_plan(
+    session: _Session, download_dir: Path, *, should_cancel: Optional[Callable[[], bool]] = None
+) -> Tuple[List[Tuple[str, dict]], List[dict]]:
+    """Fetches every folder's file list and returns (plan, to_download):
+
+    - plan: every (folder_name, info) pair, in remote order.
+    - to_download: the subset of those `info` dicts _will_download() says will actually be
+      fetched -- for a pre-download summary/progress total.
+
+    Shared by main()'s pre-download summary and android_entry.sync_from_w2k2()'s progress
+    reporting, so both track the same set of files without a second, separately-maintained copy of
+    the plan.
+
+    should_cancel, if given, is checked before each folder's own file-list request -- listing
+    every folder can itself take real time (dozens of folders, one request each), so without this
+    a cancelled Android sync would still have to wait out this whole phase before stopping.
+
+    Every folder except the very last one is provably closed out already and always ends up
+    holding exactly _FILES_PER_FOLDER files -- so if we already have that many locally for a given
+    folder, there is nothing left it could still need from the device, and its own file-list
+    request is skipped entirely (found in practice: this is most folders, most runs, and each one
+    is a real HTTP round trip to the W2K-2's own simple embedded web server). A non-last folder
+    with *some* but fewer than that many files present locally logs a warning instead of being
+    skipped -- still checked against the device, since we can't know which specific files are
+    missing without asking. The very last folder's own last file is always downloaded too, even
+    though it may still be actively growing on the device (found in practice: a folder-closed-out
+    assumption doesn't always hold, and a file that turns out to still be short gets naturally
+    retried next run anyway by download_file()'s own size check -- an occasional wasted redownload
+    beats silently sitting on stale/incomplete data, asked for explicitly)."""
+    folders = get_folders(session)
+    last_folder_name = max((f["name"] for f in folders), default=None)
+    plan: List[Tuple[str, dict]] = []
+    for folder in folders:
+        if should_cancel is not None and should_cancel():
+            raise DownloadCancelled()
+        folder_name = folder["name"]
+        is_last_folder = folder_name == last_folder_name
+
+        local_dir = download_dir / folder_name
+        local_count = len(list(local_dir.glob("*.ebl"))) if local_dir.is_dir() else 0
+        if not is_last_folder and local_count >= _FILES_PER_FOLDER:
+            continue
+        if not is_last_folder and 0 < local_count < _FILES_PER_FOLDER:
+            log(
+                f"[warning] {folder_name}: only {local_count} of the expected {_FILES_PER_FOLDER} "
+                "file(s) present locally -- checking with the device"
+            )
+
+        files = get_files(session, folder_name)
+        folder_needs = 0
+        for info in files:
+            plan.append((folder_name, info))
+            if _will_download(download_dir / folder_name / info["file_name"], info):
+                folder_needs += 1
+        # Only when there's actually something pending -- most folders are already fully synced
+        # after the first run, and logging "0 of 100" for every one of those on every subsequent
+        # run would just be noise.
+        if folder_needs:
+            log(f"[info] {folder_name}: {folder_needs} of {len(files)} file(s) still need downloading")
+
+    to_download = [
+        info
+        for folder_name, info in plan
+        if _will_download(download_dir / folder_name / info["file_name"], info)
+    ]
+    return plan, to_download
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -324,18 +505,18 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     try:
         session = make_session(host, config)
-        folders = get_folders(session)
-        # The very last file in the very last folder is the one the W2K-2 is presumably still
-        # actively writing to right now -- every other file is provably already closed out (a
-        # newer one exists after it), so the size-based skip only ever applies to that one.
-        last_folder_name = max((f["name"] for f in folders), default=None)
-        for folder in folders:
-            files = get_files(session, folder["name"])
-            is_last_folder = folder["name"] == last_folder_name
-            last_file_name = max((f["file_name"] for f in files), default=None) if is_last_folder else None
-            for info in files:
-                skip_if_growing = is_last_folder and info["file_name"] == last_file_name
-                download_file(session, config.download_dir, folder["name"], info, skip_if_growing=skip_if_growing)
+        plan, to_download = build_download_plan(session, config.download_dir)
+        total_mb = sum(info["file_size"] for info in to_download) / 1e6
+        # No "of M" denominator here -- build_download_plan() now skips already-complete folders
+        # entirely (see _FILES_PER_FOLDER), so len(plan) only reflects however many folders
+        # happened to need checking this run, not the size of the whole archive; showing it next
+        # to the download count read as a meaningful fraction when it no longer is one (asked for
+        # explicitly). The per-folder "N of M" lines above this one still have real M's (that
+        # folder's own full file count) and already say which folder.
+        log(f"[info] {len(to_download)} file(s) need downloading ({total_mb:.0f} MB)")
+
+        for folder_name, info in plan:
+            download_file(session, config.download_dir, folder_name, info)
     except urllib.error.HTTPError as exc:
         if exc.code == 401:
             sys.exit(

@@ -7,6 +7,8 @@ import pytest
 from nmea2000processor.w2k2_download import (
     _looks_like_w2k2,
     _needs_download,
+    _will_download,
+    build_download_plan,
     discover_w2k2,
     download_file,
     load_config,
@@ -131,6 +133,21 @@ def test_discover_w2k2_returns_none_when_nothing_on_the_subnet_matches(monkeypat
     assert discover_w2k2() is None
 
 
+def test_discover_w2k2_with_explicit_subnet_prefix_skips_self_detection(monkeypatch):
+    """Android runs with both a hotspot and a cellular uplink active at once, so self-detecting
+    the local subnet (via a UDP-connect to 8.8.8.8) would find the cellular subnet, not the
+    hotspot's -- passing subnet_prefix explicitly must skip that self-detection entirely."""
+    import nmea2000processor.w2k2_download as w2k2_download
+
+    def _fail_if_called():
+        raise AssertionError("_local_subnet_prefix() should not be called when subnet_prefix is given")
+
+    monkeypatch.setattr(w2k2_download, "_local_subnet_prefix", _fail_if_called)
+    monkeypatch.setattr(w2k2_download, "_looks_like_w2k2", lambda ip: ip == "192.168.43.7")
+
+    assert discover_w2k2(subnet_prefix="192.168.43.") == "http://192.168.43.7"
+
+
 def test_main_reports_a_clear_error_when_no_w2k2_is_found_on_the_network(monkeypatch, tmp_path):
     config_path = tmp_path / "w2k2.ini"
     config_path.write_text("[w2k2]\nuser = skipper\npassword = geheim\n", encoding="utf-8")
@@ -229,7 +246,7 @@ def test_download_file_retries_and_succeeds_after_a_transient_connection_reset(t
     calls = []
 
     class _FlakySession:
-        def download_to(self, path, params, target):
+        def download_to(self, path, params, target, should_cancel=None):
             calls.append(1)
             if len(calls) == 1:
                 raise ConnectionResetError("connection reset")
@@ -250,7 +267,7 @@ def test_download_file_gives_up_after_exhausting_retries(tmp_path, monkeypatch):
     import nmea2000processor.w2k2_download as w2k2_download
 
     class _AlwaysFailsSession:
-        def download_to(self, path, params, target):
+        def download_to(self, path, params, target, should_cancel=None):
             raise ConnectionResetError("connection reset")
 
     monkeypatch.setattr(w2k2_download.time, "sleep", lambda s: None)
@@ -262,42 +279,337 @@ def test_download_file_gives_up_after_exhausting_retries(tmp_path, monkeypatch):
         )
 
 
-def test_download_file_skips_a_small_still_growing_file(tmp_path):
-    """The active file's reported size climbs a bit on every poll while the W2K-2 is still
-    writing to it -- fetching it while it's barely started just wastes a download+decode cycle on
-    data that'll be superseded by a bigger snapshot next run anyway."""
+def test_download_file_retries_a_404_and_succeeds_if_a_later_attempt_works(tmp_path, monkeypatch):
+    """Regression test: a first version of this treated any 404 as "file permanently gone" and
+    skipped immediately, no retry -- but found in practice, a 404 isn't always that: the W2K-2's
+    simple embedded web server can return a spurious 404 under concurrent load (e.g. Android and
+    the desktop CLI both hitting it at once) for a file that's still really there. A 404 must get
+    the same retry budget as any other error."""
+    import nmea2000processor.w2k2_download as w2k2_download
+
     calls = []
 
-    class _Session:
-        def download_to(self, path, params, target):
+    class _FlakyServerSession:
+        def download_to(self, path, params, target, should_cancel=None):
             calls.append(1)
+            if len(calls) == 1:
+                raise urllib.error.HTTPError(url="x", code=404, msg="Not Found", hdrs=None, fp=None)
+            target.write_bytes(b"x" * 10)
+
+    monkeypatch.setattr(w2k2_download.time, "sleep", lambda s: None)
 
     download_file(
-        _Session(), tmp_path, "EBL000001",
-        {"file_name": "000001_005.ebl", "file_size": 1000, "file_time": 0},
-        skip_if_growing=True,
+        _FlakyServerSession(), tmp_path, "EBL000001",
+        {"file_name": "000001_000.ebl", "file_size": 10, "file_time": 0},
     )
 
-    assert calls == []
-    assert not (tmp_path / "EBL000001" / "000001_005.ebl").exists()
+    assert len(calls) == 2
+    assert (tmp_path / "EBL000001" / "000001_000.ebl").read_bytes() == b"x" * 10
 
 
-def test_download_file_does_not_skip_a_small_file_when_not_marked_growing(tmp_path):
-    """Only the very last file gets the size-based skip (see main()) -- a small file anywhere else
-    is provably already closed out (a newer file exists after it) and must always be fetched."""
+def test_download_file_skips_after_exhausting_retries_still_404(tmp_path, monkeypatch):
+    """Only once a 404 survives the full retry budget is the file treated as genuinely gone --
+    skipped (not fatal to the rest of the run), unlike other errors which still raise."""
+    import nmea2000processor.w2k2_download as w2k2_download
+
+    calls = []
+
+    class _AlwaysGoneSession:
+        def download_to(self, path, params, target, should_cancel=None):
+            calls.append(1)
+            raise urllib.error.HTTPError(url="x", code=404, msg="Not Found", hdrs=None, fp=None)
+
+    monkeypatch.setattr(w2k2_download.time, "sleep", lambda s: None)
+
+    download_file(
+        _AlwaysGoneSession(), tmp_path, "EBL000001",
+        {"file_name": "000001_000.ebl", "file_size": 10, "file_time": 0},
+    )
+
+    assert len(calls) == w2k2_download._DOWNLOAD_MAX_RETRIES + 1  # full retry budget used
+    assert not (tmp_path / "EBL000001" / "000001_000.ebl").exists()
+
+
+def test_download_file_raises_after_exhausting_retries_on_a_non_404_http_error(tmp_path, monkeypatch):
+    """Unlike a persistent 404 (skipped, not fatal), a persistent non-404 HTTP error still raises
+    and aborts the run, same as before this change."""
+    import nmea2000processor.w2k2_download as w2k2_download
+
+    class _AlwaysFailsSession:
+        def download_to(self, path, params, target, should_cancel=None):
+            raise urllib.error.HTTPError(url="x", code=503, msg="Service Unavailable", hdrs=None, fp=None)
+
+    monkeypatch.setattr(w2k2_download.time, "sleep", lambda s: None)
+
+    with pytest.raises(urllib.error.HTTPError):
+        download_file(
+            _AlwaysFailsSession(), tmp_path, "EBL000001",
+            {"file_name": "000001_000.ebl", "file_size": 10, "file_time": 0},
+        )
+
+
+def test_download_file_deletes_a_truncated_leftover_before_giving_up_on_repeated_404s(
+    tmp_path, monkeypatch
+):
+    """Regression test for a real device sequence: attempt 1 writes a truncated file (wrong size,
+    retried), then attempts 2 and 3 both 404 *inside* the request itself -- before ever reaching
+    target.open("wb") again -- so the truncated file from attempt 1 was never touched again, and
+    the final "[skip] ... still 404" message wrongly implied nothing local was left behind."""
+    import nmea2000processor.w2k2_download as w2k2_download
+
+    calls = []
+
+    class _TruncatesThen404sSession:
+        def download_to(self, path, params, target, should_cancel=None):
+            calls.append(1)
+            if len(calls) == 1:
+                target.write_bytes(b"x" * 3)  # truncated -- expected 10
+            else:
+                raise urllib.error.HTTPError(url="x", code=404, msg="Not Found", hdrs=None, fp=None)
+
+    monkeypatch.setattr(w2k2_download.time, "sleep", lambda s: None)
+
+    download_file(
+        _TruncatesThen404sSession(), tmp_path, "EBL000001",
+        {"file_name": "000001_000.ebl", "file_size": 10, "file_time": 0},
+    )
+
+    assert len(calls) == w2k2_download._DOWNLOAD_MAX_RETRIES + 1
+    assert not (tmp_path / "EBL000001" / "000001_000.ebl").exists()
+
+
+def test_download_file_deletes_a_truncated_leftover_before_raising_on_a_non_404_error(
+    tmp_path, monkeypatch
+):
+    """Same cleanup, but for the path that re-raises instead of skipping (a persistent non-404
+    error) -- a truncated leftover from an earlier attempt must not survive here either."""
+    import nmea2000processor.w2k2_download as w2k2_download
+
+    calls = []
+
+    class _TruncatesThenFailsSession:
+        def download_to(self, path, params, target, should_cancel=None):
+            calls.append(1)
+            if len(calls) == 1:
+                target.write_bytes(b"x" * 3)  # truncated -- expected 10
+            else:
+                raise urllib.error.HTTPError(url="x", code=503, msg="Service Unavailable", hdrs=None, fp=None)
+
+    monkeypatch.setattr(w2k2_download.time, "sleep", lambda s: None)
+
+    with pytest.raises(urllib.error.HTTPError):
+        download_file(
+            _TruncatesThenFailsSession(), tmp_path, "EBL000001",
+            {"file_name": "000001_000.ebl", "file_size": 10, "file_time": 0},
+        )
+
+    assert not (tmp_path / "EBL000001" / "000001_000.ebl").exists()
+
+
+def test_download_file_retries_a_truncated_transfer_and_succeeds_if_a_later_attempt_is_correct(
+    tmp_path, monkeypatch
+):
+    """Regression test for a real device behavior: a transfer can complete with no error (a clean
+    EOF, download_to() raises nothing) but still be short -- found in practice, a "successful"
+    download that was silently a quarter of the file's real size, previously logged as a plain
+    "[ok]" since nothing checked the actual result against info["file_size"]. Must be retried like
+    any other failure, not accepted just because no exception was raised."""
+    import nmea2000processor.w2k2_download as w2k2_download
+
+    calls = []
+
+    class _TruncatesFirstAttemptSession:
+        def download_to(self, path, params, target, should_cancel=None):
+            calls.append(1)
+            if len(calls) == 1:
+                target.write_bytes(b"x" * 3)  # truncated -- expected 10
+            else:
+                target.write_bytes(b"x" * 10)
+
+    monkeypatch.setattr(w2k2_download.time, "sleep", lambda s: None)
+
+    download_file(
+        _TruncatesFirstAttemptSession(), tmp_path, "EBL000001",
+        {"file_name": "000001_000.ebl", "file_size": 10, "file_time": 0},
+    )
+
+    assert len(calls) == 2
+    assert (tmp_path / "EBL000001" / "000001_000.ebl").read_bytes() == b"x" * 10
+
+
+def test_download_file_accepts_a_transfer_larger_than_the_stale_expected_size(tmp_path, monkeypatch):
+    """Found in practice: a file the device is still actively writing to (not necessarily just the
+    very last file overall -- see build_download_plan()) can grow between build_download_plan()'s
+    folder listing and the actual download, so the transfer legitimately comes back with MORE
+    bytes than info["file_size"] said to expect. An .ebl file only ever grows, never shrinks, so
+    this is accepted on the first attempt rather than being endlessly retried and then deleted like
+    a genuine (too few bytes) truncation would be."""
+    import nmea2000processor.w2k2_download as w2k2_download
+
+    calls = []
+
+    class _GrewSinceListingSession:
+        def download_to(self, path, params, target, should_cancel=None):
+            calls.append(1)
+            target.write_bytes(b"x" * 12)  # more than the stale expected 10
+
+    monkeypatch.setattr(w2k2_download.time, "sleep", lambda s: None)
+
+    download_file(
+        _GrewSinceListingSession(), tmp_path, "EBL000001",
+        {"file_name": "000001_000.ebl", "file_size": 10, "file_time": 0},
+    )
+
+    assert len(calls) == 1
+    assert (tmp_path / "EBL000001" / "000001_000.ebl").read_bytes() == b"x" * 12
+
+
+def test_download_file_deletes_a_still_truncated_file_after_exhausting_retries(tmp_path, monkeypatch):
+    """If every attempt comes back short, the wrong-size file is deleted rather than left on disk
+    -- otherwise it would be silently miscounted as "present" by anything that only checks
+    existence (e.g. build_download_plan()'s already-complete-locally folder check), even though
+    _needs_download()'s own size check would also have caught it on the next run regardless."""
+    import nmea2000processor.w2k2_download as w2k2_download
+
+    calls = []
+
+    class _AlwaysTruncatesSession:
+        def download_to(self, path, params, target, should_cancel=None):
+            calls.append(1)
+            target.write_bytes(b"x" * 3)  # never matches the expected 10
+
+    monkeypatch.setattr(w2k2_download.time, "sleep", lambda s: None)
+
+    download_file(
+        _AlwaysTruncatesSession(), tmp_path, "EBL000001",
+        {"file_name": "000001_000.ebl", "file_size": 10, "file_time": 0},
+    )
+
+    assert len(calls) == w2k2_download._DOWNLOAD_MAX_RETRIES + 1
+    assert not (tmp_path / "EBL000001" / "000001_000.ebl").exists()
+
+
+def test_download_file_downloads_a_small_still_growing_file(tmp_path, monkeypatch):
+    """The very last file (the one the W2K-2 may still be actively writing to) is downloaded like
+    any other file, even while small -- a folder-closed-out assumption doesn't always hold in
+    practice, and a file that's genuinely still short gets naturally retried next run anyway by
+    download_file()'s own size check (asked for explicitly: an occasional wasted redownload beats
+    silently sitting on stale/incomplete data)."""
+    import nmea2000processor.w2k2_download as w2k2_download
+
+    monkeypatch.setattr(w2k2_download.time, "sleep", lambda s: None)
     calls = []
 
     class _Session:
-        def download_to(self, path, params, target):
+        def download_to(self, path, params, target, should_cancel=None):
             calls.append(1)
             target.write_bytes(b"x" * 1000)
 
     download_file(
         _Session(), tmp_path, "EBL000001",
-        {"file_name": "000001_003.ebl", "file_size": 1000, "file_time": 0},
+        {"file_name": "000001_005.ebl", "file_size": 1000, "file_time": 0},
     )
 
     assert calls == [1]
+    assert (tmp_path / "EBL000001" / "000001_005.ebl").exists()
+
+
+def test_will_download_true_for_a_missing_file(tmp_path: Path):
+    assert _will_download(tmp_path / "nope.ebl", {"file_size": 1234}) is True
+
+
+def test_will_download_false_for_an_already_complete_file(tmp_path: Path):
+    target = tmp_path / "complete.ebl"
+    target.write_bytes(b"1234")
+
+    assert _will_download(target, {"file_size": 4}) is False
+
+
+def test_build_download_plan_includes_every_file_regardless_of_size_or_position(tmp_path: Path, monkeypatch):
+    """No file is ever excluded from the plan by size or by being the last file of the last
+    folder -- every file the device reports gets downloaded (or skipped only because it's already
+    complete locally, see _will_download())."""
+    import nmea2000processor.w2k2_download as w2k2_download
+
+    folders = [{"name": "EBL000001"}, {"name": "EBL000002"}]
+    files = {
+        "EBL000001": [{"file_name": "000001_000.ebl", "file_size": 10, "file_time": 0}],
+        "EBL000002": [
+            {"file_name": "000002_000.ebl", "file_size": 10, "file_time": 0},
+            {"file_name": "000002_001.ebl", "file_size": 10, "file_time": 0},
+        ],
+    }
+    monkeypatch.setattr(w2k2_download, "get_folders", lambda session: folders)
+    monkeypatch.setattr(w2k2_download, "get_files", lambda session, folder: files[folder])
+
+    plan, to_download = build_download_plan(session=object(), download_dir=tmp_path)
+
+    assert {(folder, info["file_name"]) for folder, info in plan} == {
+        ("EBL000001", "000001_000.ebl"),
+        ("EBL000002", "000002_000.ebl"),
+        ("EBL000002", "000002_001.ebl"),
+    }
+    assert sorted(info["file_name"] for info in to_download) == [
+        "000001_000.ebl", "000002_000.ebl", "000002_001.ebl",
+    ]
+
+
+def test_build_download_plan_skips_a_non_last_folder_with_100_local_files(tmp_path: Path, monkeypatch):
+    """A non-last folder is provably already closed out and always ends up
+    with exactly _FILES_PER_FOLDER files -- once we already have that many locally, there's
+    nothing left it could need, so its own file-list request (a real HTTP round trip) is skipped
+    entirely (asked for explicitly)."""
+    import nmea2000processor.w2k2_download as w2k2_download
+
+    complete_dir = tmp_path / "EBL000001"
+    complete_dir.mkdir()
+    for i in range(w2k2_download._FILES_PER_FOLDER):
+        (complete_dir / f"000001_{i:03d}.ebl").write_bytes(b"x")
+
+    folders = [{"name": "EBL000001"}, {"name": "EBL000002"}]
+    get_files_calls = []
+
+    def fake_get_files(session, folder):
+        get_files_calls.append(folder)
+        return [{"file_name": "000002_000.ebl", "file_size": 10, "file_time": 0}]
+
+    monkeypatch.setattr(w2k2_download, "get_folders", lambda session: folders)
+    monkeypatch.setattr(w2k2_download, "get_files", fake_get_files)
+
+    plan, to_download = build_download_plan(session=object(), download_dir=tmp_path)
+
+    assert get_files_calls == ["EBL000002"]  # EBL000001 never listed at all
+    assert {folder for folder, info in plan} == {"EBL000002"}
+
+
+def test_build_download_plan_warns_about_a_partial_non_last_folder_but_still_checks_it(
+    tmp_path: Path, monkeypatch
+):
+    """Fewer than _FILES_PER_FOLDER files locally for a non-last folder is unexpected (asked for
+    explicitly) -- but unlike the complete case, we don't know which specific file(s) are missing
+    without asking the device, so this folder is still listed and checked normally."""
+    import nmea2000processor.w2k2_download as w2k2_download
+
+    partial_dir = tmp_path / "EBL000001"
+    partial_dir.mkdir()
+    (partial_dir / "000001_000.ebl").write_bytes(b"x")  # only 1 of the expected 100
+
+    folders = [{"name": "EBL000001"}, {"name": "EBL000002"}]
+    get_files_calls = []
+
+    def fake_get_files(session, folder):
+        get_files_calls.append(folder)
+        return [{"file_name": f"{folder.lower()}_000.ebl", "file_size": 10, "file_time": 0}]
+
+    logged = []
+    monkeypatch.setattr(w2k2_download, "get_folders", lambda session: folders)
+    monkeypatch.setattr(w2k2_download, "get_files", fake_get_files)
+    monkeypatch.setattr(w2k2_download, "log", lambda message, **kwargs: logged.append(message))
+
+    build_download_plan(session=object(), download_dir=tmp_path)
+
+    assert get_files_calls == ["EBL000001", "EBL000002"]
+    assert any("only 1 of the expected 100" in message for message in logged)
 
 
 def test_needs_download_missing_file(tmp_path: Path):
