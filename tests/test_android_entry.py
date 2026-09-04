@@ -147,6 +147,9 @@ def test_sync_from_w2k2_forwards_log_lines_to_the_callback(tmp_path, monkeypatch
         def onLogLine(self, line):
             lines.append(line)
 
+        def onDownloadComplete(self):
+            pass
+
     android_entry.sync_from_w2k2(
         user="skipper",
         password="geheim",
@@ -162,6 +165,57 @@ def test_sync_from_w2k2_forwards_log_lines_to_the_callback(tmp_path, monkeypatch
 
     assert any("[info] Found W2K-2 at http://10.0.0.5" in line for line in lines)
     assert log_module._log_sink is None  # cleared after the call, not left forwarding forever
+
+
+def test_sync_from_w2k2_calls_on_download_complete_once_before_the_pipeline_runs(tmp_path, monkeypatch):
+    """Lets Kotlin drop its own network-activity indicator (the foreground sync notification)
+    once there's no more network I/O left in this call -- decode/build below is pure CPU (asked
+    for explicitly: a "dataSync" foreground service has a real cumulative time budget on
+    Android 15+, no reason to keep spending it during the CPU-only part)."""
+    events = []
+
+    monkeypatch.setattr(android_entry.w2k2_download, "discover_w2k2", lambda subnet_prefix: "http://10.0.0.5")
+
+    class _FakeSession:
+        def download_to(self, path, params, target, should_cancel=None):
+            target.write_bytes(b"x" * 10)
+
+    monkeypatch.setattr(android_entry.w2k2_download, "make_session", lambda host, config: _FakeSession())
+    monkeypatch.setattr(android_entry.w2k2_download, "get_folders", lambda session: [])
+
+    def fake_run_pipeline(**kwargs):
+        events.append("run_pipeline")
+        return {"ok": True, "trip_count": 0}
+
+    monkeypatch.setattr(android_entry, "run_pipeline", fake_run_pipeline)
+
+    class _Listener:
+        def report(self, current, total, file_name):
+            pass
+
+        def isCancelled(self):
+            return False
+
+        def onLogLine(self, line):
+            pass
+
+        def onDownloadComplete(self):
+            events.append("onDownloadComplete")
+
+    android_entry.sync_from_w2k2(
+        user="skipper",
+        password="geheim",
+        subnet_prefix="192.168.43.",
+        download_dir=str(tmp_path / "Actisense"),
+        output_html_path=str(tmp_path / "logbook.html"),
+        sample_cache_path=str(tmp_path / "cache.pkl"),
+        boat_name="Test Boat",
+        mmsi="244123456",
+        call_sign="PA1234",
+        progress_callback=_Listener(),
+    )
+
+    assert events == ["onDownloadComplete", "run_pipeline"]
 
 
 def test_sync_from_w2k2_downloads_then_runs_the_pipeline(tmp_path, monkeypatch):
@@ -265,6 +319,9 @@ def test_sync_from_w2k2_reports_progress_only_for_files_it_actually_fetches(tmp_
         def onLogLine(self, line):
             pass
 
+        def onDownloadComplete(self):
+            pass
+
     android_entry.sync_from_w2k2(
         user="skipper",
         password="geheim",
@@ -321,6 +378,9 @@ def test_sync_from_w2k2_stops_between_files_when_cancelled(tmp_path, monkeypatch
             return len(self.reports) >= 1
 
         def onLogLine(self, line):
+            pass
+
+        def onDownloadComplete(self):
             pass
 
     controller = _CancelAfterFirstFile()

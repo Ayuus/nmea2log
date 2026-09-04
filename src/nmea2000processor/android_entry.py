@@ -189,9 +189,9 @@ def sync_from_w2k2(
     the phone's cellular subnet, not the hotspot's, since both are active at once on Android.
 
     progress_callback, if given, is any object with report(current, total, file_name),
-    isCancelled(), and onLogLine(line) methods -- typically a Kotlin object passed in through
-    Chaquopy (Chaquopy lets Python call methods on an injected Java/Kotlin object like a normal
-    Python object).
+    isCancelled(), onLogLine(line), and onDownloadComplete() methods -- typically a Kotlin object
+    passed in through Chaquopy (Chaquopy lets Python call methods on an injected Java/Kotlin object
+    like a normal Python object).
     report() is called once after each file that actually gets downloaded (not for ones already
     complete locally), with a 1-based current count out of the total this run will fetch -- lets
     the UI show real "N/M" progress instead of a single "bezig..." message for however long a
@@ -205,6 +205,10 @@ def sync_from_w2k2(
     MB total", "[ok]"/"[skip]" per-file messages the desktop CLI prints, so the Android app can
     show the same messages instead of a separately-maintained set of Android-only text (asked for
     explicitly).
+    onDownloadComplete() is called exactly once, right after the last file's download attempt and
+    before run_pipeline() (decode/build/write) starts -- lets Kotlin drop its own network-activity
+    indicator (the foreground sync notification) once there's no more network I/O left in this
+    call, since decode/build is pure CPU (see MainActivity.runSync()).
 
     Returns a dict: {"ok": False, "error": ...} if discovery/login/download failed, or was
     cancelled (with "cancelled": True), before any pipeline run was possible; otherwise
@@ -268,6 +272,15 @@ def _sync_from_w2k2(
                 downloaded_count += 1
                 if progress_callback is not None:
                     progress_callback.report(downloaded_count, to_download_total, info["file_name"])
+
+        # Downloading is done -- decode/build below is pure CPU, no network involved, so the
+        # caller can drop its own network-activity indicator now (Android: the foreground sync
+        # notification, kept up only for as long as it's actually covering network I/O, see
+        # MainActivity.runSync() -- a "dataSync" foreground service has a real cumulative time
+        # budget on Android 15+, no reason to keep spending it once there's no more network work
+        # left in this call).
+        if progress_callback is not None:
+            progress_callback.onDownloadComplete()
 
         # Every locally-present .ebl file, not just the ones build_download_plan() actually
         # checked against the device this run -- a folder it skipped entirely (already complete
