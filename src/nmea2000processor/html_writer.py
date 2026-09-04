@@ -42,9 +42,11 @@ from .logbook_writer import (
     _trip_utc_offset_hours,
     _typical_rpm_text,
 )
-from .translations import MONTH_ABBR_NL, NL as T
+from .translations import LANGUAGE_FLAGS, LANGUAGES, MONTH_ABBR, MONTH_ABBR_NL, NL as T
 from .tripbuilder import NavSample, TripLeg
+from .geocode import NoGeocoder
 from .marine import NoMarine
+from .model import PositionFix
 from .weather import NoWeather
 
 _LEAFLET_CSS = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -122,19 +124,46 @@ def _compute_totals(trips: List[TripLeg]) -> _Totals:
     )
 
 
+def _i18n_span(key: str) -> str:
+    """A translatable label: the given key's Dutch text (this file's own server-side rendering
+    stays Dutch, unchanged), tagged with data-i18n so the client-side language switcher (see the
+    <script> in write_html_logbook) can swap it to another already-embedded language without
+    regenerating the file."""
+    return f'<span data-i18n="{escape(key)}">{escape(T[key])}</span>'
+
+
+def _i18n_tpl_html(key: str, **args: object) -> str:
+    """Like _i18n_span, but for a key with {placeholder}s (e.g. rpm_tooltip_single) -- the
+    substituted Dutch sentence is shown directly (and is all a no-JS/email viewer ever sees), while
+    data-i18n-tpl/data-i18n-args let the switcher re-run the *same* substitution against another
+    language's own template string, instead of only ever being able to swap whole fixed labels."""
+    text = T[key].format(**args)
+    args_json = json.dumps({k: str(v) for k, v in args.items()})
+    return (
+        f'<span data-i18n-tpl="{escape(key)}" data-i18n-args="{escape(args_json, {chr(34): "&quot;"})}">'
+        f"{escape(text)}</span>"
+    )
+
+
 def _localized_date(d: date) -> str:
     """strftime's %b is locale-independent (always English month abbreviations) unless the
-    process locale is changed, which is fragile/platform-dependent -- MONTH_ABBR_NL avoids
-    that."""
+    process locale is changed, which is fragile/platform-dependent -- MONTH_ABBR_NL avoids that.
+    The month abbreviation is wrapped in its own data-i18n-month span (keyed by %b's English
+    output, the same key every language's own month table in translations.py uses) so the
+    language switcher can re-translate just that word without touching the day number next to
+    it."""
     text = f"{d:%b %d}"
     month, day = text.split(" ", 1)
-    return f"{MONTH_ABBR_NL[month]} {day}"
+    return f'<span data-i18n-month="{month}">{MONTH_ABBR_NL[month]}</span> {day}'
 
 
 def _week_label(iso_year: int, iso_week: int) -> str:
+    """Returns HTML (not plain text, unlike its own name might suggest) -- both the "Week" prefix
+    and the month abbreviations inside _localized_date are individually re-translatable, so the
+    caller must not escape() this like a plain string."""
     monday = date.fromisocalendar(iso_year, iso_week, 1)
     sunday = monday + timedelta(days=6)
-    return f"{T['week_label_prefix']} {iso_week} ({_localized_date(monday)} - {_localized_date(sunday)})"
+    return f"{_i18n_span('week_label_prefix')} {iso_week} ({_localized_date(monday)} - {_localized_date(sunday)})"
 
 
 def _decimated_points(trip: TripLeg) -> List[Tuple[float, float]]:
@@ -219,20 +248,21 @@ def _water_temp_detail_text(trip: TripLeg) -> str:
 
 
 def _motion_detail_text(trip: TripLeg) -> str:
-    """Full text, spelling out which number is roll vs. pitch (slingeren/stampen) and the
+    """HTML (not plain text -- the roll/pitch/peak words are individually re-translatable, see
+    _i18n_span), spelling out which number is roll vs. pitch (slingeren/stampen) and the
     peak-to-peak range directly -- this now lives inside the Details popup (see
     _details_cell_html), which has room for that instead of needing a numbers-only cell plus a
     hover tooltip to explain it."""
     parts = []
     if trip.roll_variation_deg is not None:
-        text = f"{T['motion_roll']} ±{_nl_num(trip.roll_variation_deg)}°"
+        text = f"{_i18n_span('motion_roll')} ±{_nl_num(trip.roll_variation_deg)}°"
         if trip.roll_range_deg is not None:
-            text += f" ({T['motion_peak']} {_nl_num(trip.roll_range_deg)}°)"
+            text += f" ({_i18n_span('motion_peak')} {_nl_num(trip.roll_range_deg)}°)"
         parts.append(text)
     if trip.pitch_variation_deg is not None:
-        text = f"{T['motion_pitch']} ±{_nl_num(trip.pitch_variation_deg)}°"
+        text = f"{_i18n_span('motion_pitch')} ±{_nl_num(trip.pitch_variation_deg)}°"
         if trip.pitch_range_deg is not None:
-            text += f" ({T['motion_peak']} {_nl_num(trip.pitch_range_deg)}°)"
+            text += f" ({_i18n_span('motion_peak')} {_nl_num(trip.pitch_range_deg)}°)"
         parts.append(text)
     return ", ".join(parts)
 
@@ -253,36 +283,38 @@ def _typical_rpm_html(trip: TripLeg) -> str:
     if len(trip.typical_rpm_speed_kn) == 1:
         min_kn, max_kn, avg_kn, avg_fuel_l_per_nm = next(iter(trip.typical_rpm_speed_kn.values()))
         if avg_fuel_l_per_nm is not None:
-            tooltip = T["rpm_tooltip_single_fuel"].format(
+            tooltip_html = _i18n_tpl_html(
+                "rpm_tooltip_single_fuel",
                 avg=_nl_num(avg_kn), min=_nl_num(min_kn), max=_nl_num(max_kn),
                 fuel=_nl_num(avg_fuel_l_per_nm, 2),
             )
         else:
-            tooltip = T["rpm_tooltip_single"].format(
-                avg=_nl_num(avg_kn), min=_nl_num(min_kn), max=_nl_num(max_kn)
+            tooltip_html = _i18n_tpl_html(
+                "rpm_tooltip_single", avg=_nl_num(avg_kn), min=_nl_num(min_kn), max=_nl_num(max_kn)
             )
     else:
         parts = []
         for instance, (min_kn, max_kn, avg_kn, avg_fuel_l_per_nm) in sorted(trip.typical_rpm_speed_kn.items()):
             if avg_fuel_l_per_nm is not None:
                 parts.append(
-                    T["rpm_tooltip_per_engine_fuel"].format(
+                    _i18n_tpl_html(
+                        "rpm_tooltip_per_engine_fuel",
                         instance=instance, avg=_nl_num(avg_kn), min=_nl_num(min_kn), max=_nl_num(max_kn),
                         fuel=_nl_num(avg_fuel_l_per_nm, 2),
                     )
                 )
             else:
                 parts.append(
-                    T["rpm_tooltip_per_engine"].format(
-                        instance=instance, avg=_nl_num(avg_kn), min=_nl_num(min_kn), max=_nl_num(max_kn)
+                    _i18n_tpl_html(
+                        "rpm_tooltip_per_engine",
+                        instance=instance, avg=_nl_num(avg_kn), min=_nl_num(min_kn), max=_nl_num(max_kn),
                     )
                 )
-        tooltip = ", ".join(parts)
-    tooltip = escape(tooltip)
+        tooltip_html = ", ".join(parts)
     return (
         f'<span class="temp-hover">{visible}'
         f'<span class="temp-tooltip" style="background:#eef4fb;color:#1a4a7a;">'
-        f"⚙️ {tooltip}</span></span>"
+        f"⚙️ {tooltip_html}</span></span>"
     )
 
 
@@ -299,19 +331,18 @@ def _max_speed_html(trip: TripLeg, offset_hours: float) -> str:
 
     if len(trip.max_speed_rpm) == 1:
         rpm = next(iter(trip.max_speed_rpm.values()))
-        tooltip = T["max_speed_tooltip_single"].format(time=time_text, rpm=f"{rpm:.0f}")
+        tooltip_html = _i18n_tpl_html("max_speed_tooltip_single", time=time_text, rpm=f"{rpm:.0f}")
     elif trip.max_speed_rpm:
-        tooltip = ", ".join(
-            T["max_speed_tooltip_per_engine"].format(time=time_text, instance=instance, rpm=f"{rpm:.0f}")
+        tooltip_html = ", ".join(
+            _i18n_tpl_html("max_speed_tooltip_per_engine", time=time_text, instance=instance, rpm=f"{rpm:.0f}")
             for instance, rpm in sorted(trip.max_speed_rpm.items())
         )
     else:
         return visible
-    tooltip = escape(tooltip)
     return (
         f'<span class="temp-hover">{visible}'
         f'<span class="temp-tooltip" style="background:#eef4fb;color:#1a4a7a;">'
-        f"🚀 {tooltip}</span></span>"
+        f"🚀 {tooltip_html}</span></span>"
     )
 
 
@@ -383,10 +414,10 @@ def _trip_title(trip: TripLeg, depart_local: datetime) -> str:
     return f"{depart_local:%Y-%m-%d %H:%M} {trip.depart_place} -> {trip.arrive_place}"
 
 
-def _details_row_html(icon: str, label: str, value: str) -> str:
+def _details_row_html(icon: str, label_key: str, value: str) -> str:
     return (
         f'<div class="detail-row"><span class="detail-icon">{icon}</span>'
-        f'<span class="detail-label">{escape(label)}:</span> {value}</div>'
+        f'<span class="detail-label">{_i18n_span(label_key)}:</span> {value}</div>'
     )
 
 
@@ -423,9 +454,9 @@ def _details_cell_html(
             # departure/arrival ends get their own map markers already, a redundant numbered
             # circle right on top of those would just be clutter (found in practice).
             if i == 0:
-                number_text = escape(T["map_marker_departure"])
+                number_text = _i18n_span("map_marker_departure")
             elif i == last_idx:
-                number_text = escape(T["map_marker_arrival"])
+                number_text = _i18n_span("map_marker_arrival")
             else:
                 number_text = str(i)
             local_time = _to_local(entry.time, offset_hours)
@@ -479,21 +510,21 @@ def _details_cell_html(
             )
         sections.append(
             "<table class=\"log-table\"><thead><tr>"
-            f"<th>{escape(T['log_header_number'])}</th>"
-            f"<th>{escape(T['log_header_time'])}</th><th>{escape(T['log_header_position'])}</th>"
-            f"<th>{escape(T['log_header_cog'])}</th><th>{escape(T['log_header_sog'])}</th>"
-            f"<th>{escape(T['log_header_wind'])}</th><th>{escape(T['log_header_precip'])}</th>"
-            f"<th>{escape(T['log_header_cloud'])}</th>"
-            f"<th>{escape(T['log_header_wave'])}</th><th>{escape(T['log_header_current'])}</th>"
+            f"<th>{_i18n_span('log_header_number')}</th>"
+            f"<th>{_i18n_span('log_header_time')}</th><th>{_i18n_span('log_header_position')}</th>"
+            f"<th>{_i18n_span('log_header_cog')}</th><th>{_i18n_span('log_header_sog')}</th>"
+            f"<th>{_i18n_span('log_header_wind')}</th><th>{_i18n_span('log_header_precip')}</th>"
+            f"<th>{_i18n_span('log_header_cloud')}</th>"
+            f"<th>{_i18n_span('log_header_wave')}</th><th>{_i18n_span('log_header_current')}</th>"
             f'</tr></thead><tbody>{"".join(rows)}</tbody></table>'
         )
 
     water_temp = _water_temp_detail_text(trip)
     if water_temp:
-        sections.append(_details_row_html("🌡️", T["header_water_temp"], escape(water_temp)))
+        sections.append(_details_row_html("🌡️", "header_water_temp", escape(water_temp)))
     motion = _motion_detail_text(trip)
     if motion:
-        sections.append(_details_row_html("〰️", T["header_motion"], escape(motion)))
+        sections.append(_details_row_html("〰️", "header_motion", motion))
 
     if not sections:
         return ""
@@ -501,9 +532,9 @@ def _details_cell_html(
     title = f'<div class="trip-map-title">{escape(_trip_title(trip, depart_local))}</div>'
     dialog = (
         f'<dialog class="log-dialog" id="log-{idx}">{title}{"".join(sections)}'
-        f'<button type="button" class="close-log">{escape(T["log_close_button"])}</button></dialog>'
+        f'<button type="button" class="close-log">{_i18n_span("log_close_button")}</button></dialog>'
     )
-    return f'<button type="button" class="show-log" data-trip="{idx}">{escape(T["details_button"])}</button>{dialog}'
+    return f'<button type="button" class="show-log" data-trip="{idx}">{_i18n_span("details_button")}</button>{dialog}'
 
 
 def _remarks_cell_html(trip_uid: Optional[str], idx: int, remarks_api_url: str) -> str:
@@ -524,13 +555,18 @@ def _remarks_cell_html(trip_uid: Optional[str], idx: int, remarks_api_url: str) 
         '<textarea class="remarks-textarea" rows="12" cols="60"></textarea>'
         '<p class="remarks-error" hidden></p>'
         '<div class="remarks-buttons">'
-        f'<button type="button" class="remarks-save">{escape(T["remarks_save_button"])}</button>'
-        f'<button type="button" class="remarks-cancel">{escape(T["remarks_cancel_button"])}</button>'
+        f'<button type="button" class="remarks-save">{_i18n_span("remarks_save_button")}</button>'
+        # .remarks-cancel-label (not just the button's own textContent) -- unlike every other
+        # translated button, a read-only visitor's fetch-completion JS below permanently relabels
+        # this one to "Close" by *changing which key this inner span's data-i18n points at*, not
+        # by overwriting text directly -- so a later language switch still re-translates it
+        # correctly (to "Close" in the new language, not back to "Cancel").
+        f'<button type="button" class="remarks-cancel"><span class="remarks-cancel-label" '
+        f'data-i18n="remarks_cancel_button">{escape(T["remarks_cancel_button"])}</span></button>'
         "</div>"
         "</dialog>"
     )
-    placeholder = escape(T["remarks_button_placeholder"])
-    return f'<button type="button" class="show-remarks" data-trip="{idx}">{placeholder}</button>{dialog}'
+    return f'<button type="button" class="show-remarks" data-trip="{idx}">{_i18n_span("remarks_button_placeholder")}</button>{dialog}'
 
 
 def _totals_html(totals: _Totals) -> str:
@@ -541,42 +577,42 @@ def _totals_html(totals: _Totals) -> str:
     avg_speed_kn = totals.distance_nm / totals.moving_hours if totals.moving_hours > 0 else None
 
     items = [
-        (T["totals_trips"], str(totals.trip_count)),
-        (T["totals_distance"], f"{_nl_num(totals.distance_nm)} nm"),
+        (_i18n_span("totals_trips"), str(totals.trip_count)),
+        (_i18n_span("totals_distance"), f"{_nl_num(totals.distance_nm)} nm"),
     ]
     # In 3rd/4th place specifically (found in practice: wanted near the top, not buried after
     # every fuel/speed stat).
     if len(totals.engine_hours_current) == 1:
         hours = next(iter(totals.engine_hours_current.values()))
-        items.append((T["totals_engine_hour_meter"], f"{_nl_num(hours)} h"))
+        items.append((_i18n_span("totals_engine_hour_meter"), f"{_nl_num(hours)} h"))
     else:
         for instance, hours in sorted(totals.engine_hours_current.items()):
-            label = T["totals_engine_hour_meter_engine"].format(instance=instance)
-            items.append((label, f"{_nl_num(hours)} h"))
+            label_html = _i18n_tpl_html("totals_engine_hour_meter_engine", instance=instance)
+            items.append((label_html, f"{_nl_num(hours)} h"))
     if len(totals.engine_hours) == 1:
         hours = next(iter(totals.engine_hours.values()))
-        items.append((T["totals_hours_logged"], f"{_nl_num(hours)} h"))
+        items.append((_i18n_span("totals_hours_logged"), f"{_nl_num(hours)} h"))
     else:
         for instance, hours in sorted(totals.engine_hours.items()):
-            label = T["totals_hours_logged_engine"].format(instance=instance)
-            items.append((label, f"{_nl_num(hours)} h"))
-    items.append((T["totals_hours"], f"{_nl_num(totals.moving_hours)} h"))
-    items.append((T["totals_fuel_calculated"], f"{_nl_num(totals.fuel_liters)} L"))
+            label_html = _i18n_tpl_html("totals_hours_logged_engine", instance=instance)
+            items.append((label_html, f"{_nl_num(hours)} h"))
+    items.append((_i18n_span("totals_hours"), f"{_nl_num(totals.moving_hours)} h"))
+    items.append((_i18n_span("totals_fuel_calculated"), f"{_nl_num(totals.fuel_liters)} L"))
     if totals.fuel_liters_device is not None:
-        items.append((T["totals_fuel_engine_meter"], f"{_nl_num(totals.fuel_liters_device)} L"))
+        items.append((_i18n_span("totals_fuel_engine_meter"), f"{_nl_num(totals.fuel_liters_device)} L"))
     if avg_l_per_nm is not None:
-        items.append((T["totals_avg_consumption"], f"{_nl_num(avg_l_per_nm, 2)} L/nm"))
+        items.append((_i18n_span("totals_avg_consumption"), f"{_nl_num(avg_l_per_nm, 2)} L/nm"))
     if avg_l_per_hour is not None:
-        items.append((T["totals_avg_consumption"], f"{_nl_num(avg_l_per_hour)} L/h"))
+        items.append((_i18n_span("totals_avg_consumption"), f"{_nl_num(avg_l_per_hour)} L/h"))
     if avg_speed_kn is not None:
-        items.append((T["totals_avg_speed"], f"{_nl_num(avg_speed_kn)} kn"))
+        items.append((_i18n_span("totals_avg_speed"), f"{_nl_num(avg_speed_kn)} kn"))
     if totals.max_speed_kn is not None:
-        items.append((T["totals_top_speed"], f"{_nl_num(totals.max_speed_kn)} kn"))
+        items.append((_i18n_span("totals_top_speed"), f"{_nl_num(totals.max_speed_kn)} kn"))
 
     cards = "".join(
-        f'<div class="stat"><div class="stat-label">{escape(label)}</div>'
+        f'<div class="stat"><div class="stat-label">{label_html}</div>'
         f'<div class="stat-value">{escape(value)}</div></div>'
-        for label, value in items
+        for label_html, value in items
     )
     # Column count is set by JS (see layoutTotals in the <script> below) to exactly however many
     # cards fit the trips table's own width -- one row whenever that's enough room, wrapping to
@@ -609,7 +645,7 @@ def _trip_row_html(
     avg_consumption_nm = _avg_consumption_l_per_nm(trip)
 
     map_cell = (
-        f'<button class="show-map" data-trip="{idx}">{escape(T["map_button_show"])}</button>'
+        f'<button class="show-map" data-trip="{idx}">{_i18n_span("map_button_show")}</button>'
         if trip.track
         else ""
     )
@@ -647,58 +683,69 @@ def _trip_row_html(
     return f'<tr class="trip-row"{uid_attr}>{row}</tr>{map_row}'
 
 
-_HEADER_FULL_NAMES = {
-    T["header_departure_abbr"]: T["header_departure_full"],
-    T["header_arrival_abbr"]: T["header_arrival_full"],
+_HEADER_FULL_KEYS = {
+    "header_departure_abbr": "header_departure_full",
+    "header_arrival_abbr": "header_arrival_full",
 }
 # Shown abbreviated always, with just a native title="" tooltip on hover -- unlike Vertr./Aank.
 # above, expanding this one on a wide viewport isn't worth it: with this many columns the table
 # needs horizontal scrolling regardless of viewport width anyway (found in practice), so it would
 # only ever waste column width without actually helping anyone see more of the table at once.
-_HEADER_ABBR_TITLES = {T["header_seq_abbr"]: T["header_seq_full"]}
+_HEADER_ABBR_TITLE_KEYS = {"header_seq_abbr": "header_seq_full"}
 # Headers whose meaning isn't obvious from the label alone get a hover tooltip (same CSS-only
 # mechanism as the table cells, see .temp-hover/.temp-tooltip) instead of a longer header.
-_HEADER_TOOLTIPS: Dict[str, str] = {}
+_HEADER_TOOLTIP_KEYS: Dict[str, str] = {}
 
 
-def _header_cell_html(label: str) -> str:
-    title = _HEADER_ABBR_TITLES.get(label)
-    if title is not None:
-        return f'<span title="{escape(title)}">{escape(label)}</span>'
-    full = _HEADER_FULL_NAMES.get(label)
-    if full is None:
-        base = escape(label)
+def _header_cell_html(key: str) -> str:
+    """key is a translations.py key (e.g. "header_seq_abbr"), not the resolved Dutch text --
+    every piece shown here is individually wrapped so the language switcher (see the <script> in
+    write_html_logbook) can re-translate a header cell without needing to know this function's own
+    HTML structure."""
+    title_key = _HEADER_ABBR_TITLE_KEYS.get(key)
+    if title_key is not None:
+        return (
+            f'<span title="{escape(T[title_key])}" data-i18n="{escape(key)}" '
+            f'data-i18n-title="{escape(title_key)}">{escape(T[key])}</span>'
+        )
+    full_key = _HEADER_FULL_KEYS.get(key)
+    if full_key is None:
+        base = _i18n_span(key)
     else:
         # Shows the abbreviation by default; a wide-enough viewport swaps to the full word (see
         # the .hdr-full / .hdr-abbr media query in write_html_logbook's <style>).
-        base = f'<span class="hdr-full">{escape(full)}</span><span class="hdr-abbr">{escape(label)}</span>'
-    tooltip = _HEADER_TOOLTIPS.get(label)
-    if tooltip is None:
+        base = (
+            f'<span class="hdr-full" data-i18n="{escape(full_key)}">{escape(T[full_key])}</span>'
+            f'<span class="hdr-abbr" data-i18n="{escape(key)}">{escape(T[key])}</span>'
+        )
+    tooltip_key = _HEADER_TOOLTIP_KEYS.get(key)
+    if tooltip_key is None:
         return base
     return (
         f'<span class="temp-hover">{base}'
-        f'<span class="temp-tooltip" style="background:#eef4fb;color:#1a4a7a;">{escape(tooltip)}</span></span>'
+        f'<span class="temp-tooltip" style="background:#eef4fb;color:#1a4a7a;" '
+        f'data-i18n="{escape(tooltip_key)}">{escape(T[tooltip_key])}</span></span>'
     )
 
 
-_HEADERS = [
-    T["header_seq_abbr"],
-    T["header_date"],
-    T["header_departure_abbr"],
-    T["header_from"],
-    T["header_arrival_abbr"],
-    T["header_to"],
-    T["header_duration"],
-    T["header_distance"],
-    T["header_avg_speed"],
-    T["header_max_speed"],
-    T["header_fuel"],
-    T["header_l_per_nm"],
-    T["header_engine_hours"],
-    T["header_rpm"],
-    T["header_warnings"],
-    T["header_route"],
-    T["header_details"],
+_HEADER_KEYS = [
+    "header_seq_abbr",
+    "header_date",
+    "header_departure_abbr",
+    "header_from",
+    "header_arrival_abbr",
+    "header_to",
+    "header_duration",
+    "header_distance",
+    "header_avg_speed",
+    "header_max_speed",
+    "header_fuel",
+    "header_l_per_nm",
+    "header_engine_hours",
+    "header_rpm",
+    "header_warnings",
+    "header_route",
+    "header_details",
 ]
 
 
@@ -708,7 +755,7 @@ def _headers_for(remarks_api_url: str) -> List[str]:
     individual trips without track data leave that cell empty, "remarks enabled" is a whole-
     document setting, not a per-trip one, so an unused column isn't shown at all rather than
     always being present-but-empty."""
-    return _HEADERS + [T["header_remarks"]] if remarks_api_url else _HEADERS
+    return _HEADER_KEYS + ["header_remarks"] if remarks_api_url else _HEADER_KEYS
 
 
 def write_html_logbook(
@@ -726,6 +773,8 @@ def write_html_logbook(
     remarks_api_url: str = _DEFAULT_REMARKS_API_URL,
     weather=None,
     marine=None,
+    geocoder=None,
+    latest_position: Optional[PositionFix] = None,
 ) -> None:
     """``trip_uids``: one id per trip, in the same order as ``trips`` *before* sorting -- e.g.
     from ``trip_ids.assign_trip_ids(trips)``. Embedded as an invisible ``data-uid`` attribute on
@@ -755,7 +804,23 @@ def write_html_logbook(
 
     ``marine``: a marine.MarineFetcher (or marine.NoMarine, the default) -- adds wave and ocean-
     current columns to the same periodic log table, from a separate Open-Meteo dataset than
-    ``weather``."""
+    ``weather``.
+
+    ``latest_position``: the single most recent GPS fix in the *whole* dataset (e.g. cli.py's own
+    ``all_fixes[-1]``), shown under "Laatst bijgewerkt" as a place name (via ``geocoder``) -- asked
+    for explicitly, since a trip that's still underway when the data runs out has no arrival place
+    of its own to show in the trips table (a raw "Unknown (end outside log file)"), leaving no
+    indication anywhere on the page of where the boat actually last was. Deliberately *not* derived
+    from the last trip's own arrive_lat/arrive_lon/arrive_time: those can lag behind the true latest
+    fix by days if the boat has been sitting anchored/idle (still logging position) since the last
+    trip closed off, same reasoning as ``latest_data_at`` above. None (the default) shows nothing.
+
+    ``geocoder``: a geocode.Geocoder (or geocode.NoGeocoder, the default) -- reverse-geocodes
+    ``latest_position`` into a place name the same way every trip's own depart_place/arrive_place
+    already is, so a mid-sea position reads the same as everywhere else on this page (e.g. "op het
+    water, bij Pornichet") instead of a bare, un-styled lat/lon."""
+    if geocoder is None:
+        geocoder = NoGeocoder()
     trips = list(trips)
     uid_by_trip = {id(trip): uid for trip, uid in zip(trips, trip_uids)} if trip_uids is not None else {}
     trips = sorted(trips, key=lambda t: t.depart_time)
@@ -764,6 +829,7 @@ def write_html_logbook(
         latest_data_at = max(t.arrive_time for t in trips)
 
     last_updated_html = ""
+    last_position_html = ""
     if latest_data_at is not None:
         # No single trip necessarily covers latest_data_at (it can be later than every trip's own
         # arrival, e.g. while anchored) -- the most recent trip's own offset is still the best
@@ -773,8 +839,17 @@ def write_html_logbook(
         latest_local = _to_local(latest_data_at, offset)
         last_updated_class = "last-updated fetch-failed" if fetch_failed else "last-updated"
         last_updated_html = (
-            f'<div class="{last_updated_class}">{escape(T["last_updated"])}: {latest_local:%Y-%m-%d %H:%M}</div>'
+            f'<div class="{last_updated_class}">{_i18n_span("last_updated")}: {latest_local:%Y-%m-%d %H:%M}</div>'
         )
+        if latest_position is not None:
+            place = geocoder.place_name(latest_position.lat, latest_position.lon)
+            position_time_local = _to_local(latest_position.time, offset)
+            maps_url = f"https://www.google.com/maps?q={latest_position.lat:.5f},{latest_position.lon:.5f}"
+            last_position_html = (
+                f'<div class="last-updated">{_i18n_span("last_position")}: '
+                f'<a href="{escape(maps_url)}" target="_blank" rel="noopener">{escape(place)}</a>'
+                f" ({position_time_local:%H:%M})</div>"
+            )
 
     # Keyed by (calendar_year, iso_year, iso_week) -- calendar_year decides which year *section*
     # (and whose totals) a trip belongs to, deliberately kept separate from the ISO week's own
@@ -828,7 +903,7 @@ def write_html_logbook(
             indices = list(reversed(by_week[(calendar_year, iso_year, iso_week)]))
             body_rows.append(
                 f'<tr class="week-row"><td colspan="{len(headers)}">'
-                f"{escape(_week_label(iso_year, iso_week))}</td></tr>"
+                f"{_week_label(iso_year, iso_week)}</td></tr>"
             )
             body_rows.extend(
                 _trip_row_html(
@@ -873,19 +948,32 @@ def write_html_logbook(
 
     title = f"{boat_name} - {T['logbook_title_suffix']}" if boat_name else T["logbook_title_suffix"]
     heading = (
-        f"{escape(boat_name)} &mdash; {T['logbook_title_suffix']}" if boat_name else T["logbook_title_suffix"]
+        f"{escape(boat_name)} &mdash; {_i18n_span('logbook_title_suffix')}"
+        if boat_name
+        else _i18n_span("logbook_title_suffix")
     )
 
     vessel_info_lines = []
     if mmsi:
         vessel_info_lines.append(f"MMSI: {escape(mmsi)}")
     if call_sign:
-        vessel_info_lines.append(f"{T['vessel_call_sign']}: {escape(call_sign)}")
+        vessel_info_lines.append(f"{_i18n_span('vessel_call_sign')}: {escape(call_sign)}")
     vessel_info_html = (
         '<div class="vessel-info">' + "".join(f"<div>{line}</div>" for line in vessel_info_lines) + "</div>"
         if vessel_info_lines
         else ""
     )
+
+    # Flag buttons for the client-side language switcher (see the <script> below) -- flags/order
+    # come from translations.py's LANGUAGE_FLAGS so this file doesn't hardcode which languages are
+    # available. "nl" starts active since the page itself is always server-rendered in Dutch;
+    # applyLanguage() below corrects this to the visitor's saved/browser language once the page's
+    # own JS runs.
+    lang_switcher_html = '<div class="lang-switcher">' + "".join(
+        f'<button type="button" class="lang-flag{" active" if lang == "nl" else ""}" '
+        f'data-lang="{lang}" aria-label="{lang}">{flag}</button>'
+        for lang, flag in LANGUAGE_FLAGS.items()
+    ) + "</div>"
 
     html = f"""<!DOCTYPE html>
 <html lang="nl">
@@ -901,8 +989,18 @@ def write_html_logbook(
 <style>
   body {{ font-family: sans-serif; margin: 0; padding: 1.5em; background: #f7f7f8; color: #1a1a1a; }}
   h1 {{ margin: 0 0 0.2em; }}
-  .header-row {{ display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5em 1.5em; }}
+  .header-row {{ display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 0.5em 1.5em; }}
+  .header-right {{ display: flex; flex-direction: column; align-items: flex-end; gap: 0.4em; }}
   .vessel-info {{ color: #444; font-size: 1.1em; text-align: right; line-height: 1.4; }}
+  /* Top-right language switcher (asked for explicitly): a row of flag buttons, not a dropdown --
+     only 4 languages, so all of them fit and stay one tap away instead of needing a menu opened
+     first. */
+  .lang-switcher {{ display: flex; gap: 0.3em; }}
+  .lang-flag {{
+    cursor: pointer; border: 1px solid #ccc; background: white; border-radius: 4px;
+    padding: 0.15em 0.4em; font-size: 1.2em; line-height: 1.3;
+  }}
+  .lang-flag.active {{ border-color: #1a6ecc; box-shadow: 0 0 0 1px #1a6ecc inset; }}
   .last-updated {{ color: #666; font-size: 0.85em; margin-bottom: 1em; }}
   .last-updated.fetch-failed {{ color: #c0392b; font-weight: 600; }}
   h2 {{ margin-top: 2em; border-bottom: 2px solid #1a6ecc; padding-bottom: 0.2em; }}
@@ -964,6 +1062,12 @@ def write_html_logbook(
      by that scroll position at all. */
   .log-dialog {{ border: none; border-radius: 8px; padding: 1em 1.2em; box-shadow: 0 4px 20px rgba(0,0,0,0.25); min-width: 20em; max-width: 90vw; }}
   .log-dialog::backdrop {{ background: rgba(0,0,0,0.4); }}
+  /* Draggable (see the drag* JS below) so the Details popup can be moved aside instead of sitting
+     centered on top of an open trip map underneath it (found in practice, asked for explicitly).
+     The title bar is the natural drag handle for the Details popup; remarks-dialog has no title
+     of its own, so its empty padding around the textarea/buttons works as the drag area there. */
+  .log-dialog .trip-map-title {{ cursor: move; }}
+  .log-dialog.dragging {{ cursor: move; user-select: none; }}
   .log-table {{ width: 100%; border-collapse: collapse; white-space: nowrap; margin-bottom: 0.8em; }}
   .log-table th, .log-table td {{ padding: 0.2em 0.6em; border-bottom: 1px solid #eee; text-align: left; font-size: 0.9em; }}
   .log-table th {{ background: #f0f0f0; }}
@@ -1031,28 +1135,82 @@ def write_html_logbook(
     {escape(T["noscript_warning"])}
   </div>
 </noscript>
-<div class="header-row"><h1>{heading}</h1>{vessel_info_html}</div>
+<div class="header-row"><h1>{heading}</h1><div class="header-right">{vessel_info_html}{lang_switcher_html}</div></div>
 {last_updated_html}
+{last_position_html}
 {_totals_html(_compute_totals(trips))}
 {"".join(sections)}
 <script>
 const TRIPS = {trips_json};
-const MAP_MARKER_DEPARTURE = {json.dumps(T["map_marker_departure"])};
-const MAP_MARKER_ARRIVAL = {json.dumps(T["map_marker_arrival"])};
 const REMARKS_API_URL = {json.dumps(remarks_api_url)};
-const REMARKS_BUTTON_PLACEHOLDER = {json.dumps(T["remarks_button_placeholder"])};
-const REMARKS_CLOSE_BUTTON = {json.dumps(T["remarks_close_button"])};
-const REMARKS_SAVE_FORBIDDEN = {json.dumps(T["remarks_save_forbidden"])};
-const REMARKS_SAVE_FAILED = {json.dumps(T["remarks_save_failed"])};
-const REMARKS_UNAVAILABLE = {json.dumps(T["remarks_unavailable"])};
 // Filled in by the server (see wordpress-plugin/little_endian-index.php) when this file is
 // served through the login gate, which -- unlike this Python-generated static file -- can call
 // WordPress's own wp_create_nonce('wp_rest'). A POST to the REST API needs this even though the
 // browser already sends the WordPress login cookie automatically (same-origin): the nonce is
 // WordPress's CSRF protection on top of that cookie, required for any state-changing (non-GET)
 // REST request. If this file is opened some other way (not through the gate, or locally), the
-// placeholder never gets replaced and saving fails cleanly with REMARKS_SAVE_FAILED below.
+// placeholder never gets replaced and saving fails cleanly with a REMARKS_SAVE_FAILED message
+// below.
 const WP_REST_NONCE = "%%WP_REST_NONCE%%";
+
+// Language switcher (asked for explicitly): this page is always server-rendered in Dutch (see
+// html_writer.py's T = NL), but every translatable bit of UI chrome also carries a data-i18n/
+// data-i18n-tpl/data-i18n-month attribute (see _i18n_span()/_i18n_tpl_html() in that file) --
+// I18N/MONTH_ABBR_BY_LANG embed all four languages so switching is instant and needs no server
+// round-trip. Free-form data (place names, trip stats, fault/warning text from the decoded NMEA
+// data itself) is never touched by this -- only fixed labels/buttons/headers are.
+const I18N = {json.dumps(LANGUAGES)};
+const MONTH_ABBR_BY_LANG = {json.dumps(MONTH_ABBR)};
+const BOAT_NAME = {json.dumps(boat_name or "")};
+let currentLang = 'nl';
+
+function applyLanguage(lang) {{
+  if (!I18N[lang]) return;
+  currentLang = lang;
+  document.documentElement.lang = lang;
+  document.title = (BOAT_NAME ? BOAT_NAME + ' - ' : '') + I18N[lang].logbook_title_suffix;
+  document.querySelectorAll('[data-i18n]').forEach(function(el) {{
+    var text = I18N[lang][el.dataset.i18n];
+    if (text !== undefined) el.textContent = text;
+  }});
+  document.querySelectorAll('[data-i18n-title]').forEach(function(el) {{
+    var text = I18N[lang][el.dataset.i18nTitle];
+    if (text !== undefined) el.title = text;
+  }});
+  document.querySelectorAll('[data-i18n-tpl]').forEach(function(el) {{
+    var tpl = I18N[lang][el.dataset.i18nTpl];
+    if (tpl === undefined) return;
+    var args = {{}};
+    try {{ args = JSON.parse(el.dataset.i18nArgs || '{{}}'); }} catch (e) {{}}
+    el.textContent = tpl.replace(/\\{{(\\w+)\\}}/g, function(whole, key) {{
+      return Object.prototype.hasOwnProperty.call(args, key) ? args[key] : whole;
+    }});
+  }});
+  document.querySelectorAll('[data-i18n-month]').forEach(function(el) {{
+    var months = MONTH_ABBR_BY_LANG[lang];
+    var text = months && months[el.dataset.i18nMonth];
+    if (text !== undefined) el.textContent = text;
+  }});
+  document.querySelectorAll('.lang-flag').forEach(function(btn) {{
+    btn.classList.toggle('active', btn.dataset.lang === lang);
+  }});
+  try {{ localStorage.setItem('logbookLang', lang); }} catch (e) {{}}
+}}
+
+document.querySelectorAll('.lang-flag').forEach(function(btn) {{
+  btn.addEventListener('click', function() {{ applyLanguage(btn.dataset.lang); }});
+}});
+
+(function() {{
+  var savedLang = null;
+  try {{ savedLang = localStorage.getItem('logbookLang'); }} catch (e) {{}}
+  if (savedLang && I18N[savedLang]) {{
+    applyLanguage(savedLang);
+    return;
+  }}
+  var browserLang = ((navigator.language || 'nl').split('-')[0] || 'nl').toLowerCase();
+  applyLanguage(I18N[browserLang] ? browserLang : 'nl');
+}})();
 // Picks however many columns fit the trips table's own width in one row (matching it exactly,
 // since 1fr columns divide a grid's width evenly), wrapping to more only once that stops fitting
 // -- see the .totals CSS rule above for why this can't just be done with auto-fill in CSS alone.
@@ -1139,9 +1297,10 @@ document.querySelectorAll('.show-map').forEach(function(btn) {{
       // markers below (and so it doesn't need dismissing to see the next one). Positioned from
       // departPos/arrivePos (the stay's own averaged position), not the route line's own first/
       // last point -- see the trip_data comment in html_writer.py for why.
-      L.marker(TRIPS[idx].departPos).addTo(map).bindTooltip(entryTooltip(MAP_MARKER_DEPARTURE, log[0]));
+      L.marker(TRIPS[idx].departPos).addTo(map)
+        .bindTooltip(entryTooltip(I18N[currentLang].map_marker_departure, log[0]));
       L.marker(TRIPS[idx].arrivePos).addTo(map)
-        .bindTooltip(entryTooltip(MAP_MARKER_ARRIVAL, log[log.length - 1]));
+        .bindTooltip(entryTooltip(I18N[currentLang].map_marker_arrival, log[log.length - 1]));
       // Same numbering as the Details popup's own log table (see _details_cell_html) -- only the
       // entries strictly between departure and arrival get their own numbered marker; those two
       // ends already have the markers just above, a numbered circle right on top would just be
@@ -1157,6 +1316,56 @@ document.querySelectorAll('.show-map').forEach(function(btn) {{
     }}
   }});
 }});
+// Movable (not fixed-centered) so a popup can be dragged aside instead of sitting on top of an
+// open trip map underneath it (found in practice, asked for explicitly). The title bar is the
+// natural drag handle for the Details popup (see .log-dialog .trip-map-title); remarks-dialog
+// has no title of its own, so its empty padding around the textarea/buttons works as the drag
+// area there.
+function enableDialogDrag(dialog) {{
+  var dragging = false, moved = false, startX, startY, startLeft, startTop;
+  dialog.addEventListener('pointerdown', function(e) {{
+    if (e.target.closest('button, textarea, input, select, a, td, th')) return;
+    var rect = dialog.getBoundingClientRect();
+    dialog.style.position = 'fixed';
+    dialog.style.margin = '0';
+    dialog.style.left = rect.left + 'px';
+    dialog.style.top = rect.top + 'px';
+    startX = e.clientX; startY = e.clientY;
+    startLeft = rect.left; startTop = rect.top;
+    dragging = true; moved = false;
+    dialog.classList.add('dragging');
+    dialog.setPointerCapture(e.pointerId);
+  }});
+  dialog.addEventListener('pointermove', function(e) {{
+    if (!dragging) return;
+    var dx = e.clientX - startX, dy = e.clientY - startY;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) moved = true;
+    var maxLeft = Math.max(0, window.innerWidth - dialog.offsetWidth);
+    var maxTop = Math.max(0, window.innerHeight - dialog.offsetHeight);
+    dialog.style.left = Math.min(Math.max(0, startLeft + dx), maxLeft) + 'px';
+    dialog.style.top = Math.min(Math.max(0, startTop + dy), maxTop) + 'px';
+  }});
+  dialog.addEventListener('pointerup', function() {{
+    dragging = false;
+    dialog.classList.remove('dragging');
+  }});
+  // Suppress the backdrop-click-closes handler below for the click that follows an actual drag
+  // -- otherwise dragging by grabbing the dialog's own empty padding (remarks-dialog's only drag
+  // area) closed it again right after moving it, since that click's target is still the dialog
+  // element itself, same as a real backdrop click. Capture phase + stopImmediatePropagation so
+  // this runs before that handler regardless of listener registration order.
+  dialog.addEventListener('click', function(e) {{
+    if (moved && e.target === dialog) {{ e.stopImmediatePropagation(); moved = false; }}
+  }}, true);
+  // Reset to centered each time it's reopened, so a dialog dragged aside doesn't stay stuck off
+  // to the side (possibly off-screen after a resize) the next time it's opened.
+  dialog.addEventListener('close', function() {{
+    dialog.style.removeProperty('position');
+    dialog.style.removeProperty('margin');
+    dialog.style.removeProperty('left');
+    dialog.style.removeProperty('top');
+  }});
+}}
 document.querySelectorAll('.show-log').forEach(function(btn) {{
   var dialog = document.getElementById('log-' + btn.dataset.trip);
   btn.addEventListener('click', function() {{ dialog.showModal(); }});
@@ -1166,6 +1375,7 @@ document.querySelectorAll('.show-log').forEach(function(btn) {{
   dialog.addEventListener('click', function(e) {{
     if (e.target === dialog) dialog.close();
   }});
+  enableDialogDrag(dialog);
 }});
 if (REMARKS_API_URL) {{
   var remarksButtonsByUid = {{}};
@@ -1185,6 +1395,7 @@ if (REMARKS_API_URL) {{
     dialog.addEventListener('click', function(e) {{
       if (e.target === dialog) dialog.close();
     }});
+    enableDialogDrag(dialog);
     dialog.querySelector('.remarks-save').addEventListener('click', function() {{
       var text = textarea.value;
       // credentials: 'same-origin' sends the WordPress login cookie automatically (this page and
@@ -1197,13 +1408,14 @@ if (REMARKS_API_URL) {{
         body: JSON.stringify({{trip_uid: tripUid, text: text}})
       }}).then(function(response) {{
         if (!response.ok) {{
-          errorEl.textContent = response.status === 403 ? REMARKS_SAVE_FORBIDDEN : REMARKS_SAVE_FAILED;
+          errorEl.textContent = response.status === 403
+            ? I18N[currentLang].remarks_save_forbidden : I18N[currentLang].remarks_save_failed;
           errorEl.hidden = false;
           return;
         }}
         dialog.close();
       }}).catch(function() {{
-        errorEl.textContent = REMARKS_SAVE_FAILED;
+        errorEl.textContent = I18N[currentLang].remarks_save_failed;
         errorEl.hidden = false;
       }});
     }});
@@ -1230,13 +1442,18 @@ if (REMARKS_API_URL) {{
         document.querySelectorAll('.remarks-dialog').forEach(function(dialog) {{
           dialog.querySelector('.remarks-textarea').readOnly = true;
           dialog.querySelector('.remarks-save').hidden = true;
-          dialog.querySelector('.remarks-cancel').textContent = REMARKS_CLOSE_BUTTON;
+          // Repoints the label's own data-i18n key (rather than just setting textContent) so a
+          // later language switch keeps re-translating it as "Close", not back to "Cancel" --
+          // see the comment on .remarks-cancel-label in html_writer.py.
+          var cancelLabel = dialog.querySelector('.remarks-cancel-label');
+          cancelLabel.dataset.i18n = 'remarks_close_button';
+          cancelLabel.textContent = I18N[currentLang].remarks_close_button;
         }});
       }}
     }})
     .catch(function() {{
       Object.keys(remarksButtonsByUid).forEach(function(tripUid) {{
-        remarksButtonsByUid[tripUid].title = REMARKS_UNAVAILABLE;
+        remarksButtonsByUid[tripUid].title = I18N[currentLang].remarks_unavailable;
       }});
     }});
 }}

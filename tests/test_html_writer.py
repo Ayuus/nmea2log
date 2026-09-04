@@ -4,9 +4,19 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from nmea2000processor.html_writer import write_html_logbook
+from nmea2000processor.model import PositionFix
 from nmea2000processor.tripbuilder import BatteryHealth, EngineHealth, NavSample, TripLeg
 from nmea2000processor.marine import HourlyMarine
 from nmea2000processor.weather import HourlyWeather
+
+
+class _StubGeocoder:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def place_name(self, lat: float, lon: float) -> str:
+        self.calls.append((lat, lon))
+        return f"Port@{lat:.2f},{lon:.2f}"
 
 
 def _trip(**overrides) -> TripLeg:
@@ -78,7 +88,7 @@ def test_write_html_logbook_shows_mmsi_and_call_sign(tmp_path: Path):
 
     html = out_path.read_text(encoding="utf-8")
     assert "MMSI: 244003579" in html
-    assert "Roepnaam: PI 3201" in html
+    assert 'data-i18n="vessel_call_sign">Roepnaam</span>: PI 3201' in html
 
 
 def test_write_html_logbook_omits_vessel_info_when_not_given(tmp_path: Path):
@@ -87,8 +97,10 @@ def test_write_html_logbook_omits_vessel_info_when_not_given(tmp_path: Path):
     write_html_logbook([_trip()], out_path)
 
     html = out_path.read_text(encoding="utf-8")
-    assert "MMSI" not in html
-    assert "Roepnaam" not in html
+    # Not "Roepnaam" not in html -- that word is now always present regardless, embedded in the
+    # page's own I18N JS object for the language switcher (see write_html_logbook) -- the actual
+    # thing being tested is that the vessel-info block itself doesn't render at all.
+    assert '<div class="vessel-info">' not in html
 
 
 def test_write_html_logbook_without_boat_name(tmp_path: Path):
@@ -121,7 +133,7 @@ def test_write_html_logbook_engine_hour_totals_are_3rd_and_4th_cards(tmp_path: P
     write_html_logbook([trip], out_path)
 
     html = out_path.read_text(encoding="utf-8")
-    stat_labels = re.findall(r'<div class="stat-label">([^<]*)</div>', html)
+    stat_labels = re.findall(r'<div class="stat-label">(?:<span[^>]*>)?([^<]*)', html)
     assert stat_labels[2] == "Motoruren-teller"
     assert stat_labels[3] == "Gelogde motoruren"
 
@@ -194,7 +206,7 @@ def test_write_html_logbook_totals_omit_engine_label_with_one_engine(tmp_path: P
     write_html_logbook([trip], out_path)
 
     html = out_path.read_text(encoding="utf-8")
-    assert "Gelogde motoruren</div>" in html
+    assert 'data-i18n="totals_hours_logged">Gelogde motoruren</span></div>' in html
     assert "engine 0" not in html.lower()
 
 
@@ -213,7 +225,7 @@ def test_write_html_logbook_shows_current_engine_hour_meter(tmp_path: Path):
     write_html_logbook([trip_a, trip_b], out_path)
 
     html = out_path.read_text(encoding="utf-8")
-    assert "Motoruren-teller</div>" in html
+    assert 'data-i18n="totals_engine_hour_meter">Motoruren-teller</span></div>' in html
     assert "102,5 h" in html
     assert "100,0 h" not in html
 
@@ -369,7 +381,8 @@ def test_write_html_logbook_one_table_per_year_with_week_divider_rows(tmp_path: 
     html = out_path.read_text(encoding="utf-8")
     assert html.count('<table class="trips">') == 1
     assert html.count('class="week-row"') == 2
-    assert "Week 28" in html and "Week 29" in html
+    week_label = 'data-i18n="week_label_prefix">Week</span>'
+    assert f"{week_label} 28" in html and f"{week_label} 29" in html
 
 
 def test_write_html_logbook_shows_per_year_totals(tmp_path: Path):
@@ -464,9 +477,22 @@ def test_write_html_logbook_shows_periodic_log_entries(tmp_path: Path):
     assert "200&deg;" in log_table
     assert "5,8 kn" in log_table  # 3.0 m/s -> ~5.8 kn
     # first/last rows are labeled Vertrek/Aankomst, not numbered; the two in between are 1 and 2
-    assert "<td>Vertrek</td>" in log_table
-    assert "<td>Aankomst</td>" in log_table
+    assert '<td><span data-i18n="map_marker_departure">Vertrek</span></td>' in log_table
+    assert '<td><span data-i18n="map_marker_arrival">Aankomst</span></td>' in log_table
     assert "<td>1</td>" in log_table and "<td>2</td>" in log_table
+
+
+def test_write_html_logbook_makes_the_details_popup_draggable(tmp_path: Path):
+    """Regression test: the Details popup used to sit fixed-centered on top of an open trip map,
+    with no way to move it aside (asked for explicitly)."""
+    trip = _trip(track=_track_every_10_minutes(10))
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([trip], out_path, utc_offset_hours=0)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert "function enableDialogDrag(dialog)" in html
+    assert "enableDialogDrag(dialog);" in html
 
 
 def test_write_html_logbook_log_interval_is_configurable(tmp_path: Path):
@@ -597,7 +623,7 @@ def test_write_html_logbook_shows_the_latest_trips_arrival_as_last_updated(tmp_p
     write_html_logbook([older, newest], out_path, utc_offset_hours=0)
 
     html = out_path.read_text(encoding="utf-8")
-    assert "Laatst bijgewerkt: 2026-08-11 14:32" in html
+    assert 'data-i18n="last_updated">Laatst bijgewerkt</span>: 2026-08-11 14:32' in html
 
 
 def test_write_html_logbook_latest_data_at_overrides_the_last_trips_arrival(tmp_path: Path):
@@ -613,7 +639,10 @@ def test_write_html_logbook_latest_data_at_overrides_the_last_trips_arrival(tmp_
     )
 
     html = out_path.read_text(encoding="utf-8")
-    assert '<div class="last-updated">Laatst bijgewerkt: 2026-08-16 08:05</div>' in html
+    assert (
+        '<div class="last-updated"><span data-i18n="last_updated">Laatst bijgewerkt</span>: '
+        "2026-08-16 08:05</div>" in html
+    )
 
 
 def test_write_html_logbook_marks_last_updated_red_when_fetch_failed(tmp_path: Path):
@@ -633,6 +662,62 @@ def test_write_html_logbook_last_updated_not_red_by_default(tmp_path: Path):
     html = out_path.read_text(encoding="utf-8")
     assert 'class="last-updated"' in html
     assert 'class="last-updated fetch-failed"' not in html
+
+
+def test_write_html_logbook_shows_the_last_known_position_under_last_updated(tmp_path: Path):
+    """Asked for explicitly: a trip that ends "outside the log file" (still underway when the data
+    ran out, e.g. GPS lost approaching a harbor) has no arrival place name to show in the trips
+    table -- this is the only place on the page that still shows *where* the boat last was.
+    Deliberately built from latest_position (e.g. cli.py's own all_fixes[-1]), not from the last
+    trip's own arrive_lat/arrive_lon/arrive_time -- those can lag behind the true latest fix by
+    days if the boat has been sitting anchored/idle since the last trip closed (same reasoning as
+    latest_data_at, see write_html_logbook's own docstring), asked for explicitly after an earlier
+    version used the last trip's own arrival instead. With no geocoder given (NoGeocoder, the
+    default) the position shows as plain coordinates, same fallback depart_place/arrive_place
+    already use without one."""
+    trip = _trip()  # present only to prove the position doesn't come from here
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook(
+        [trip], out_path, utc_offset_hours=0,
+        latest_position=PositionFix(time=datetime(2026, 9, 4, 11, 37), lat=47.13877, lon=-2.36295),
+    )
+
+    html = out_path.read_text(encoding="utf-8")
+    assert 'data-i18n="last_position">Laatste positie</span>: ' in html
+    assert "47.1388, -2.3630" in html  # NoGeocoder's own plain "{lat:.4f}, {lon:.4f}" format
+    assert "(11:37)" in html
+    assert 'href="https://www.google.com/maps?q=47.13877,-2.36295"' in html
+
+
+def test_write_html_logbook_geocodes_the_last_position_into_a_place_name(tmp_path: Path):
+    """Asked for explicitly: shown as a place, the same way depart_place/arrive_place already are
+    (via geocode.Geocoder.place_name()), not as raw coordinates -- a real geocoder plugged in must
+    actually get used for this position too, not just for the trips themselves."""
+    geocoder = _StubGeocoder()
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook(
+        [_trip()], out_path, utc_offset_hours=0,
+        latest_position=PositionFix(time=datetime(2026, 9, 4, 11, 37), lat=47.13877, lon=-2.36295),
+        geocoder=geocoder,
+    )
+
+    html = out_path.read_text(encoding="utf-8")
+    assert ">Port@47.14,-2.36<" in html
+    assert geocoder.calls == [(47.13877, -2.36295)]
+
+
+def test_write_html_logbook_no_last_position_without_one_given(tmp_path: Path):
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([_trip()], out_path)
+
+    html = out_path.read_text(encoding="utf-8")
+    # "last_position" itself still appears once, inside the embedded I18N JS object (every
+    # language's full translation table is always embedded, regardless) -- what must be absent is
+    # the *rendered* span, since no latest_position was given at all.
+    assert 'data-i18n="last_position"' not in html
 
 
 def test_write_html_logbook_has_a_noscript_fallback_for_the_map_buttons(tmp_path: Path):
@@ -739,7 +824,7 @@ def test_write_html_logbook_shows_max_speed_per_trip_and_overall(tmp_path: Path)
     html = out_path.read_text(encoding="utf-8")
     assert "8,2 kn" in html
     assert "11,6 kn" in html
-    assert "Topsnelheid</div>" in html
+    assert 'data-i18n="totals_top_speed">Topsnelheid</span></div>' in html
 
 
 def test_write_html_logbook_shows_low_battery_warning(tmp_path: Path):
@@ -870,8 +955,8 @@ def test_write_html_logbook_details_popup_shows_motion(tmp_path: Path):
 
     html = out_path.read_text(encoding="utf-8")
     assert "Beweging" in html
-    assert "slingeren ±2,5°" in html
-    assert "stampen ±0,7°" in html
+    assert 'data-i18n="motion_roll">slingeren</span> ±2,5°' in html
+    assert 'data-i18n="motion_pitch">stampen</span> ±0,7°' in html
 
 
 def test_write_html_logbook_shows_motion_peak_in_the_details_popup(tmp_path: Path):
@@ -883,8 +968,9 @@ def test_write_html_logbook_shows_motion_peak_in_the_details_popup(tmp_path: Pat
     write_html_logbook([trip], out_path)
 
     html = out_path.read_text(encoding="utf-8")
-    assert "slingeren ±2,5° (piek 23,0°)" in html
-    assert "stampen ±0,7° (piek 5,3°)" in html
+    peak_span = '<span data-i18n="motion_peak">piek</span>'
+    assert f'data-i18n="motion_roll">slingeren</span> ±2,5° ({peak_span} 23,0°)' in html
+    assert f'data-i18n="motion_pitch">stampen</span> ±0,7° ({peak_span} 5,3°)' in html
 
 
 def test_write_html_logbook_water_temp_shows_range_when_notable(tmp_path: Path):
@@ -907,8 +993,11 @@ def test_write_html_logbook_no_details_button_without_any_data(tmp_path: Path):
 
     html = out_path.read_text(encoding="utf-8")
     assert 'class="show-log"' not in html
-    assert "Watertemperatuur" not in html
-    assert "Beweging" not in html
+    # Not "Watertemperatuur"/"Beweging" not in html -- those words are now always present
+    # regardless, embedded in the page's own I18N JS object for the language switcher (see
+    # write_html_logbook) -- the actual thing being tested is that neither detail row renders.
+    assert 'data-i18n="header_water_temp"' not in html
+    assert 'data-i18n="header_motion"' not in html
 
 
 def test_write_html_logbook_escapes_place_names(tmp_path: Path):

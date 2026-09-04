@@ -840,6 +840,8 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         remarks_api_url=args.remarks_api_url,
         weather=weather,
         marine=marine,
+        geocoder=geocoder,
+        latest_position=all_fixes[-1] if all_fixes else None,
     )
     log(f"[ok] HTML logbook written: {html_path} ({len(trips)} trip(s))")
 

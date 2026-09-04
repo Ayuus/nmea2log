@@ -1,11 +1,19 @@
 """UI text for the generated HTML logbook, kept separate from the rendering logic in
-html_writer.py so wording tweaks -- or a future second language -- don't need to touch the HTML-
-building code itself. CSV/GPX output is deliberately not covered here: those stay English
-regardless (see html_writer.py's module docstring), so a fixed script reading the CSV keeps
-working no matter what language the HTML is in.
+html_writer.py so wording tweaks -- or another language -- don't need to touch the HTML-building
+code itself. CSV/GPX output is deliberately not covered here: those stay English regardless (see
+html_writer.py's module docstring), so a fixed script reading the CSV keeps working no matter what
+language the HTML is in.
 
-To add another language later: copy ``NL`` into a same-shaped dict (every key must be present --
-html_writer.py doesn't fall back key-by-key), then wire a way to pick which one gets used.
+The generated page itself only ever renders in NL server-side (unchanged from before): every
+translatable element also carries a data-i18n/data-i18n-tpl attribute (see html_writer.py), and all
+four languages below are embedded in the page as one JS object so a visitor can switch languages
+client-side without regenerating the file -- see the language-switcher button in the page header.
+Free-form data that isn't UI chrome (place names, fault/warning text from the decoded NMEA data
+itself) is never translated by this mechanism.
+
+To add another language: copy ``NL`` into a same-shaped dict (every key must be present --
+html_writer.py doesn't fall back key-by-key), add its month-abbreviation table, and register both
+in ``LANGUAGES``/``MONTH_ABBR``/``LANGUAGE_FLAGS`` below.
 """
 
 from __future__ import annotations
@@ -16,6 +24,7 @@ NL: Dict[str, str] = {
     # Page title / heading
     "logbook_title_suffix": "Vaarlogboek",
     "last_updated": "Laatst bijgewerkt",
+    "last_position": "Laatste positie",
     "vessel_call_sign": "Roepnaam",
     # <noscript> banner
     "noscript_warning": (
@@ -107,9 +116,273 @@ NL: Dict[str, str] = {
     "remarks_unavailable": "Opmerkingen konden niet worden geladen.",
 }
 
+EN: Dict[str, str] = {
+    "logbook_title_suffix": "Sailing Logbook",
+    "last_updated": "Last updated",
+    "last_position": "Last position",
+    "vessel_call_sign": "Call sign",
+    "noscript_warning": (
+        'The "Map", "Details" and "Remark" buttons in this logbook need JavaScript to open. Most '
+        "email clients strip that from attachments -- if that's how you're viewing this, open the "
+        "file in a real web browser (Chrome, Edge, Firefox, Safari, ...) instead of viewing it "
+        "straight from the email."
+    ),
+    "header_seq_abbr": "No.",
+    "header_seq_full": "Sequence",
+    "header_date": "Date",
+    "header_departure_abbr": "Dep.",
+    "header_departure_full": "Departure",
+    "header_from": "From",
+    "header_arrival_abbr": "Arr.",
+    "header_arrival_full": "Arrival",
+    "header_to": "To",
+    "header_duration": "Duration",
+    "header_distance": "Distance",
+    "header_avg_speed": "Avg. speed",
+    "header_max_speed": "Max speed",
+    "header_fuel": "Fuel",
+    "header_l_per_nm": "L/nm",
+    "header_engine_hours": "Engine hours",
+    "header_rpm": "RPM",
+    "header_warnings": "Alarm",
+    "header_water_temp": "Water temperature",
+    "header_motion": "Motion",
+    "header_route": "Route",
+    "header_details": "Log",
+    "header_remarks": "Remarks",
+    "week_label_prefix": "Week",
+    "totals_trips": "Trips",
+    "totals_distance": "Total distance",
+    "totals_hours": "Total hours underway",
+    "totals_fuel_calculated": "Total fuel",
+    "totals_fuel_engine_meter": "Total fuel (engine meter)",
+    "totals_avg_consumption": "Avg. consumption",
+    "totals_avg_speed": "Avg. speed",
+    "totals_top_speed": "Top speed",
+    "totals_engine_hour_meter": "Engine hour meter",
+    "totals_engine_hour_meter_engine": "Engine hour meter, engine {instance}",
+    "totals_hours_logged": "Logged engine hours",
+    "totals_hours_logged_engine": "Logged engine hours, engine {instance}",
+    "motion_roll": "roll",
+    "motion_pitch": "pitch",
+    "motion_peak": "peak",
+    "rpm_tooltip_single": "avg. {avg} kn at that RPM ({min}-{max} kn)",
+    "rpm_tooltip_single_fuel": "avg. {avg} kn at that RPM ({min}-{max} kn), avg. consumption {fuel} L/nm",
+    "rpm_tooltip_per_engine": "engine {instance}: avg. {avg} kn ({min}-{max} kn)",
+    "rpm_tooltip_per_engine_fuel": "engine {instance}: avg. {avg} kn ({min}-{max} kn), avg. consumption {fuel} L/nm",
+    "max_speed_tooltip_single": "at {time} at {rpm} rpm",
+    "max_speed_tooltip_per_engine": "at {time}, engine {instance}: {rpm} rpm",
+    "map_button_show": "Map",
+    "map_marker_departure": "Departure",
+    "map_marker_arrival": "Arrival",
+    "details_button": "Log",
+    "log_close_button": "Close",
+    "log_header_number": "No.",
+    "log_header_time": "Time",
+    "log_header_position": "Position",
+    "log_header_cog": "Course",
+    "log_header_sog": "Speed",
+    "log_header_wind": "Wind",
+    "log_header_precip": "Precip.",
+    "log_header_cloud": "Cloud",
+    "log_header_wave": "Waves",
+    "log_header_current": "Current",
+    "remarks_button_placeholder": "Remark",
+    "remarks_save_button": "Save",
+    "remarks_cancel_button": "Cancel",
+    "remarks_close_button": "Close",
+    "remarks_save_forbidden": "Your account isn't allowed to save remarks.",
+    "remarks_save_failed": "Saving failed, please try again.",
+    "remarks_unavailable": "Remarks could not be loaded.",
+}
+
+FR: Dict[str, str] = {
+    "logbook_title_suffix": "Journal de bord",
+    "last_updated": "Dernière mise à jour",
+    "last_position": "Dernière position",
+    "vessel_call_sign": "Indicatif d'appel",
+    "noscript_warning": (
+        'Les boutons « Carte », « Détails » et « Remarque » de ce journal de bord nécessitent '
+        "JavaScript pour s'ouvrir. La plupart des messageries suppriment cela des pièces jointes -- "
+        "si c'est le cas ici, ouvrez ce fichier dans un vrai navigateur (Chrome, Edge, Firefox, "
+        "Safari, ...) plutôt que de le consulter directement depuis l'e-mail."
+    ),
+    "header_seq_abbr": "N°",
+    "header_seq_full": "Numéro",
+    "header_date": "Date",
+    "header_departure_abbr": "Dép.",
+    "header_departure_full": "Départ",
+    "header_from": "De",
+    "header_arrival_abbr": "Arr.",
+    "header_arrival_full": "Arrivée",
+    "header_to": "À",
+    "header_duration": "Durée",
+    "header_distance": "Distance",
+    "header_avg_speed": "Vit. moy.",
+    "header_max_speed": "Vit. max",
+    "header_fuel": "Carburant",
+    "header_l_per_nm": "L/nm",
+    "header_engine_hours": "Heures moteur",
+    "header_rpm": "Régime",
+    "header_warnings": "Alarme",
+    "header_water_temp": "Température de l'eau",
+    "header_motion": "Mouvement",
+    "header_route": "Trajet",
+    "header_details": "Journal",
+    "header_remarks": "Remarques",
+    "week_label_prefix": "Semaine",
+    "totals_trips": "Trajets",
+    "totals_distance": "Distance totale",
+    "totals_hours": "Heures de navigation totales",
+    "totals_fuel_calculated": "Carburant total",
+    "totals_fuel_engine_meter": "Carburant total (compteur moteur)",
+    "totals_avg_consumption": "Consommation moy.",
+    "totals_avg_speed": "Vitesse moy.",
+    "totals_top_speed": "Vitesse max",
+    "totals_engine_hour_meter": "Compteur horaire moteur",
+    "totals_engine_hour_meter_engine": "Compteur horaire moteur, moteur {instance}",
+    "totals_hours_logged": "Heures moteur enregistrées",
+    "totals_hours_logged_engine": "Heures moteur enregistrées, moteur {instance}",
+    "motion_roll": "roulis",
+    "motion_pitch": "tangage",
+    "motion_peak": "pic",
+    "rpm_tooltip_single": "moy. {avg} nd à ce régime ({min}-{max} nd)",
+    "rpm_tooltip_single_fuel": "moy. {avg} nd à ce régime ({min}-{max} nd), conso. moy. {fuel} L/nm",
+    "rpm_tooltip_per_engine": "moteur {instance} : moy. {avg} nd ({min}-{max} nd)",
+    "rpm_tooltip_per_engine_fuel": "moteur {instance} : moy. {avg} nd ({min}-{max} nd), conso. moy. {fuel} L/nm",
+    "max_speed_tooltip_single": "à {time} à {rpm} tr/min",
+    "max_speed_tooltip_per_engine": "à {time}, moteur {instance} : {rpm} tr/min",
+    "map_button_show": "Carte",
+    "map_marker_departure": "Départ",
+    "map_marker_arrival": "Arrivée",
+    "details_button": "Journal",
+    "log_close_button": "Fermer",
+    "log_header_number": "N°",
+    "log_header_time": "Heure",
+    "log_header_position": "Position",
+    "log_header_cog": "Cap",
+    "log_header_sog": "Vitesse",
+    "log_header_wind": "Vent",
+    "log_header_precip": "Précip.",
+    "log_header_cloud": "Nuages",
+    "log_header_wave": "Vagues",
+    "log_header_current": "Courant",
+    "remarks_button_placeholder": "Remarque",
+    "remarks_save_button": "Enregistrer",
+    "remarks_cancel_button": "Annuler",
+    "remarks_close_button": "Fermer",
+    "remarks_save_forbidden": "Votre compte n'est pas autorisé à enregistrer des remarques.",
+    "remarks_save_failed": "Échec de l'enregistrement, veuillez réessayer.",
+    "remarks_unavailable": "Les remarques n'ont pas pu être chargées.",
+}
+
+DE: Dict[str, str] = {
+    "logbook_title_suffix": "Bordbuch",
+    "last_updated": "Zuletzt aktualisiert",
+    "last_position": "Letzte Position",
+    "vessel_call_sign": "Rufzeichen",
+    "noscript_warning": (
+        'Die Schaltflächen "Karte", "Details" und "Bemerkung" in diesem Bordbuch benötigen '
+        "JavaScript zum Öffnen. Die meisten E-Mail-Programme entfernen das aus Anhängen -- öffnen "
+        "Sie diese Datei in dem Fall in einem echten Browser (Chrome, Edge, Firefox, Safari, ...), "
+        "statt sie direkt aus der E-Mail zu öffnen."
+    ),
+    "header_seq_abbr": "Nr.",
+    "header_seq_full": "Laufende Nr.",
+    "header_date": "Datum",
+    "header_departure_abbr": "Abf.",
+    "header_departure_full": "Abfahrt",
+    "header_from": "Von",
+    "header_arrival_abbr": "Ank.",
+    "header_arrival_full": "Ankunft",
+    "header_to": "Nach",
+    "header_duration": "Dauer",
+    "header_distance": "Distanz",
+    "header_avg_speed": "Durchschn. Geschw.",
+    "header_max_speed": "Max. Geschw.",
+    "header_fuel": "Kraftstoff",
+    "header_l_per_nm": "L/sm",
+    "header_engine_hours": "Motorstunden",
+    "header_rpm": "Drehzahl",
+    "header_warnings": "Alarm",
+    "header_water_temp": "Wassertemperatur",
+    "header_motion": "Bewegung",
+    "header_route": "Route",
+    "header_details": "Log",
+    "header_remarks": "Bemerkungen",
+    "week_label_prefix": "Woche",
+    "totals_trips": "Fahrten",
+    "totals_distance": "Gesamtdistanz",
+    "totals_hours": "Gesamte Fahrstunden",
+    "totals_fuel_calculated": "Gesamter Kraftstoff",
+    "totals_fuel_engine_meter": "Gesamter Kraftstoff (Motorzähler)",
+    "totals_avg_consumption": "Durchschn. Verbrauch",
+    "totals_avg_speed": "Durchschn. Geschw.",
+    "totals_top_speed": "Höchstgeschwindigkeit",
+    "totals_engine_hour_meter": "Betriebsstundenzähler",
+    "totals_engine_hour_meter_engine": "Betriebsstundenzähler, Motor {instance}",
+    "totals_hours_logged": "Erfasste Motorstunden",
+    "totals_hours_logged_engine": "Erfasste Motorstunden, Motor {instance}",
+    "motion_roll": "Rollen",
+    "motion_pitch": "Stampfen",
+    "motion_peak": "Spitze",
+    "rpm_tooltip_single": "durchschn. {avg} kn bei dieser Drehzahl ({min}-{max} kn)",
+    "rpm_tooltip_single_fuel": "durchschn. {avg} kn bei dieser Drehzahl ({min}-{max} kn), durchschn. Verbrauch {fuel} L/sm",
+    "rpm_tooltip_per_engine": "Motor {instance}: durchschn. {avg} kn ({min}-{max} kn)",
+    "rpm_tooltip_per_engine_fuel": "Motor {instance}: durchschn. {avg} kn ({min}-{max} kn), durchschn. Verbrauch {fuel} L/sm",
+    "max_speed_tooltip_single": "um {time} bei {rpm} U/min",
+    "max_speed_tooltip_per_engine": "um {time}, Motor {instance}: {rpm} U/min",
+    "map_button_show": "Karte",
+    "map_marker_departure": "Abfahrt",
+    "map_marker_arrival": "Ankunft",
+    "details_button": "Log",
+    "log_close_button": "Schließen",
+    "log_header_number": "Nr.",
+    "log_header_time": "Zeit",
+    "log_header_position": "Position",
+    "log_header_cog": "Kurs",
+    "log_header_sog": "Geschwindigkeit",
+    "log_header_wind": "Wind",
+    "log_header_precip": "Niederschlag",
+    "log_header_cloud": "Bewölkung",
+    "log_header_wave": "Wellen",
+    "log_header_current": "Strömung",
+    "remarks_button_placeholder": "Bemerkung",
+    "remarks_save_button": "Speichern",
+    "remarks_cancel_button": "Abbrechen",
+    "remarks_close_button": "Schließen",
+    "remarks_save_forbidden": "Dein Konto darf keine Bemerkungen speichern.",
+    "remarks_save_failed": "Speichern ist fehlgeschlagen, bitte versuche es erneut.",
+    "remarks_unavailable": "Bemerkungen konnten nicht geladen werden.",
+}
+
 # strftime's %b is locale-independent (always English month abbreviations) unless the process
-# locale is changed, which is fragile/platform-dependent -- a lookup table avoids that.
+# locale is changed, which is fragile/platform-dependent -- a lookup table avoids that. Keyed by
+# %b's own (always-English) output, same for every language table below.
 MONTH_ABBR_NL: Dict[str, str] = {
     "Jan": "jan", "Feb": "feb", "Mar": "mrt", "Apr": "apr", "May": "mei", "Jun": "jun",
     "Jul": "jul", "Aug": "aug", "Sep": "sep", "Oct": "okt", "Nov": "nov", "Dec": "dec",
 }
+
+MONTH_ABBR_EN: Dict[str, str] = {
+    "Jan": "Jan", "Feb": "Feb", "Mar": "Mar", "Apr": "Apr", "May": "May", "Jun": "Jun",
+    "Jul": "Jul", "Aug": "Aug", "Sep": "Sep", "Oct": "Oct", "Nov": "Nov", "Dec": "Dec",
+}
+
+MONTH_ABBR_FR: Dict[str, str] = {
+    "Jan": "janv", "Feb": "févr", "Mar": "mars", "Apr": "avr", "May": "mai", "Jun": "juin",
+    "Jul": "juil", "Aug": "août", "Sep": "sept", "Oct": "oct", "Nov": "nov", "Dec": "déc",
+}
+
+MONTH_ABBR_DE: Dict[str, str] = {
+    "Jan": "Jan", "Feb": "Feb", "Mar": "Mar", "Apr": "Apr", "May": "Mai", "Jun": "Jun",
+    "Jul": "Jul", "Aug": "Aug", "Sep": "Sep", "Oct": "Okt", "Nov": "Nov", "Dec": "Dez",
+}
+
+# The generated page still renders server-side in Dutch by default (T = NL in html_writer.py) --
+# these registries are only for the client-side language switcher (see html_writer.py's <script>).
+LANGUAGES: Dict[str, Dict[str, str]] = {"nl": NL, "en": EN, "fr": FR, "de": DE}
+MONTH_ABBR: Dict[str, Dict[str, str]] = {
+    "nl": MONTH_ABBR_NL, "en": MONTH_ABBR_EN, "fr": MONTH_ABBR_FR, "de": MONTH_ABBR_DE,
+}
+LANGUAGE_FLAGS: Dict[str, str] = {"nl": "\U0001F1F3\U0001F1F1", "en": "\U0001F1EC\U0001F1E7", "fr": "\U0001F1EB\U0001F1F7", "de": "\U0001F1E9\U0001F1EA"}
