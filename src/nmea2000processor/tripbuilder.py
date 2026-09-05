@@ -412,10 +412,12 @@ def _merge_negligible_trips(
     any other stationary period, contributing to its averaged position -- when there's no
     preceding trip to extend, e.g. it's the very first run in the whole dataset.
 
-    Found in practice: fixing only the arrival *position* (folding the stay -- see above) wasn't
-    enough on its own -- the marker then correctly sat at the boat's final position, but the
-    drawn track still stopped at the earlier spot, leaving a visible gap between the line and the
-    marker on the map."""
+    (An earlier version of this fix also tracked, per merged stay, which of its samples belonged
+    to the *final* sub-stay after such a splice, and averaged the arrival position over only
+    those -- on real data that turned out to change nothing: the actual gap wasn't which samples
+    got averaged, but that the drawn track and the arrival marker were never guaranteed to meet at
+    all (see ``_track_reaching_markers``, which fixes that directly). Removed again as dead
+    complexity.)"""
     result: List[Tuple[str, List[NavSample]]] = []
     last_moving_group: Optional[List[NavSample]] = None
     for label, group in runs:
@@ -428,6 +430,37 @@ def _merge_negligible_trips(
         if label == "moving":
             last_moving_group = group
     return _merge_adjacent(result)
+
+
+def _track_reaching_markers(
+    group: List[NavSample],
+    depart_time: datetime,
+    depart_lat: float,
+    depart_lon: float,
+    arrive_time: datetime,
+    arrive_lat: float,
+    arrive_lon: float,
+) -> List[NavSample]:
+    """The drawn track (for the map, GPX export, and the periodic log table) should always
+    visually reach the departure/arrival markers -- those are placed at the stay's own averaged
+    position (see TripLeg.depart_lat/arrive_lat), which practically never lands exactly on
+    ``group``'s own first/last GPS fix. Left alone, that gap is small most of the time (the
+    averaging window is usually short) but can grow to several metres for a long stay -- and
+    however small, there's no reason to leave *any* gap between a line and its own labelled
+    endpoint when the endpoint's exact position is already known. Prepending/appending a synthetic
+    point at each marker's own position closes it outright, for every trip, rather than relying on
+    the averaging happening to land close enough.
+
+    A synthetic point's own speed is 0 -- it represents the boat while moored, which is what the
+    average position it's placed at actually describes."""
+    track = group
+    if (track[0].lat, track[0].lon) != (depart_lat, depart_lon):
+        start = NavSample(depart_time, depart_lat, depart_lon, 0.0, track[0].depth_m, track[0].water_temp_c)
+        track = [start] + track
+    if (track[-1].lat, track[-1].lon) != (arrive_lat, arrive_lon):
+        end = NavSample(arrive_time, arrive_lat, arrive_lon, 0.0, track[-1].depth_m, track[-1].water_temp_c)
+        track = track + [end]
+    return track
 
 
 def _moving_duration(group: List[NavSample], max_gap: timedelta) -> timedelta:
@@ -988,7 +1021,9 @@ def build_trips(
                 pitch_variation_deg=pitch_variation_deg,
                 roll_range_deg=roll_range_deg,
                 pitch_range_deg=pitch_range_deg,
-                track=group,
+                track=_track_reaching_markers(
+                    group, depart_time, depart_lat, depart_lon, arrive_time, arrive_lat, arrive_lon
+                ),
                 max_speed_at=max_speed_at,
                 max_speed_rpm=max_speed_rpm,
             )
