@@ -297,6 +297,16 @@ def _sync_from_w2k2(
         return {"ok": False, "error": f"Network error talking to the W2K-2: {exc}"}
     except SystemExit as exc:
         return {"ok": False, "error": str(exc)}
+    # Catch-all, deliberately last and deliberately broad: found in practice that a flaky
+    # connection can raise something none of the specific handlers above catch (e.g. a garbled/
+    # truncated response body failing json.loads() with a plain ValueError, not an OSError) --
+    # without this, that propagated all the way past Kotlin's own generic try/except in
+    # MainActivity.runSync() as a raw PyException and left result.error as Kotlin null, which
+    # showSyncResult() then had nothing better to show than a bare "onbekende fout" (asked for
+    # explicitly to fix: that text is never actually informative). Every failure path here must
+    # end up with a real, specific message instead.
+    except Exception as exc:
+        return {"ok": False, "error": f"Unexpected error: {exc}"}
 
     result = run_pipeline(
         ebl_paths=local_paths,

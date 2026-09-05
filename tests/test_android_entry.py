@@ -119,6 +119,36 @@ def test_sync_from_w2k2_returns_error_when_no_host_found(tmp_path, monkeypatch):
     assert "192.168.43.0/24" in result["error"]
 
 
+def test_sync_from_w2k2_returns_a_real_error_for_an_unanticipated_exception(tmp_path, monkeypatch):
+    """Regression test: an exception type none of the specific except clauses catch (e.g. a
+    garbled response body failing json.loads() with a plain ValueError, simulated directly here)
+    must still come back as {"ok": False, "error": "..."} with a real message -- not propagate
+    uncaught past this call (Kotlin's own generic catch would then have nothing but a bare
+    exception, and Kotlin's result.error ends up null, which showSyncResult() has no better
+    fallback for than a useless "onbekende fout", asked for explicitly to fix)."""
+    monkeypatch.setattr(android_entry.w2k2_download, "discover_w2k2", lambda subnet_prefix: "http://10.0.0.5")
+
+    def broken_make_session(host, config):
+        raise ValueError("could not parse the login response")
+
+    monkeypatch.setattr(android_entry.w2k2_download, "make_session", broken_make_session)
+
+    result = android_entry.sync_from_w2k2(
+        user="skipper",
+        password="geheim",
+        subnet_prefix="192.168.43.",
+        download_dir=str(tmp_path / "Actisense"),
+        output_html_path=str(tmp_path / "logbook.html"),
+        sample_cache_path=str(tmp_path / "cache.pkl"),
+        boat_name="Test Boat",
+        mmsi="244123456",
+        call_sign="PA1234",
+    )
+
+    assert result["ok"] is False
+    assert "could not parse the login response" in result["error"]
+
+
 def test_sync_from_w2k2_forwards_log_lines_to_the_callback(tmp_path, monkeypatch):
     """onLogLine() should receive the exact same messages the desktop CLI prints (asked for
     explicitly, so the Android app doesn't need a separately-maintained set of status text) -- and
