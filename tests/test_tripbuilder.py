@@ -695,7 +695,11 @@ def test_negligible_trip_between_two_stays_is_folded_into_one_combined_stay():
     logbook -- but the two stays on either side of it were never reconnected, so the *first* stay
     (the boat's position right after arriving, before the nudge) was reported as the trip's
     arrival, silently dropping its actual final position. The fix folds the too-short move back
-    into a single combined stay, so the reported arrival reflects the boat's real final spot."""
+    into a single combined stay, so the reported arrival reflects the boat's real final spot --
+    and (a second real gap found on the same real data, once the arrival marker itself was
+    already correct) splices the nudge's own GPS points onto the trip's track, so the line drawn
+    on the map actually reaches the final position too, instead of stopping short of it and
+    leaving a visible gap to the (now correctly placed) arrival marker."""
     fixes, sogs, engine_samples = _build_scenario()
 
     # first stay: 24 minutes at the original mooring spot (well above min_stop_minutes)
@@ -728,6 +732,9 @@ def test_negligible_trip_between_two_stays_is_folded_into_one_combined_stay():
     # the reported arrival is pulled toward the final spot, not stuck at the first stay
     assert trips[0].arrive_lat > 52.40
     assert trips[0].arrive_lon > 4.95
+    # the drawn track itself reaches the final spot too, not just the arrival marker
+    assert trips[0].track[-1].lat == pytest.approx(52.4002)
+    assert trips[0].track[-1].lon == pytest.approx(4.9502)
 
 
 def test_min_trip_distance_nm_can_be_disabled():

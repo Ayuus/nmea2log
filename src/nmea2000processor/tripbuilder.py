@@ -400,22 +400,34 @@ def _merge_negligible_trips(
 ) -> List[Tuple[str, List[NavSample]]]:
     """A "moving" run covering less than ``min_trip_distance_nm`` doesn't get to end a trip and
     start a new stay on its own -- it's GPS/speed noise or a brief manoeuvre (e.g. nudging a few
-    meters along the quay with the engine), not a real trip to a new port. Relabelling it back to
-    "stationary" here, before stays/trips are built, folds it into whatever stationary period(s)
-    it's sandwiched between, so the *whole* stay contributes to the reported arrival position.
+    meters along the quay with the engine), not a real trip to a new port. Its samples are real
+    GPS points though, not noise to throw away: they're spliced onto the end of the nearest
+    *preceding* real trip's own track, so the route drawn on the map visually reaches the boat's
+    actual final position instead of stopping short at wherever it first happened to stop.
+    Removing the run from ``runs`` entirely (rather than merely relabelling it) also lets the
+    stationary periods on either side of it merge into a single stay for arrival-position
+    purposes (see ``_merge_adjacent`` below), same effect as before.
 
-    This replaces the old approach of only filtering such a trip out of the final result (see the
-    ``min_trip_distance_nm`` filter at the end of ``build_trips``): that left the two stationary
-    periods on either side unmerged, so the *first* one was still reported as the arrival -- the
-    boat's actual, later position (e.g. after repositioning alongside the quay) was silently
-    dropped instead of being folded in (found in practice: a trip logged as ending mid-harbour
-    instead of alongside the quay, because a 5-metre repositioning move right after mooring got
-    its own too-short "trip" filtered away without ever reconnecting the two stays it had split)."""
-    relabelled = [
-        ("stationary" if label == "moving" and _trip_distance_nm(group) < min_trip_distance_nm else label, group)
-        for label, group in runs
-    ]
-    return _merge_adjacent(relabelled)
+    Falls back to just relabelling it "stationary" -- merged into the surrounding stay, same as
+    any other stationary period, contributing to its averaged position -- when there's no
+    preceding trip to extend, e.g. it's the very first run in the whole dataset.
+
+    Found in practice: fixing only the arrival *position* (folding the stay -- see above) wasn't
+    enough on its own -- the marker then correctly sat at the boat's final position, but the
+    drawn track still stopped at the earlier spot, leaving a visible gap between the line and the
+    marker on the map."""
+    result: List[Tuple[str, List[NavSample]]] = []
+    last_moving_group: Optional[List[NavSample]] = None
+    for label, group in runs:
+        if label == "moving" and _trip_distance_nm(group) < min_trip_distance_nm:
+            if last_moving_group is not None:
+                last_moving_group.extend(group)
+                continue
+            label = "stationary"
+        result.append((label, group))
+        if label == "moving":
+            last_moving_group = group
+    return _merge_adjacent(result)
 
 
 def _moving_duration(group: List[NavSample], max_gap: timedelta) -> timedelta:
