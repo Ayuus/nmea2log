@@ -124,6 +124,39 @@ def test_config_file_default_is_overridden_by_explicit_cli_arg(tmp_path, monkeyp
     assert args.min_trip_distance_nm == 0.9
 
 
+def test_config_file_backup_remote_path_alone_enables_backup_ebl(tmp_path, monkeypatch):
+    """backup_ebl is no longer a separate on/off setting to keep in sync with backup_remote_path
+    (asked for explicitly, to match the Android app's own settings: a non-blank remote path is
+    enough) -- a config file with backup_remote_path set but no backup_ebl key at all must still
+    default args.backup_ebl to True."""
+    # [nmea2log] must be present (even empty of anything relevant here) -- _apply_config_defaults
+    # only reads the [upload] section at all once the [nmea2log] one exists (found while writing
+    # this test); every real nmea2log.ini always has both, so this isn't otherwise a factor.
+    config_path = tmp_path / "nmea2log.ini"
+    config_path.write_text(
+        "[nmea2log]\nno_geocode = true\n\n[upload]\nbackup_remote_path = private/ebl-backup\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    args = build_arg_parser().parse_args([])
+
+    assert args.backup_ebl is True
+    assert args.backup_remote_path == "private/ebl-backup"
+
+
+def test_config_file_no_backup_remote_path_leaves_backup_ebl_off(tmp_path, monkeypatch):
+    config_path = tmp_path / "nmea2log.ini"
+    config_path.write_text(
+        "[nmea2log]\nno_geocode = true\n\n[upload]\nhost = example.com\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+
+    args = build_arg_parser().parse_args([])
+
+    assert args.backup_ebl is False
+
+
 def test_filter_to_dominant_engine_keeps_only_largest_instance():
     engine_samples = (
         [EngineSample(datetime(2026, 7, 15, 9, 0), 0, 8.0, 3600) for _ in range(10)]
@@ -312,8 +345,10 @@ def test_main_backs_up_only_the_logfiles_not_already_on_the_server(tmp_path, mon
     # defaults that trigger a *real* (if doomed-to-fail) --upload attempt before ever reaching
     # the backup step this test is actually about (found in practice).
     monkeypatch.chdir(tmp_path)
-    already_there = tmp_path / "000000_000.ebl"
-    new_file = tmp_path / "000001_000.ebl"
+    folder = tmp_path / "EBL000000"
+    folder.mkdir()
+    already_there = folder / "000000_000.ebl"
+    new_file = folder / "000000_001.ebl"
     already_there.write_bytes(b"x" * 100)
     new_file.write_bytes(b"x" * 100)
     _stub_one_trip_samples(monkeypatch)
@@ -341,8 +376,56 @@ def test_main_backs_up_only_the_logfiles_not_already_on_the_server(tmp_path, mon
     )
 
     assert exit_code == 0
-    assert listed_dir["remote_dir"] == "private/ebl-backup"
+    # Uploaded into a same-named remote subfolder (asked for explicitly), not the flat
+    # backup_remote_path directly -- mirrors the local EBL000000/ layout on the server.
+    assert listed_dir["remote_dir"] == "private/ebl-backup/EBL000000"
     assert uploaded["paths"] == [new_file]
+
+
+def test_main_backs_up_each_ebl_folder_into_its_own_remote_subfolder(tmp_path, monkeypatch):
+    """Files from two different local EBL folders must land in two different remote subfolders,
+    each checked (list_remote_filenames) and uploaded (upload_files) separately -- matches the
+    Android app's own backup layout (asked for explicitly), instead of one flat remote directory
+    for every folder's files combined."""
+    monkeypatch.chdir(tmp_path)
+    folder_a = tmp_path / "EBL000000"
+    folder_b = tmp_path / "EBL000007"
+    folder_a.mkdir()
+    folder_b.mkdir()
+    file_a = folder_a / "000000_000.ebl"
+    file_b = folder_b / "000007_000.ebl"
+    file_a.write_bytes(b"x" * 100)
+    file_b.write_bytes(b"x" * 100)
+    _stub_one_trip_samples(monkeypatch)
+
+    listed_dirs = []
+    uploaded_by_dir = {}
+
+    def fake_list_remote_filenames(*, host, user, remote_dir, key_file, port):
+        listed_dirs.append(remote_dir)
+        return set()
+
+    def fake_upload_files(local_paths, *, host, user, remote_dir, key_file, port):
+        uploaded_by_dir[remote_dir] = local_paths
+
+    monkeypatch.setattr("nmea2000processor.cli.list_remote_filenames", fake_list_remote_filenames)
+    monkeypatch.setattr("nmea2000processor.cli.upload_files", fake_upload_files)
+
+    exit_code = main(
+        [
+            str(file_a), str(file_b), "-o", str(tmp_path / "logbook.csv"), "--no-geocode",
+            "--backup-ebl", "--backup-remote-path", "private/ebl-backup",
+            "--upload-host", "example.com", "--upload-user", "me",
+            "--upload-key-file", str(tmp_path / "key"),
+        ]
+    )
+
+    assert exit_code == 0
+    assert sorted(listed_dirs) == ["private/ebl-backup/EBL000000", "private/ebl-backup/EBL000007"]
+    assert uploaded_by_dir == {
+        "private/ebl-backup/EBL000000": [file_a],
+        "private/ebl-backup/EBL000007": [file_b],
+    }
 
 
 def test_main_backs_up_new_logfiles_in_chunks(tmp_path, monkeypatch):

@@ -463,10 +463,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--no-upload",
         action="store_true",
         help="Force-disable both --upload and --backup-ebl for this run, overriding even the "
-        "config file's own 'enabled'/'backup_ebl' settings -- use this for a local test run so it "
-        "can never touch the live site by accident (found in practice: a local test run with "
-        "--no-geocode still uploaded, since the config file enables upload by default regardless "
-        "of that flag)",
+        "config file's own 'enabled' setting and a non-blank 'backup_remote_path' -- use this for "
+        "a local test run so it can never touch the live site by accident (found in practice: a "
+        "local test run with --no-geocode still uploaded, since the config file enables upload by "
+        "default regardless of that flag)",
     )
     parser.add_argument(
         "--upload-host",
@@ -582,8 +582,13 @@ def _apply_config_defaults(parser: argparse.ArgumentParser) -> None:
     upload_section = load_section("upload")
     if "enabled" in upload_section:
         defaults["upload"] = _bool(upload_section["enabled"])
-    if "backup_ebl" in upload_section:
-        defaults["backup_ebl"] = _bool(upload_section["backup_ebl"])
+    # Enabled by the mere presence of a non-blank backup_remote_path, not a separate on/off
+    # setting to keep in sync with it -- matches the Android app's own settings (asked for
+    # explicitly, "beide moeten hetzelfde werken"). --backup-ebl on the command line (with
+    # --backup-remote-path given directly, no config file involved) still works as its own
+    # independent opt-in either way.
+    if upload_section.get("backup_remote_path", "").strip():
+        defaults["backup_ebl"] = True
     for key, dest, caster in (
         ("host", "upload_host", str),
         ("user", "upload_user", str),
@@ -673,8 +678,9 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     set_log_file(args.output.parent / "nmea2log.log", retention_days=args.log_retention_days)
 
     if args.no_upload:
-        # Overrides even a config-file default of enabled=true/backup_ebl=true -- the whole point
-        # is a way to run locally that's *guaranteed* not to touch the live site, regardless of
+        # Overrides even a config-file default of enabled=true or a non-blank backup_remote_path
+        # -- the whole point is a way to run locally that's *guaranteed* not to touch the live
+        # site, regardless of
         # what's already sitting in nmea2log.ini (found in practice: forgetting that upload is
         # enabled by default there is exactly what caused a live-site incident twice).
         args.upload = False
@@ -869,37 +875,55 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         # something today's run actually depends on, and it's fully resumable: whatever made it
         # to the server this time is skipped next time (see list_remote_filenames), so an
         # unfinished backup just continues from there rather than needing to be retried whole.
-        backed_up_count = 0  # set before the try so the except below can always reference it
+        #
+        # Grouped by each file's own parent folder (EBL000000, EBL000001, ...) and uploaded into
+        # a same-named remote subfolder, mirroring the local Actisense/ layout on the server
+        # instead of dumping every run's worth of files into one flat directory -- matches the
+        # Android app's own backup layout (asked for explicitly: thousands of same-shaped
+        # filenames in one flat folder is much harder to browse than the same structure the files
+        # already have locally). list_remote_filenames/upload_files both already take an
+        # arbitrary remote_dir, so no change to upload.py itself was needed for this -- only how
+        # many times, and with which remote_dir, they're called here.
+        by_folder: Dict[str, List[Path]] = {}
+        for path in args.logfiles:
+            by_folder.setdefault(path.parent.name, []).append(path)
+
+        backed_up_count = 0  # set before the loop so the except below can always reference it
+        already_there_count = 0
         try:
-            # Only ever the logfiles this run actually processed.
-            already_backed_up = list_remote_filenames(
-                host=args.upload_host,
-                user=args.upload_user,
-                remote_dir=args.backup_remote_path,
-                key_file=args.upload_key_file,
-                port=args.upload_port,
-            )
-            new_files = [path for path in args.logfiles if path.name not in already_backed_up]
-            for start in range(0, len(new_files), _BACKUP_CHUNK_SIZE):
-                chunk = new_files[start : start + _BACKUP_CHUNK_SIZE]
-                upload_files(
-                    chunk,
+            for folder_name in sorted(by_folder):
+                folder_files = by_folder[folder_name]
+                remote_folder_dir = f"{args.backup_remote_path}/{folder_name}"
+                already_backed_up = list_remote_filenames(
                     host=args.upload_host,
                     user=args.upload_user,
-                    remote_dir=args.backup_remote_path,
+                    remote_dir=remote_folder_dir,
                     key_file=args.upload_key_file,
                     port=args.upload_port,
                 )
-                backed_up_count += len(chunk)
-                # A backup of hundreds/thousands of files can genuinely take a while; without any
-                # feedback in between, it can look stuck and invite closing the terminal early --
-                # which kills the whole (still-blocking) run, backup included (found in practice).
-                if len(new_files) > _BACKUP_CHUNK_SIZE:
-                    log(f"[info] ...backed up {backed_up_count}/{len(new_files)} new logfile(s) so far")
+                new_files = [path for path in folder_files if path.name not in already_backed_up]
+                already_there_count += len(folder_files) - len(new_files)
+                for start in range(0, len(new_files), _BACKUP_CHUNK_SIZE):
+                    chunk = new_files[start : start + _BACKUP_CHUNK_SIZE]
+                    upload_files(
+                        chunk,
+                        host=args.upload_host,
+                        user=args.upload_user,
+                        remote_dir=remote_folder_dir,
+                        key_file=args.upload_key_file,
+                        port=args.upload_port,
+                    )
+                    backed_up_count += len(chunk)
+                    # A backup of hundreds/thousands of files can genuinely take a while; without
+                    # any feedback in between, it can look stuck and invite closing the terminal
+                    # early -- which kills the whole (still-blocking) run, backup included (found
+                    # in practice).
+                    if len(new_files) > _BACKUP_CHUNK_SIZE:
+                        log(f"[info] ...backed up {backed_up_count} new logfile(s) so far")
             log(
                 f"[ok] Backed up {backed_up_count} new logfile(s) to "
                 f"{args.upload_user}@{args.upload_host}:{args.backup_remote_path} "
-                f"({len(args.logfiles) - len(new_files)} already there)"
+                f"({already_there_count} already there)"
             )
         except UploadError as exc:
             log(
