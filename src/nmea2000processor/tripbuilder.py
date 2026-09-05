@@ -391,6 +391,33 @@ def _split_moving_runs_on_gaps(
     return result
 
 
+def _trip_distance_nm(group: List[NavSample]) -> float:
+    return sum(_haversine_nm(a.lat, a.lon, b.lat, b.lon) for a, b in zip(group, group[1:]))
+
+
+def _merge_negligible_trips(
+    runs: List[Tuple[str, List[NavSample]]], min_trip_distance_nm: float
+) -> List[Tuple[str, List[NavSample]]]:
+    """A "moving" run covering less than ``min_trip_distance_nm`` doesn't get to end a trip and
+    start a new stay on its own -- it's GPS/speed noise or a brief manoeuvre (e.g. nudging a few
+    meters along the quay with the engine), not a real trip to a new port. Relabelling it back to
+    "stationary" here, before stays/trips are built, folds it into whatever stationary period(s)
+    it's sandwiched between, so the *whole* stay contributes to the reported arrival position.
+
+    This replaces the old approach of only filtering such a trip out of the final result (see the
+    ``min_trip_distance_nm`` filter at the end of ``build_trips``): that left the two stationary
+    periods on either side unmerged, so the *first* one was still reported as the arrival -- the
+    boat's actual, later position (e.g. after repositioning alongside the quay) was silently
+    dropped instead of being folded in (found in practice: a trip logged as ending mid-harbour
+    instead of alongside the quay, because a 5-metre repositioning move right after mooring got
+    its own too-short "trip" filtered away without ever reconnecting the two stays it had split)."""
+    relabelled = [
+        ("stationary" if label == "moving" and _trip_distance_nm(group) < min_trip_distance_nm else label, group)
+        for label, group in runs
+    ]
+    return _merge_adjacent(relabelled)
+
+
 def _moving_duration(group: List[NavSample], max_gap: timedelta) -> timedelta:
     """Sum of the time between consecutive points in a trip, excluding gaps >= ``max_gap``
     within it -- those don't count as "time underway", since we don't know what happened during
@@ -872,6 +899,7 @@ def build_trips(
         runs = _reclassify_locks(runs, samples, on_intervals, lock_radius_m, lock_max_duration)
         runs = _merge_adjacent(runs)
     runs = _split_moving_runs_on_gaps(runs, max_gap)
+    runs = _merge_negligible_trips(runs, min_trip_distance_nm)
 
     stays: List[Optional[Stay]] = []
     for label, group in runs:

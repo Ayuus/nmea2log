@@ -688,6 +688,48 @@ def test_negligible_distance_trip_is_filtered_out():
     assert trips[0].arrive_place == "Port@52.40,4.95"
 
 
+def test_negligible_trip_between_two_stays_is_folded_into_one_combined_stay():
+    """Regression test for a real bug found in practice: after mooring, the boat briefly used the
+    engine to nudge a few meters further along the quay, then stayed put again. Before the fix,
+    that few-meter move was built as its own too-short "trip" and correctly filtered out of the
+    logbook -- but the two stays on either side of it were never reconnected, so the *first* stay
+    (the boat's position right after arriving, before the nudge) was reported as the trip's
+    arrival, silently dropping its actual final position. The fix folds the too-short move back
+    into a single combined stay, so the reported arrival reflects the boat's real final spot."""
+    fixes, sogs, engine_samples = _build_scenario()
+
+    # first stay: 24 minutes at the original mooring spot (well above min_stop_minutes)
+    for m in range(54, 54 + 24):
+        fixes.append(PositionFix(_dt(m), 52.40, 4.95))
+        sogs.append(SogSample(_dt(m), 0.0))
+        engine_samples.append(EngineSample(_dt(m), 0, 0.5, 3600 * 100 + m * 60))
+
+    # brief engine-on nudge (~15 m, well under min_trip_distance_nm) to the final spot alongside the quay
+    nudge_start = 54 + 24
+    for m in range(nudge_start, nudge_start + 2):
+        fixes.append(PositionFix(_dt(m), 52.4002, 4.9502))
+        sogs.append(SogSample(_dt(m), 2.0))  # above speed_threshold_kn -- registers as "moving"
+        engine_samples.append(EngineSample(_dt(m), 0, 3.0, 3600 * 100 + m * 60))
+
+    # second stay: 24 more minutes at the final spot
+    second_stay_start = nudge_start + 2
+    for m in range(second_stay_start, second_stay_start + 24):
+        fixes.append(PositionFix(_dt(m), 52.4002, 4.9502))
+        sogs.append(SogSample(_dt(m), 0.0))
+        engine_samples.append(EngineSample(_dt(m), 0, 0.5, 3600 * 100 + m * 60))
+
+    geocoder = _StubGeocoder()
+    trips = build_trips(
+        fixes, sogs, engine_samples, geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+    )
+
+    # no separate mini-trip for the nudge -- just the original trip
+    assert len(trips) == 1
+    # the reported arrival is pulled toward the final spot, not stuck at the first stay
+    assert trips[0].arrive_lat > 52.40
+    assert trips[0].arrive_lon > 4.95
+
+
 def test_min_trip_distance_nm_can_be_disabled():
     fixes, sogs, engine_samples = _build_scenario()
     for m in range(54, 54 + 12):
