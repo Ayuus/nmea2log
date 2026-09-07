@@ -1,3 +1,5 @@
+import pickle
+import zlib
 from datetime import datetime
 from pathlib import Path
 
@@ -10,7 +12,6 @@ from nmea2000processor.sample_cache import (
     _encode_samples,
     _encode_samples_tuple,
 )
-import pickle
 
 
 def _sample_tuple(lat: float = 52.30) -> tuple:
@@ -80,25 +81,25 @@ def test_get_is_invalidated_when_the_file_size_changes(tmp_path: Path):
 
 
 def test_cache_persists_across_instances(tmp_path: Path):
+    """put() is durable immediately -- no separate save() step needed (see module docstring: a
+    process killed mid-run must not lose already-decoded files)."""
     ebl = tmp_path / "000_000.ebl"
     ebl.write_bytes(b"hello")
     cache_file = tmp_path / "cache.pkl"
 
     cache = SampleCache(cache_file)
     cache.put(ebl, _sample_tuple(), datetime(2026, 7, 15, 9, 0))
-    cache.save()
 
     reloaded = SampleCache(cache_file)
     assert reloaded.get(ebl) == (_sample_tuple(), datetime(2026, 7, 15, 9, 0))
 
 
-def test_save_does_nothing_when_nothing_changed(tmp_path: Path):
-    cache_file = tmp_path / "cache.pkl"
-    cache = SampleCache(cache_file)
+def test_cache_dir_is_empty_when_nothing_was_ever_put(tmp_path: Path):
+    cache_dir = tmp_path / "cache.pkl"
 
-    cache.save()
+    SampleCache(cache_dir)
 
-    assert not cache_file.exists()  # never touched -- nothing was ever put()
+    assert list(cache_dir.iterdir()) == []
 
 
 def test_a_cache_from_a_different_format_version_is_ignored(tmp_path: Path):
@@ -123,6 +124,48 @@ def test_a_corrupt_cache_file_is_treated_as_empty_instead_of_crashing(tmp_path: 
     cache_file.write_bytes(b"not a valid pickle stream")
 
     cache = SampleCache(cache_file)
+
+    assert cache.get(ebl) is None
+
+
+def test_a_legacy_single_file_cache_is_migrated_with_its_entries_preserved(tmp_path: Path):
+    """Regression guard for the one-time upgrade from the old single-big-pickle format to the
+    current one-file-per-source-file directory (see sample_cache.py's module docstring, written
+    to fix a real phone getting OOM-killed mid-run because that old format had to hold the whole
+    cache in memory at once) -- an existing cache built by older code must not be silently thrown
+    away on first use by newer code."""
+    ebl = tmp_path / "000_000.ebl"
+    ebl.write_bytes(b"hello")
+    cache_path = tmp_path / "cache.pkl"
+    legacy_payload = {
+        "version": CACHE_FORMAT_VERSION,
+        "files": {
+            str(ebl.resolve()): {
+                "size": ebl.stat().st_size,
+                "samples": _encode_samples_tuple(_sample_tuple()),
+                "time_state_after": datetime(2026, 7, 15, 9, 0),
+            }
+        },
+    }
+    cache_path.write_bytes(zlib.compress(pickle.dumps(legacy_payload)))
+
+    cache = SampleCache(cache_path)
+
+    assert cache_path.is_dir()  # the plain legacy file became the new directory layout
+    assert cache.get(ebl) == (_sample_tuple(), datetime(2026, 7, 15, 9, 0))
+
+
+def test_a_legacy_cache_from_a_different_format_version_is_migrated_as_empty(tmp_path: Path):
+    ebl = tmp_path / "000_000.ebl"
+    ebl.write_bytes(b"hello")
+    cache_path = tmp_path / "cache.pkl"
+    legacy_payload = {
+        "version": CACHE_FORMAT_VERSION + 1,
+        "files": {str(ebl.resolve()): {"size": ebl.stat().st_size, "samples": ("stale",)}},
+    }
+    cache_path.write_bytes(zlib.compress(pickle.dumps(legacy_payload)))
+
+    cache = SampleCache(cache_path)
 
     assert cache.get(ebl) is None
 

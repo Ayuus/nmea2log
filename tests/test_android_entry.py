@@ -82,6 +82,46 @@ def test_run_pipeline_returns_error_when_no_position_data(tmp_path, monkeypatch)
     assert result == {"ok": False, "error": "No position data (PGN 129025) found."}
 
 
+def test_run_pipeline_stops_decoding_once_cancelled(tmp_path, monkeypatch):
+    """Regression test for a real bug: closing the app (SyncState.cancelled = true, see
+    MainActivity.closeAppAndCancelSync()) had no effect at all once decoding had started -- only
+    the earlier download loop in _sync_from_w2k2() ever checked should_cancel(), so a long decode
+    (1000+ files on a real archive) just kept running for minutes after the user thought they'd
+    stopped it. should_cancel is checked once per file, before decoding it -- cancelling right
+    after the first file must stop before the second one is ever touched."""
+    ebl_a = _write_fake_ebl(tmp_path, "000000_000.ebl")
+    ebl_b = _write_fake_ebl(tmp_path, "000000_001.ebl")
+    _stub_one_trip_samples(monkeypatch)
+
+    seen_paths = []
+    real_iter_frames = android_entry._iter_frames_for_path
+
+    def _tracking_iter_frames(path, state):
+        seen_paths.append(path)
+        return real_iter_frames(path, state)
+
+    monkeypatch.setattr(android_entry, "_iter_frames_for_path", _tracking_iter_frames)
+
+    calls = []
+
+    def fake_should_cancel():
+        calls.append(1)
+        return len(calls) > 1  # allow the first file, cancel before the second
+
+    result = android_entry.run_pipeline(
+        ebl_paths=[str(ebl_a), str(ebl_b)],
+        output_html_path=str(tmp_path / "logbook.html"),
+        sample_cache_path=str(tmp_path / "cache.pkl"),
+        boat_name="Test Boat",
+        mmsi="244123456",
+        call_sign="PA1234",
+        should_cancel=fake_should_cancel,
+    )
+
+    assert result == {"ok": False, "error": "Sync cancelled.", "cancelled": True}
+    assert seen_paths == [Path(ebl_a)]
+
+
 def test_run_pipeline_writes_html_and_reports_trip_count(tmp_path, monkeypatch):
     ebl_path = _write_fake_ebl(tmp_path)
     _stub_one_trip_samples(monkeypatch)
@@ -149,6 +189,120 @@ def test_sync_from_w2k2_returns_a_real_error_for_an_unanticipated_exception(tmp_
     assert "could not parse the login response" in result["error"]
 
 
+def test_sync_from_w2k2_returns_a_real_error_when_discover_w2k2_itself_raises(tmp_path, monkeypatch):
+    """Regression test: discover_w2k2() used to sit outside the try block entirely, so anything it
+    raised (found in practice on a memory-pressured device: its subnet-scan thread pool failing to
+    start a worker thread) propagated uncaught past this call -- same "onbekende fout" symptom as
+    test_sync_from_w2k2_returns_a_real_error_for_an_unanticipated_exception, just from a different,
+    previously-unguarded call site."""
+
+    def broken_discover(subnet_prefix):
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(android_entry.w2k2_download, "discover_w2k2", broken_discover)
+
+    result = android_entry.sync_from_w2k2(
+        user="skipper",
+        password="geheim",
+        subnet_prefix="192.168.43.",
+        download_dir=str(tmp_path / "Actisense"),
+        output_html_path=str(tmp_path / "logbook.html"),
+        sample_cache_path=str(tmp_path / "cache.pkl"),
+        boat_name="Test Boat",
+        mmsi="244123456",
+        call_sign="PA1234",
+    )
+
+    assert result["ok"] is False
+    assert "can't start new thread" in result["error"]
+
+
+def test_sync_from_w2k2_returns_a_real_error_when_run_pipeline_itself_raises(tmp_path, monkeypatch):
+    """Regression test: the call to run_pipeline() (decode/build_trips/write_html_logbook) used to
+    have no exception handling of its own at all -- found in practice, a real crash on real
+    full-scale data late in a run (near the very last file). Unlike a normally-returned
+    {"ok": False, "error": ...} dict, an exception here never even reaches showSyncResult() on the
+    Kotlin side at all (MainActivity.runSync()'s own generic catch just sets plain status text),
+    so this is a stricter regression guard than the "onbekende fout" dialog cases above: the
+    caller must always get back a real dict, never an escaped exception."""
+    monkeypatch.setattr(android_entry.w2k2_download, "discover_w2k2", lambda subnet_prefix: "http://10.0.0.5")
+
+    class _FakeSession:
+        def download_to(self, path, params, target, should_cancel=None):
+            target.write_bytes(b"x" * 10)
+
+    monkeypatch.setattr(android_entry.w2k2_download, "make_session", lambda host, config: _FakeSession())
+    monkeypatch.setattr(android_entry.w2k2_download, "get_folders", lambda session: [])
+
+    def broken_run_pipeline(**kwargs):
+        raise ValueError("boom while building trips")
+
+    monkeypatch.setattr(android_entry, "run_pipeline", broken_run_pipeline)
+
+    result = android_entry.sync_from_w2k2(
+        user="skipper",
+        password="geheim",
+        subnet_prefix="192.168.43.",
+        download_dir=str(tmp_path / "Actisense"),
+        output_html_path=str(tmp_path / "logbook.html"),
+        sample_cache_path=str(tmp_path / "cache.pkl"),
+        boat_name="Test Boat",
+        mmsi="244123456",
+        call_sign="PA1234",
+    )
+
+    assert result["ok"] is False
+    assert "boom while building trips" in result["error"]
+
+
+def test_build_from_local_files_forwards_log_lines_to_the_callback(tmp_path, monkeypatch):
+    """Regression test: this call path (see MainActivity.runOfflineBuild()) used to have no log
+    sink wired up at all, so a real (not cache-hit) decode left the screen stuck on one static
+    message instead of the same "...decoded X/Y" progress a normal sync already shows -- whatever
+    run_pipeline() logs while this is wired up must reach the callback, and the sink must not be
+    left forwarding forever afterward."""
+    from nmea2000processor.log import log
+    import nmea2000processor.log as log_module
+
+    def fake_run_pipeline(**kwargs):
+        log("[info] ...decoded 1/1 logfile(s) so far")
+        return {"ok": True, "trip_count": 1, "html_path": str(tmp_path / "logbook.html")}
+
+    monkeypatch.setattr(android_entry, "run_pipeline", fake_run_pipeline)
+
+    lines = []
+
+    class _Listener:
+        def report(self, current, total, file_name):
+            pass
+
+        def isCancelled(self):
+            return False
+
+        def onLogLine(self, line):
+            lines.append(line)
+
+        def onDownloadComplete(self):
+            pass
+
+        def onResult(self, ok, error, cancelled, trip_count, html_path, downloaded_count):
+            pass
+
+    result = android_entry.build_from_local_files(
+        ebl_paths=[str(tmp_path / "000000_000.ebl")],
+        output_html_path=str(tmp_path / "logbook.html"),
+        sample_cache_path=str(tmp_path / "cache.pkl"),
+        boat_name="Test Boat",
+        mmsi="244123456",
+        call_sign="PA1234",
+        progress_callback=_Listener(),
+    )
+
+    assert result["ok"] is True
+    assert any("decoded 1/1 logfile(s) so far" in line for line in lines)
+    assert log_module._log_sink is None  # cleared after the call, not left forwarding forever
+
+
 def test_sync_from_w2k2_forwards_log_lines_to_the_callback(tmp_path, monkeypatch):
     """onLogLine() should receive the exact same messages the desktop CLI prints (asked for
     explicitly, so the Android app doesn't need a separately-maintained set of status text) -- and
@@ -178,6 +332,9 @@ def test_sync_from_w2k2_forwards_log_lines_to_the_callback(tmp_path, monkeypatch
             lines.append(line)
 
         def onDownloadComplete(self):
+            pass
+
+        def onResult(self, ok, error, cancelled, trip_count, html_path, downloaded_count):
             pass
 
     android_entry.sync_from_w2k2(
@@ -231,6 +388,9 @@ def test_sync_from_w2k2_calls_on_download_complete_once_before_the_pipeline_runs
 
         def onDownloadComplete(self):
             events.append("onDownloadComplete")
+
+        def onResult(self, ok, error, cancelled, trip_count, html_path, downloaded_count):
+            pass
 
     android_entry.sync_from_w2k2(
         user="skipper",
@@ -352,6 +512,9 @@ def test_sync_from_w2k2_reports_progress_only_for_files_it_actually_fetches(tmp_
         def onDownloadComplete(self):
             pass
 
+        def onResult(self, ok, error, cancelled, trip_count, html_path, downloaded_count):
+            pass
+
     android_entry.sync_from_w2k2(
         user="skipper",
         password="geheim",
@@ -413,6 +576,9 @@ def test_sync_from_w2k2_stops_between_files_when_cancelled(tmp_path, monkeypatch
         def onDownloadComplete(self):
             pass
 
+        def onResult(self, ok, error, cancelled, trip_count, html_path, downloaded_count):
+            pass
+
     controller = _CancelAfterFirstFile()
     result = android_entry.sync_from_w2k2(
         user="skipper",
@@ -455,3 +621,81 @@ def test_sync_from_w2k2_returns_error_on_network_failure(tmp_path, monkeypatch):
 
     assert result["ok"] is False
     assert "Network error" in result["error"]
+
+
+def test_sync_from_w2k2_reports_the_final_result_via_onresult_too(tmp_path, monkeypatch):
+    """Regression test for the "onbekende fout" saga (see _report_result()'s own docstring):
+    reading result.get(...) back out of the dict Chaquopy returns to Kotlin sometimes came back
+    wrong, seemingly regardless of memory pressure -- reproduced both after a full sync and after
+    an early cancellation. onResult() is called explicitly, with plain primitives, while still
+    inside this same call -- verify it actually receives the real values, not just that the
+    returned dict does (that was never in doubt)."""
+    monkeypatch.setattr(android_entry.w2k2_download, "discover_w2k2", lambda subnet_prefix: "http://10.0.0.5")
+
+    class _FakeSession:
+        def download_to(self, path, params, target, should_cancel=None):
+            target.write_bytes(b"x" * 10)
+
+    monkeypatch.setattr(android_entry.w2k2_download, "make_session", lambda host, config: _FakeSession())
+    monkeypatch.setattr(android_entry.w2k2_download, "get_folders", lambda session: [])
+    monkeypatch.setattr(
+        android_entry,
+        "run_pipeline",
+        lambda **kwargs: {"ok": True, "trip_count": 3, "html_path": "/fake/logbook.html"},
+    )
+
+    calls = []
+
+    class _Listener:
+        def report(self, current, total, file_name):
+            pass
+
+        def isCancelled(self):
+            return False
+
+        def onLogLine(self, line):
+            pass
+
+        def onDownloadComplete(self):
+            pass
+
+        def onResult(self, ok, error, cancelled, trip_count, html_path, downloaded_count):
+            calls.append((ok, error, cancelled, trip_count, html_path, downloaded_count))
+
+    android_entry.sync_from_w2k2(
+        user="skipper",
+        password="geheim",
+        subnet_prefix="192.168.43.",
+        download_dir=str(tmp_path / "Actisense"),
+        output_html_path=str(tmp_path / "logbook.html"),
+        sample_cache_path=str(tmp_path / "cache.pkl"),
+        boat_name="Test Boat",
+        mmsi="244123456",
+        call_sign="PA1234",
+        progress_callback=_Listener(),
+    )
+
+    assert len(calls) == 1
+    ok, error, cancelled, trip_count, html_path, downloaded_count = calls[0]
+    assert ok is True
+    assert error is None
+    assert cancelled is False
+    assert trip_count == 3
+    assert html_path == "/fake/logbook.html"
+    assert downloaded_count == 0  # no files needed downloading in this scenario
+
+
+def test_report_result_uses_minus_one_for_a_missing_trip_or_downloaded_count(tmp_path):
+    """The dict's trip_count/downloaded_count are None when not applicable (e.g. a failed run,
+    or build_from_local_files()'s own result never sets downloaded_count at all) -- -1 stands in
+    for that on the onResult() side (see _report_result()'s own docstring for why: a plain Int
+    rather than an Int? on the Kotlin end)."""
+    calls = []
+
+    class _Listener:
+        def onResult(self, ok, error, cancelled, trip_count, html_path, downloaded_count):
+            calls.append((ok, error, cancelled, trip_count, html_path, downloaded_count))
+
+    android_entry._report_result(_Listener(), {"ok": False, "error": "No trips found."})
+
+    assert calls == [(False, "No trips found.", False, -1, None, -1)]

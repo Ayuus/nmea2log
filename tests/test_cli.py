@@ -338,7 +338,7 @@ def _stub_one_trip_samples(monkeypatch):
 
 def test_main_backs_up_only_the_logfiles_not_already_on_the_server(tmp_path, monkeypatch):
     """Regression-style test for the whole point of --backup-ebl: a file already present on the
-    server (per list_remote_filenames) must not be uploaded again, so a run only ever sends
+    server (per list_remote_filenames_multi) must not be uploaded again, so a run only ever sends
     what's new since the last one."""
     # Isolated from any real nmea2log.ini for the same reason as the --upload test above -- this
     # project's own [upload] section (enabled=true, a real remote_path) would otherwise supply
@@ -353,18 +353,18 @@ def test_main_backs_up_only_the_logfiles_not_already_on_the_server(tmp_path, mon
     new_file.write_bytes(b"x" * 100)
     _stub_one_trip_samples(monkeypatch)
 
-    listed_dir = {}
+    listed_dirs = []
     uploaded = {}
 
-    def fake_list_remote_filenames(*, host, user, remote_dir, key_file, port):
-        listed_dir["remote_dir"] = remote_dir
+    def fake_list_remote_filenames_multi(remote_dirs, *, host, user, key_file, port):
+        listed_dirs.extend(remote_dirs)
         return {"000000_000.ebl"}
 
-    def fake_upload_files(local_paths, *, host, user, remote_dir, key_file, port):
-        uploaded["paths"] = local_paths
+    def fake_upload_files_to_dirs(local_paths_by_remote_dir, *, host, user, key_file, port):
+        uploaded["by_dir"] = local_paths_by_remote_dir
 
-    monkeypatch.setattr("nmea2000processor.cli.list_remote_filenames", fake_list_remote_filenames)
-    monkeypatch.setattr("nmea2000processor.cli.upload_files", fake_upload_files)
+    monkeypatch.setattr("nmea2000processor.cli.list_remote_filenames_multi", fake_list_remote_filenames_multi)
+    monkeypatch.setattr("nmea2000processor.cli.upload_files_to_dirs", fake_upload_files_to_dirs)
 
     exit_code = main(
         [
@@ -378,15 +378,16 @@ def test_main_backs_up_only_the_logfiles_not_already_on_the_server(tmp_path, mon
     assert exit_code == 0
     # Uploaded into a same-named remote subfolder (asked for explicitly), not the flat
     # backup_remote_path directly -- mirrors the local EBL000000/ layout on the server.
-    assert listed_dir["remote_dir"] == "private/ebl-backup/EBL000000"
-    assert uploaded["paths"] == [new_file]
+    assert listed_dirs == ["private/ebl-backup/EBL000000"]
+    assert uploaded["by_dir"] == {"private/ebl-backup/EBL000000": [new_file]}
 
 
 def test_main_backs_up_each_ebl_folder_into_its_own_remote_subfolder(tmp_path, monkeypatch):
-    """Files from two different local EBL folders must land in two different remote subfolders,
-    each checked (list_remote_filenames) and uploaded (upload_files) separately -- matches the
-    Android app's own backup layout (asked for explicitly), instead of one flat remote directory
-    for every folder's files combined."""
+    """Files from two different local EBL folders must land in two different remote subfolders --
+    matches the Android app's own backup layout (asked for explicitly), instead of one flat remote
+    directory for every folder's files combined. Both are still checked and uploaded together in
+    a single session each (list_remote_filenames_multi/upload_files_to_dirs), not one session per
+    folder -- see those functions' own docstrings for why that matters."""
     monkeypatch.chdir(tmp_path)
     folder_a = tmp_path / "EBL000000"
     folder_b = tmp_path / "EBL000007"
@@ -399,17 +400,17 @@ def test_main_backs_up_each_ebl_folder_into_its_own_remote_subfolder(tmp_path, m
     _stub_one_trip_samples(monkeypatch)
 
     listed_dirs = []
-    uploaded_by_dir = {}
+    uploaded = {}
 
-    def fake_list_remote_filenames(*, host, user, remote_dir, key_file, port):
-        listed_dirs.append(remote_dir)
+    def fake_list_remote_filenames_multi(remote_dirs, *, host, user, key_file, port):
+        listed_dirs.extend(remote_dirs)
         return set()
 
-    def fake_upload_files(local_paths, *, host, user, remote_dir, key_file, port):
-        uploaded_by_dir[remote_dir] = local_paths
+    def fake_upload_files_to_dirs(local_paths_by_remote_dir, *, host, user, key_file, port):
+        uploaded["by_dir"] = local_paths_by_remote_dir
 
-    monkeypatch.setattr("nmea2000processor.cli.list_remote_filenames", fake_list_remote_filenames)
-    monkeypatch.setattr("nmea2000processor.cli.upload_files", fake_upload_files)
+    monkeypatch.setattr("nmea2000processor.cli.list_remote_filenames_multi", fake_list_remote_filenames_multi)
+    monkeypatch.setattr("nmea2000processor.cli.upload_files_to_dirs", fake_upload_files_to_dirs)
 
     exit_code = main(
         [
@@ -421,8 +422,9 @@ def test_main_backs_up_each_ebl_folder_into_its_own_remote_subfolder(tmp_path, m
     )
 
     assert exit_code == 0
+    # both folders checked together, in one call -- not one call per folder
     assert sorted(listed_dirs) == ["private/ebl-backup/EBL000000", "private/ebl-backup/EBL000007"]
-    assert uploaded_by_dir == {
+    assert uploaded["by_dir"] == {
         "private/ebl-backup/EBL000000": [file_a],
         "private/ebl-backup/EBL000007": [file_b],
     }
@@ -443,13 +445,15 @@ def test_main_backs_up_new_logfiles_in_chunks(tmp_path, monkeypatch):
     _stub_one_trip_samples(monkeypatch)
 
     monkeypatch.setattr(
-        "nmea2000processor.cli.list_remote_filenames",
-        lambda **kw: set(),
+        "nmea2000processor.cli.list_remote_filenames_multi",
+        lambda remote_dirs, **kw: set(),
     )
     chunks = []
     monkeypatch.setattr(
-        "nmea2000processor.cli.upload_files",
-        lambda local_paths, **kw: chunks.append(local_paths),
+        "nmea2000processor.cli.upload_files_to_dirs",
+        lambda local_paths_by_remote_dir, **kw: chunks.append(
+            [p for paths in local_paths_by_remote_dir.values() for p in paths]
+        ),
     )
 
     exit_code = main(
@@ -470,7 +474,7 @@ def test_main_does_not_fail_the_run_when_the_backup_upload_breaks_partway(tmp_pa
     """Regression test for a real failure: a run whose logbook was already written and uploaded
     fine still reported the whole run as failed (exit code 1) just because the *backup*, a bonus
     step, didn't fully finish -- even though it's fully resumable next run (see
-    list_remote_filenames) and nothing about today's actual logbook was at risk."""
+    list_remote_filenames_multi) and nothing about today's actual logbook was at risk."""
     monkeypatch.chdir(tmp_path)
     from nmea2000processor.cli import _BACKUP_CHUNK_SIZE
     from nmea2000processor.upload import UploadError
@@ -481,17 +485,17 @@ def test_main_does_not_fail_the_run_when_the_backup_upload_breaks_partway(tmp_pa
         f.write_bytes(b"x" * 100)
     _stub_one_trip_samples(monkeypatch)
 
-    monkeypatch.setattr("nmea2000processor.cli.list_remote_filenames", lambda **kw: set())
+    monkeypatch.setattr("nmea2000processor.cli.list_remote_filenames_multi", lambda remote_dirs, **kw: set())
 
     call_count = 0
 
-    def fake_upload_files(local_paths, **kw):
+    def fake_upload_files_to_dirs(local_paths_by_remote_dir, **kw):
         nonlocal call_count
         call_count += 1
         if call_count == 2:
             raise UploadError("Connection reset")
 
-    monkeypatch.setattr("nmea2000processor.cli.upload_files", fake_upload_files)
+    monkeypatch.setattr("nmea2000processor.cli.upload_files_to_dirs", fake_upload_files_to_dirs)
 
     exit_code = main(
         [

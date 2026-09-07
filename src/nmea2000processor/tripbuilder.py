@@ -19,7 +19,9 @@ from datetime import datetime, timedelta
 from itertools import groupby
 from typing import Dict, FrozenSet, List, Optional, Tuple
 
+from .fix_array import AttitudeArray, FixArray, SogArray
 from .geocode import Geocoder, NoGeocoder
+from .log import log
 from .model import (
     AttitudeSample,
     BatterySample,
@@ -45,8 +47,16 @@ _RPM_STABLE_MINUTES = 2.0  # a run at the typical RPM bucket must last at least 
 # count as steady cruising rather than a brief pass-through while accelerating/decelerating
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class NavSample:
+    """slots=True matters here specifically (unlike Stay/EngineHealth/BatteryHealth/TripLeg
+    below, all per-trip and so never more than a few dozen instances) -- one NavSample gets
+    built per merged GPS fix (see _merge_nav_samples), so a real multi-year archive holds
+    millions of these at once, for the whole time build_trips() runs. Same reasoning, and same
+    ~38% measured reduction, as model.py's own slots=True note on PositionFix/SogSample -- this
+    is what those get turned into internally, and (now that fixes/sogs themselves are stored far
+    more compactly, see fix_array.py) is the single biggest season-wide Python-object cost left."""
+
     time: datetime
     lat: float
     lon: float
@@ -56,7 +66,7 @@ class NavSample:
     cog_deg: Optional[float] = None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Stay:
     start: datetime
     end: datetime
@@ -65,7 +75,7 @@ class Stay:
     place: str
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class EngineHealth:
     oil_pressure_bar_avg: Optional[float]
     oil_temperature_c_avg: Optional[float]
@@ -76,14 +86,14 @@ class EngineHealth:
     warning_first_seen: Dict[str, datetime] = field(default_factory=dict)  # warning text -> first time seen
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class BatteryHealth:
     avg_voltage_v: Optional[float]
     min_voltage_v: Optional[float]
     min_voltage_at: Optional[datetime] = None  # moment the min_voltage_v reading was recorded
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class TripLeg:
     depart_time: datetime
     arrive_time: datetime
@@ -175,16 +185,63 @@ def _reject_gps_outliers(fixes: List[PositionFix]) -> List[PositionFix]:
     return accepted
 
 
+def _reject_gps_outliers_array(fixes: FixArray) -> FixArray:
+    """Same algorithm as _reject_gps_outliers() above, operating on a FixArray instead of a
+    List[PositionFix] -- used by _merge_nav_samples() for the real season-wide data, so a run
+    never has to materialize a full PositionFix object per fix just to filter them. Kept as a
+    separate function rather than making _reject_gps_outliers() itself generic: that one has its
+    own direct unit test asserting an exact List[PositionFix] in, List[PositionFix] out contract,
+    and duplicating ~15 lines here is a lot cheaper than risking that carefully-tuned, real-bug-
+    fixing logic (see its own docstring) on a rewrite. See test_reject_gps_outliers_array_* for
+    this version's own coverage of the same real-world corrupted-fix scenario."""
+    n = len(fixes)
+    if n == 0:
+        return fixes
+    order = sorted(range(n), key=fixes.time_at)
+    accepted = FixArray()
+    prev_i = order[0]
+    accepted.append_raw(fixes.time_at(prev_i), fixes.lat_at(prev_i), fixes.lon_at(prev_i))
+    for i in order[1:]:
+        dt_hours = (fixes.time_at(i) - fixes.time_at(prev_i)) / 3600
+        if dt_hours <= 0:
+            continue  # duplicate/out-of-order timestamp -- keep whichever came first
+        implied_speed_kn = (
+            _haversine_nm(fixes.lat_at(prev_i), fixes.lon_at(prev_i), fixes.lat_at(i), fixes.lon_at(i))
+            / dt_hours
+        )
+        if implied_speed_kn > _MAX_PLAUSIBLE_SPEED_KN:
+            continue
+        accepted.append_raw(fixes.time_at(i), fixes.lat_at(i), fixes.lon_at(i))
+        prev_i = i
+    return accepted
+
+
 def _merge_nav_samples(
-    fixes: List[PositionFix],
-    sogs: List[SogSample],
+    fixes: FixArray,
+    sogs: SogArray,
     depths: Optional[List[DepthSample]] = None,
     water_temps: Optional[List[WaterTempSample]] = None,
 ) -> List[NavSample]:
     """Combines position, speed, depth, and water temperature readings chronologically; all are
-    forward-filled."""
-    fixes = _reject_gps_outliers(fixes)
-    sogs_sorted = sorted(sogs, key=lambda s: s.time)
+    forward-filled.
+
+    fixes/sogs are FixArray/SogArray (see fix_array.py) rather than plain lists -- always, by the
+    time this is called from build_trips() (the only caller), which wraps whatever it was given
+    into those types up front. A season's worth of either can be millions of samples, and this is
+    the one place a PositionFix/SogSample object gets constructed per fix at all (NavSample below
+    is what the rest of the algorithm actually works with from here on). SOG in particular used
+    to go through a plain sorted(sogs, key=lambda s: s.time) here, materializing a full season's
+    worth of SogSample objects that then stayed resident for this whole function's run -- found
+    in practice, on a real ~2 million-fix archive, this function is where the phone's decode-
+    through-publish pipeline was actually dying (confirmed via the checkpoint logging around
+    build_trips(), see that function's own comment): SOG is typically similar cardinality to
+    position fixes, so that materialization alone was a real, multi-hundred-MB cost on top of
+    everything else already resident at that point."""
+    fixes = _reject_gps_outliers_array(fixes)
+    # Already in time order -- _reject_gps_outliers_array() processes its input in sorted order
+    # and never reorders what it keeps, so no second sort is needed here (the original
+    # list-based version technically re-sorted an already-sorted list every single run).
+    sogs = sogs.sorted_by_time()
     depths_sorted = sorted(depths, key=lambda s: s.time) if depths else []
     water_temps_sorted = sorted(water_temps, key=lambda s: s.time) if water_temps else []
     samples: List[NavSample] = []
@@ -195,18 +252,22 @@ def _merge_nav_samples(
     last_cog: Optional[float] = None
     last_depth: Optional[float] = None
     last_water_temp: Optional[float] = None
-    for fix in sorted(fixes, key=lambda f: f.time):
-        while sog_idx < len(sogs_sorted) and sogs_sorted[sog_idx].time <= fix.time:
-            last_sog = sogs_sorted[sog_idx].sog_ms
-            last_cog = sogs_sorted[sog_idx].cog_deg
+    for i in range(len(fixes)):
+        fix_time = fixes.datetime_at(i)
+        fix_epoch = fixes.time_at(i)
+        while sog_idx < len(sogs) and sogs.time_at(sog_idx) <= fix_epoch:
+            last_sog = sogs.sog_at(sog_idx)
+            last_cog = sogs.cog_at(sog_idx)
             sog_idx += 1
-        while depth_idx < len(depths_sorted) and depths_sorted[depth_idx].time <= fix.time:
+        while depth_idx < len(depths_sorted) and depths_sorted[depth_idx].time <= fix_time:
             last_depth = depths_sorted[depth_idx].depth_m
             depth_idx += 1
-        while water_temp_idx < len(water_temps_sorted) and water_temps_sorted[water_temp_idx].time <= fix.time:
+        while water_temp_idx < len(water_temps_sorted) and water_temps_sorted[water_temp_idx].time <= fix_time:
             last_water_temp = water_temps_sorted[water_temp_idx].temp_c
             water_temp_idx += 1
-        samples.append(NavSample(fix.time, fix.lat, fix.lon, last_sog, last_depth, last_water_temp, last_cog))
+        samples.append(
+            NavSample(fix_time, fixes.lat_at(i), fixes.lon_at(i), last_sog, last_depth, last_water_temp, last_cog)
+        )
     return samples
 
 
@@ -357,37 +418,46 @@ def _reclassify_locks(
     return relabelled
 
 
-def _split_moving_runs_on_gaps(
+def _split_runs_on_gaps(
     runs: List[Tuple[str, List[NavSample]]], max_gap: timedelta
 ) -> List[Tuple[str, List[NavSample]]]:
-    """A "moving" run can silently swallow a large data gap if the classification happens to be
-    "moving" on both sides of it (e.g. a moment of GPS/SOG noise right as the boat was actually
-    stopping, and again once data resumes) -- there's then no differently-labeled sample in
-    between for ``_classify_runs`` to split on, even though we have no idea what happened during
-    the gap. Found in practice: a trip that looked like one continuous ~4-hour "moving" run
-    actually had a ~2.5-hour data gap in the middle, right after the boat had actually arrived;
-    ``_moving_duration`` already excluded the gap from the reported *duration* correctly, but the
-    arrival itself was never recognized as a stay, so the CSV showed the *next* real stay (found
-    hours later) as the arrival port instead of the true one.
+    """Any run can silently swallow a large data gap if the classification happens to be the same
+    on both sides of it -- there's then no differently-labeled sample in between for
+    ``_classify_runs`` to split on, even though we have no idea what happened during the gap.
 
-    This splits a "moving" run at each internal gap >= ``max_gap``, inserting a single-sample
-    synthetic "stationary" stay at the last known position before the gap -- the same treatment
-    as an unresolved position at a file/session boundary, just discovered mid-run instead of at
-    the edges."""
+    For a "moving" run (e.g. a moment of GPS/SOG noise right as the boat was actually stopping,
+    and again once data resumes): found in practice, a trip that looked like one continuous
+    ~4-hour "moving" run actually had a ~2.5-hour data gap in the middle, right after the boat had
+    actually arrived; ``_moving_duration`` already excluded the gap from the reported *duration*
+    correctly, but the arrival itself was never recognized as a stay, so the CSV showed the *next*
+    real stay (found hours later) as the arrival port instead of the true one. Splitting at each
+    internal gap >= ``max_gap`` and inserting a single-sample synthetic "stationary" stay at the
+    last known position before the gap fixes that -- the same treatment as an unresolved position
+    at a file/session boundary, just discovered mid-run instead of at the edges.
+
+    For a "stationary" run: found in practice, a corrupted SD card produced ~10 hours of no/garbled
+    data, with the sparse readings on both sides of it (last gasp before failure, first trickle
+    after replacement) both reading near-zero speed -- so the whole 10-hour span stayed one
+    unbroken "stationary" run with no synthetic marker to split it on. Downstream code (see
+    ``_merge_negligible_trips``) only ever looks for gaps *between* runs, never inside one, so this
+    silently merged the boat's real last-known-at-sea position with an unrelated stay found much
+    later, once GPS was regained -- reporting that later port as the arrival, and drawing the
+    trip's track straight to it, instead of ending at the last position actually logged before the
+    failure. Simply splitting into two separate stationary runs (no synthetic point needed -- both
+    sides already are "stationary") is enough; the existing between-runs gap check then keeps them
+    from being merged back into one stay."""
     result: List[Tuple[str, List[NavSample]]] = []
     for label, group in runs:
-        if label != "moving":
-            result.append((label, group))
-            continue
         segment: List[NavSample] = [group[0]]
         for prev, curr in zip(group, group[1:]):
             if curr.time - prev.time >= max_gap:
-                result.append(("moving", segment))
-                result.append(("stationary", [prev]))
+                result.append((label, segment))
+                if label == "moving":
+                    result.append(("stationary", [prev]))
                 segment = [curr]
             else:
                 segment.append(curr)
-        result.append(("moving", segment))
+        result.append((label, segment))
     return result
 
 
@@ -396,7 +466,7 @@ def _trip_distance_nm(group: List[NavSample]) -> float:
 
 
 def _merge_negligible_trips(
-    runs: List[Tuple[str, List[NavSample]]], min_trip_distance_nm: float
+    runs: List[Tuple[str, List[NavSample]]], min_trip_distance_nm: float, max_gap: timedelta
 ) -> List[Tuple[str, List[NavSample]]]:
     """A "moving" run covering less than ``min_trip_distance_nm`` doesn't get to end a trip and
     start a new stay on its own -- it's GPS/speed noise or a brief manoeuvre (e.g. nudging a few
@@ -412,55 +482,51 @@ def _merge_negligible_trips(
     any other stationary period, contributing to its averaged position -- when there's no
     preceding trip to extend, e.g. it's the very first run in the whole dataset.
 
+    Never splices or merges across a real data gap (``max_gap`` or more between two consecutive
+    runs), no matter how short the intervening run's own distance is -- found in practice, on real
+    data: a corrupted SD card produced a ~10-hour gap of no/garbled data right after a trip's
+    last good position. The few scattered samples once data resumed still counted as a
+    "negligible" move by distance alone, so they got spliced straight onto the *pre-gap* trip's
+    own track and merged into what should have been a separate later stay -- drawing the trip's
+    line straight through a harbour wall to a port the boat's logged track never actually reached,
+    and reporting that port as the arrival instead of the boat's real last known position at sea.
+    Distance answers "was this a real trip", not "does this belong to the same continuous visit as
+    what came before it" -- only a lack of any real time gap answers that.
+
     (An earlier version of this fix also tracked, per merged stay, which of its samples belonged
     to the *final* sub-stay after such a splice, and averaged the arrival position over only
-    those -- on real data that turned out to change nothing: the actual gap wasn't which samples
-    got averaged, but that the drawn track and the arrival marker were never guaranteed to meet at
-    all (see ``_track_reaching_markers``, which fixes that directly). Removed again as dead
-    complexity.)"""
+    those -- on real data that turned out to change nothing. Removed again as dead complexity.)"""
     result: List[Tuple[str, List[NavSample]]] = []
     last_moving_group: Optional[List[NavSample]] = None
+    prev_end_time: Optional[datetime] = None
     for label, group in runs:
+        if prev_end_time is not None and group[0].time - prev_end_time >= max_gap:
+            last_moving_group = None  # a real data gap -- never splice/merge across it
+        prev_end_time = group[-1].time
+
         if label == "moving" and _trip_distance_nm(group) < min_trip_distance_nm:
             if last_moving_group is not None:
                 last_moving_group.extend(group)
                 continue
             label = "stationary"
+        if (
+            label == "stationary"
+            and result
+            and result[-1][0] == "stationary"
+            and group[0].time - result[-1][1][-1].time < max_gap
+        ):
+            prev_group = result[-1][1]
+            prev_group.extend(group)
+            continue
         result.append((label, group))
         if label == "moving":
             last_moving_group = group
-    return _merge_adjacent(result)
-
-
-def _track_reaching_markers(
-    group: List[NavSample],
-    depart_time: datetime,
-    depart_lat: float,
-    depart_lon: float,
-    arrive_time: datetime,
-    arrive_lat: float,
-    arrive_lon: float,
-) -> List[NavSample]:
-    """The drawn track (for the map, GPX export, and the periodic log table) should always
-    visually reach the departure/arrival markers -- those are placed at the stay's own averaged
-    position (see TripLeg.depart_lat/arrive_lat), which practically never lands exactly on
-    ``group``'s own first/last GPS fix. Left alone, that gap is small most of the time (the
-    averaging window is usually short) but can grow to several metres for a long stay -- and
-    however small, there's no reason to leave *any* gap between a line and its own labelled
-    endpoint when the endpoint's exact position is already known. Prepending/appending a synthetic
-    point at each marker's own position closes it outright, for every trip, rather than relying on
-    the averaging happening to land close enough.
-
-    A synthetic point's own speed is 0 -- it represents the boat while moored, which is what the
-    average position it's placed at actually describes."""
-    track = group
-    if (track[0].lat, track[0].lon) != (depart_lat, depart_lon):
-        start = NavSample(depart_time, depart_lat, depart_lon, 0.0, track[0].depth_m, track[0].water_temp_c)
-        track = [start] + track
-    if (track[-1].lat, track[-1].lon) != (arrive_lat, arrive_lon):
-        end = NavSample(arrive_time, arrive_lat, arrive_lon, 0.0, track[-1].depth_m, track[-1].water_temp_c)
-        track = track + [end]
-    return track
+    # No trailing _merge_adjacent() here (unlike the other run-relabelling passes above it) --
+    # unlike those, this function's own merge branch above already handles every legitimate
+    # adjacent-stationary merge itself, with the gap check that matters here; a generic unconditional
+    # merge afterwards would undo exactly that check for two stationary runs that only ended up
+    # adjacent because a real data gap split them apart (see _split_runs_on_gaps).
+    return result
 
 
 def _moving_duration(group: List[NavSample], max_gap: timedelta) -> timedelta:
@@ -874,8 +940,8 @@ def _motion_variation(
 
 
 def build_trips(
-    fixes: List[PositionFix],
-    sogs: List[SogSample],
+    fixes: FixArray | List[PositionFix],
+    sogs: SogArray | List[SogSample],
     engine_samples: List[EngineSample],
     trip_fuel_samples: Optional[List[TripFuelSample]] = None,
     depth_samples: Optional[List[DepthSample]] = None,
@@ -909,6 +975,16 @@ def build_trips(
     ``_reclassify_locks``). Both default to ``None`` (disabled) at this level -- the CLI turns
     this on with sensible defaults; left off here so callers/tests that don't care about it get
     the plain speed-based behavior."""
+    # Callers that already accumulate season-wide data as FixArray/SogArray (see fix_array.py --
+    # cli.py/android_entry.py do, to avoid ever holding millions of PositionFix/SogSample objects
+    # at once) pass those straight through; anything else (a plain list, as every existing test
+    # in this file still constructs) is wrapped here so this function's own public contract
+    # doesn't change for any existing caller.
+    if not isinstance(fixes, FixArray):
+        fixes = FixArray(fixes)
+    if not isinstance(sogs, SogArray):
+        sogs = SogArray(sogs)
+
     if geocoder is None:
         geocoder = NoGeocoder()
     if trip_fuel_samples is None:
@@ -919,13 +995,28 @@ def build_trips(
         rpm_samples = []
     if attitude_samples is None:
         attitude_samples = []
-    attitude_samples = sorted(attitude_samples, key=lambda s: s.time)
+    # AttitudeArray gets its own array-native sort (see fix_array.py) -- a plain sorted(...)
+    # would iterate it into a fully-materialized list of AttitudeSample objects that then lives
+    # for the rest of this function's run (passed to _motion_variation for every trip), silently
+    # undoing the point of storing a season's worth of them as array.array columns in the first
+    # place.
+    attitude_samples = (
+        attitude_samples.sorted_by_time()
+        if isinstance(attitude_samples, AttitudeArray)
+        else sorted(attitude_samples, key=lambda s: s.time)
+    )
     if max_gap_minutes is None:
         max_gap_minutes = min_stop_minutes
 
+    # Checkpoints through here (not per-trip below -- a real season is typically a few dozen
+    # trips at most, fast either way) -- found in practice: this whole function used to run
+    # completely silent, on a phone's much slower CPU, over however many merged NavSample points
+    # a full multi-year archive produces, with nothing to tell "still working" apart from "hung"
+    # or "crashed silently" for however long it took.
     samples = _merge_nav_samples(fixes, sogs, depth_samples, water_temp_samples)
     if len(samples) < 2:
         return []
+    log(f"[info] ...{len(samples)} navigation samples merged, classifying trips...")
 
     speed_threshold_ms = speed_threshold_kn * _KNOT_IN_MS
     min_stop = timedelta(minutes=min_stop_minutes)
@@ -943,8 +1034,9 @@ def build_trips(
         lock_max_duration = timedelta(minutes=lock_max_duration_minutes)
         runs = _reclassify_locks(runs, samples, on_intervals, lock_radius_m, lock_max_duration)
         runs = _merge_adjacent(runs)
-    runs = _split_moving_runs_on_gaps(runs, max_gap)
-    runs = _merge_negligible_trips(runs, min_trip_distance_nm)
+    runs = _split_runs_on_gaps(runs, max_gap)
+    runs = _merge_negligible_trips(runs, min_trip_distance_nm, max_gap)
+    log(f"[info] ...{len(runs)} run(s) classified, computing per-trip statistics...")
 
     stays: List[Optional[Stay]] = []
     for label, group in runs:
@@ -1021,9 +1113,7 @@ def build_trips(
                 pitch_variation_deg=pitch_variation_deg,
                 roll_range_deg=roll_range_deg,
                 pitch_range_deg=pitch_range_deg,
-                track=_track_reaching_markers(
-                    group, depart_time, depart_lat, depart_lon, arrive_time, arrive_lat, arrive_lon
-                ),
+                track=group,
                 max_speed_at=max_speed_at,
                 max_speed_rpm=max_speed_rpm,
             )

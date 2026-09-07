@@ -13,7 +13,8 @@ from nmea2000processor.model import (
     TripFuelSample,
     WaterTempSample,
 )
-from nmea2000processor.tripbuilder import _reject_gps_outliers, build_trips
+from nmea2000processor.fix_array import FixArray
+from nmea2000processor.tripbuilder import _reject_gps_outliers, _reject_gps_outliers_array, build_trips
 
 
 class _StubGeocoder:
@@ -135,6 +136,20 @@ def test_reject_gps_outliers_drops_a_single_corrupted_fix():
     good_after = PositionFix(datetime(2026, 8, 25, 8, 13, 56), 46.9162885, -2.3801523)
 
     kept = _reject_gps_outliers([good_before, bad, good_after])
+
+    assert kept == [good_before, good_after]
+
+
+def test_reject_gps_outliers_array_drops_a_single_corrupted_fix():
+    """Same real-world scenario as test_reject_gps_outliers_drops_a_single_corrupted_fix() above,
+    against the FixArray-native version _merge_nav_samples() actually calls (see fix_array.py --
+    both versions exist so the season-wide, memory-conscious path gets the exact same real-bug
+    coverage as the plain-list one)."""
+    good_before = PositionFix(datetime(2026, 8, 25, 8, 13, 55), 46.916294, -2.3801566)
+    bad = PositionFix(datetime(2026, 8, 25, 8, 13, 56), -78.629377, -60.8371052)
+    good_after = PositionFix(datetime(2026, 8, 25, 8, 13, 56), 46.9162885, -2.3801523)
+
+    kept = _reject_gps_outliers_array(FixArray([good_before, bad, good_after]))
 
     assert kept == [good_before, good_after]
 
@@ -688,6 +703,60 @@ def test_negligible_distance_trip_is_filtered_out():
     assert trips[0].arrive_place == "Port@52.40,4.95"
 
 
+def test_gap_within_a_stationary_run_does_not_bridge_to_a_later_unrelated_stay():
+    """Regression test for a real bug found in practice: a corrupted SD card produced ~10 hours of
+    no/garbled data right after a trip's last good position. The sparse readings on both sides of
+    the outage (a last low-speed reading right before it, a low-speed reading once data trickled
+    back in) both read as "stationary", so the whole 10-hour span stayed one unbroken run with no
+    differently-labelled sample for ``_classify_runs`` to split on -- unlike a "moving" run
+    swallowing a gap (already handled), nothing split a *stationary* run's own internal gap before
+    this fix. A brief real move shortly after data resumed then still counted as a "negligible"
+    move by distance alone, so it (and the unrelated stay after it) got merged into what should
+    have stayed a separate, later stay -- the trip's reported arrival ended up at a port the boat's
+    logged track never actually reached, with its line drawn straight there across the gap, instead
+    of stopping at the boat's real last known position before the failure."""
+    fixes, sogs, engine_samples = _build_scenario()
+
+    # last two low-speed readings before the SD card failed
+    for m in range(54, 54 + 2):
+        fixes.append(PositionFix(_dt(m), 52.40, 4.95))
+        sogs.append(SogSample(_dt(m), 0.0))
+        engine_samples.append(EngineSample(_dt(m), 0, 0.5, 3600 * 100 + m * 60))
+
+    # ~10 hour gap: no data at all
+    gap_end_minute = 54 + 2 + 600
+
+    # data trickles back in: one low-speed reading far away, then a brief move, then a real stay
+    fixes.append(PositionFix(_dt(gap_end_minute), 52.55, 5.20))
+    sogs.append(SogSample(_dt(gap_end_minute), 0.0))
+    engine_samples.append(EngineSample(_dt(gap_end_minute), 0, 0.5, 3600 * 100 + gap_end_minute * 60))
+
+    nudge_start = gap_end_minute + 1
+    for m in range(nudge_start, nudge_start + 2):
+        fixes.append(PositionFix(_dt(m), 52.5502, 5.2002))
+        sogs.append(SogSample(_dt(m), 2.0))
+        engine_samples.append(EngineSample(_dt(m), 0, 3.0, 3600 * 100 + m * 60))
+
+    real_stay_start = nudge_start + 2
+    for m in range(real_stay_start, real_stay_start + 24):
+        fixes.append(PositionFix(_dt(m), 52.5502, 5.2002))
+        sogs.append(SogSample(_dt(m), 0.0))
+        engine_samples.append(EngineSample(_dt(m), 0, 0.5, 3600 * 100 + m * 60))
+
+    geocoder = _StubGeocoder()
+    trips = build_trips(
+        fixes, sogs, engine_samples, geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+    )
+
+    assert len(trips) == 1
+    # arrival stays at the last known position before the gap, not the unrelated later stay
+    assert trips[0].arrive_lat == pytest.approx(52.40)
+    assert trips[0].arrive_lon == pytest.approx(4.95)
+    # the drawn track doesn't reach across the gap either
+    assert trips[0].track[-1].lat == pytest.approx(52.40)
+    assert trips[0].track[-1].lon == pytest.approx(4.95)
+
+
 def test_negligible_trip_between_two_stays_is_folded_into_one_combined_stay():
     """Regression test for a real bug found in practice: after mooring, the boat briefly used the
     engine to nudge a few meters further along the quay, then stayed put again. Before the fix,
@@ -696,11 +765,8 @@ def test_negligible_trip_between_two_stays_is_folded_into_one_combined_stay():
     (the boat's position right after arriving, before the nudge) was reported as the trip's
     arrival, silently dropping its actual final position. The fix folds the too-short move back
     into a single combined stay, so the reported arrival reflects the boat's real final spot --
-    and (a second real gap found on the same real data, once the arrival marker itself was
-    already correct) splices the nudge's own GPS points onto the trip's track, so the line drawn
-    on the map actually reaches the arrival marker's own position, instead of stopping short of it
-    (see ``_track_reaching_markers``) -- whatever exact position that marker ends up at, the track
-    is guaranteed to end there too."""
+    and splices the nudge's own GPS points onto the trip's track, so the line drawn on the map
+    actually reaches near the arrival marker instead of stopping short of it at the first stay."""
     fixes, sogs, engine_samples = _build_scenario()
 
     # first stay: 24 minutes at the original mooring spot (well above min_stop_minutes)
@@ -733,9 +799,12 @@ def test_negligible_trip_between_two_stays_is_folded_into_one_combined_stay():
     # the reported arrival is pulled toward the final spot, not stuck at the first stay
     assert trips[0].arrive_lat > 52.40
     assert trips[0].arrive_lon > 4.95
-    # the drawn track always ends exactly on the arrival marker, whatever its exact position is
-    assert trips[0].track[-1].lat == pytest.approx(trips[0].arrive_lat)
-    assert trips[0].track[-1].lon == pytest.approx(trips[0].arrive_lon)
+    # the drawn track reaches (near) the arrival marker, not stuck at the first stay either --
+    # not forced to match exactly (see git history: that forcing was reverted, on the reasoning
+    # that a real, visible gap here is a useful signal something's off, not something to paper
+    # over), just close to it (well within a stay's own averaging jitter).
+    assert trips[0].track[-1].lat == pytest.approx(trips[0].arrive_lat, abs=1e-3)
+    assert trips[0].track[-1].lon == pytest.approx(trips[0].arrive_lon, abs=1e-3)
 
 
 def test_min_trip_distance_nm_can_be_disabled():

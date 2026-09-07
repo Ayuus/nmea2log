@@ -3,12 +3,14 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple, TypeVar
+from typing import Callable, Dict, Iterable, List, Optional, Tuple, TypeVar
 
 from .config import load_section
 from .ebl_reader import iter_frames as iter_frames_ebl
+from .fix_array import AttitudeArray, BatteryArray, DepthArray, FixArray, SogArray, WaterTempArray
 from .geocode import Geocoder, NoGeocoder
 from .marine import MarineFetcher, NoMarine
 from .weather import NoWeather, WeatherFetcher
@@ -52,9 +54,10 @@ from .pgn_decode import (
 )
 from .trip_ids import assign_trip_ids
 from .tripbuilder import build_trips
-from .upload import UploadError, list_remote_filenames, upload_file, upload_files
+from .upload import UploadError, list_remote_filenames_multi, upload_file, upload_files_to_dirs
 
 _T = TypeVar("_T")
+_ArrayT = TypeVar("_ArrayT")  # one of fix_array.py's array.array-backed sample collections
 
 # How many logfiles --backup-ebl uploads per SFTP session, rather than all of them (potentially
 # 1000+, several MB each on a first-ever backup run) in one -- found in practice: a shared-hosting
@@ -64,6 +67,15 @@ _T = TypeVar("_T")
 # makes the whole thing resumable across runs; nothing here depends on one session covering
 # everything).
 _BACKUP_CHUNK_SIZE = 25
+
+# How often (in seconds of wall-clock time, not file count) to log decode progress while working
+# through args.logfiles -- a real archive can be 1000+ files, and decoding the ones not already in
+# the sample cache is CPU-bound with no other output in between, which on slower hardware (found
+# in practice: the Android app's phone CPU, not just a hypothetical) can silently run for minutes
+# with nothing on screen to tell a real decode from a hang. Time-based rather than every-N-files:
+# self-adapting to however fast decoding actually goes on the hardware it's running on, instead of
+# firing constantly on a fast machine or barely at all on a slow one.
+_DECODE_PROGRESS_INTERVAL_S = 2.0
 
 # The only PGNs this app decodes anything from (see _collect_samples below). Real NMEA2000
 # buses carry a lot of other chatter (autopilot/heading/attitude PGNs can easily outnumber these
@@ -103,6 +115,20 @@ def _merge_by_source(target: Dict[int, List[_T]], addition: Dict[int, List[_T]])
         target.setdefault(source, []).extend(items)
 
 
+def _merge_array_by_source(target: Dict[int, _ArrayT], addition: Dict[int, list], factory: Callable[[], _ArrayT]) -> None:
+    """Same idea as _merge_by_source() above, but accumulating into one of the array.array-backed
+    types from fix_array.py instead of a plain list -- see that module's own docstring for why:
+    a season's worth of these held as Python objects instead of array.array columns is what
+    actually got the Android app OOM-killed by the phone's OS. Used for every sample type that
+    has a season-wide accumulator (position, speed, depth, water temperature, battery, attitude);
+    the couple of lower-level, per-file-only lists (e.g. inside _collect_samples()) stay plain
+    lists -- their size is bounded by one file, not the whole archive, so it isn't worth it there."""
+    for source, items in addition.items():
+        if source not in target:
+            target[source] = factory()
+        target[source].extend(items)
+
+
 def _filter_to_dominant_engine(
     engine_samples: List[EngineSample],
     trip_fuel_samples: List[TripFuelSample],
@@ -125,8 +151,8 @@ def _filter_to_dominant_engine(
 
 
 def _select_primary_gps_source(
-    fixes_by_source: Dict[int, List[PositionFix]], sogs_by_source: Dict[int, List[SogSample]]
-) -> Tuple[List[PositionFix], List[SogSample], Optional[int]]:
+    fixes_by_source: Dict[int, FixArray], sogs_by_source: Dict[int, SogArray]
+) -> Tuple[FixArray, SogArray, Optional[int]]:
     """Picks one coherent primary GPS source for position AND speed together, instead of
     choosing independently per PGN (as ``_dominant_source_only`` would do on its own).
 
@@ -142,7 +168,7 @@ def _select_primary_gps_source(
     to the speed source with the most messages (so then a different physical device than the
     position source after all -- better than mixing all sources together, but not ideal)."""
     if not fixes_by_source:
-        return [], _dominant_source_only(sogs_by_source), None
+        return FixArray(), _dominant_source_only(sogs_by_source), None
 
     primary_source = max(fixes_by_source, key=lambda source: len(fixes_by_source[source]))
     fixes = fixes_by_source[primary_source]
@@ -347,7 +373,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--sample-cache-file",
         type=Path,
         default=Path(".ebl_sample_cache.pkl"),
-        help="Cache file for decoded .ebl samples (default .ebl_sample_cache.pkl)",
+        help="Cache directory for decoded .ebl samples, one small file per .ebl file "
+        "(default .ebl_sample_cache.pkl; a legacy single-file cache at this path from an "
+        "older version is migrated automatically)",
     )
     parser.add_argument(
         "--cache-file",
@@ -710,12 +738,22 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     if not args.logfiles:
         parser.error("provide one or more logfiles, or set ebl_dir in the config file")
 
-    fixes_by_source: Dict[int, List[PositionFix]] = {}
-    sogs_by_source: Dict[int, List[SogSample]] = {}
-    depth_by_source: Dict[int, List[DepthSample]] = {}
-    water_temp_by_source: Dict[int, List[WaterTempSample]] = {}
-    battery_by_source: Dict[int, List[BatterySample]] = {}
-    attitude_by_source: Dict[int, List[AttitudeSample]] = {}
+    # fixes_by_source/sogs_by_source specifically -- not the other four dicts below, or the
+    # per-file accumulation inside _collect_samples() -- accumulate as FixArray/SogArray (see
+    # fix_array.py) rather than plain lists: position/speed are, by far, this app's
+    # highest-cardinality sample types (a real multi-year archive holds millions), so this is
+    # where holding a season's worth as Python objects instead of array.array columns actually
+    # mattered (found in practice: this is what got the Android app OOM-killed by the phone's
+    # OS). The other four (lower cardinality, but not negligible over a multi-year archive) get
+    # the same treatment below; engine/trip-fuel/RPM samples stay plain lists -- EngineSample in
+    # particular has a FrozenSet[str] field (warnings) that doesn't map cleanly onto a fixed-width
+    # array column, and engine data is only ever logged while the engine runs, not continuously.
+    fixes_by_source: Dict[int, FixArray] = {}
+    sogs_by_source: Dict[int, SogArray] = {}
+    depth_by_source: Dict[int, DepthArray] = {}
+    water_temp_by_source: Dict[int, WaterTempArray] = {}
+    battery_by_source: Dict[int, BatteryArray] = {}
+    attitude_by_source: Dict[int, AttitudeArray] = {}
     all_engine: List[EngineSample] = []
     all_trip_fuel: List[TripFuelSample] = []
     all_rpm: List[EngineRpmSample] = []
@@ -723,7 +761,8 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     ebl_time_state: Dict[str, object] = {}
     sample_cache = None if args.no_sample_cache else SampleCache(args.sample_cache_file)
     cache_hits = 0
-    for path in args.logfiles:
+    last_progress_log = time.monotonic()
+    for idx, path in enumerate(args.logfiles, start=1):
         if not path.exists():
             log(f"[error] Log file not found: {path}", file=sys.stderr)
             return 1
@@ -741,24 +780,35 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
             if sample_cache is not None:
                 sample_cache.put(path, samples, ebl_time_state.get("current"))
 
-        _merge_by_source(fixes_by_source, fixes)
-        _merge_by_source(sogs_by_source, sogs)
+        now = time.monotonic()
+        if now - last_progress_log >= _DECODE_PROGRESS_INTERVAL_S and idx < len(args.logfiles):
+            log(f"[info] ...decoded {idx}/{len(args.logfiles)} logfile(s) so far", file=sys.stderr)
+            last_progress_log = now
+
+        _merge_array_by_source(fixes_by_source, fixes, FixArray)
+        _merge_array_by_source(sogs_by_source, sogs, SogArray)
         all_engine += engine
         all_trip_fuel += trip_fuel
-        _merge_by_source(depth_by_source, depth)
-        _merge_by_source(water_temp_by_source, water_temp)
-        _merge_by_source(battery_by_source, battery)
+        _merge_array_by_source(depth_by_source, depth, DepthArray)
+        _merge_array_by_source(water_temp_by_source, water_temp, WaterTempArray)
+        _merge_array_by_source(battery_by_source, battery, BatteryArray)
         all_rpm += rpm
-        _merge_by_source(attitude_by_source, attitude)
+        _merge_array_by_source(attitude_by_source, attitude, AttitudeArray)
 
-    if sample_cache is not None:
-        sample_cache.save()
-        if cache_hits:
-            log(
-                f"[cache] reused decoded samples for {cache_hits}/{len(args.logfiles)} file(s), "
-                f"only re-parsed {len(args.logfiles) - cache_hits}",
-                file=sys.stderr,
-            )
+    # Unconditional, unlike the in-loop progress line above (which deliberately skips the very
+    # last file so it doesn't fire right before this same count gets logged again a few lines
+    # down) -- found in practice: since that in-loop line is also time-gated, the *previous*
+    # progress line could be a couple of seconds stale even when decode genuinely finished
+    # cleanly, leaving no explicit confirmation the last file (specifically) was ever reached
+    # rather than the run having silently died one file short.
+    log(f"[info] ...decoded {len(args.logfiles)}/{len(args.logfiles)} logfile(s) so far", file=sys.stderr)
+
+    if sample_cache is not None and cache_hits:
+        log(
+            f"[cache] reused decoded samples for {cache_hits}/{len(args.logfiles)} file(s), "
+            f"only re-parsed {len(args.logfiles) - cache_hits}",
+            file=sys.stderr,
+        )
 
     # When this run actually happened, not the latest timestamp found in the data -- the earlier
     # version used the latter (PGN 126992's last known time), but that made "Laatst bijgewerkt"
@@ -791,6 +841,12 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     weather = NoWeather() if args.no_weather else WeatherFetcher(cache_file=args.weather_cache_file)
     marine = NoMarine() if args.no_marine else MarineFetcher(cache_file=args.marine_cache_file)
 
+    # Found in practice: build_trips() (and write_html_logbook() below) can run for a real stretch
+    # of time on a full multi-year archive (millions of merged GPS fixes) with zero log output in
+    # between -- decode's own progress logging (see _DECODE_PROGRESS_INTERVAL_S) stops the moment
+    # the last file is read, leaving nothing on screen to distinguish "still working" from "hung"
+    # or "already crashed silently" for however long this phase takes.
+    log(f"[info] Reizen opbouwen uit {len(all_fixes)} GPS-posities...", file=sys.stderr)
     trips = build_trips(
         all_fixes,
         all_sogs,
@@ -817,6 +873,7 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         )
         return 1
 
+    log(f"[info] {len(trips)} trip(s) found, writing logbook...", file=sys.stderr)
     trip_uids = assign_trip_ids(trips, utc_offset_hours=args.utc_offset)
 
     if args.csv:
@@ -873,7 +930,7 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         # A failed (or partial) backup is deliberately never fatal to the run -- it's a bonus
         # resilience step on top of already having written and uploaded today's logbook, not
         # something today's run actually depends on, and it's fully resumable: whatever made it
-        # to the server this time is skipped next time (see list_remote_filenames), so an
+        # to the server this time is skipped next time (see list_remote_filenames_multi), so an
         # unfinished backup just continues from there rather than needing to be retried whole.
         #
         # Grouped by each file's own parent folder (EBL000000, EBL000001, ...) and uploaded into
@@ -881,45 +938,59 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         # instead of dumping every run's worth of files into one flat directory -- matches the
         # Android app's own backup layout (asked for explicitly: thousands of same-shaped
         # filenames in one flat folder is much harder to browse than the same structure the files
-        # already have locally). list_remote_filenames/upload_files both already take an
-        # arbitrary remote_dir, so no change to upload.py itself was needed for this -- only how
-        # many times, and with which remote_dir, they're called here.
+        # already have locally).
+        #
+        # The "which files already exist" check covers every folder in a *single* SFTP session
+        # (list_remote_filenames_multi), not one session per folder -- found in practice: doing it
+        # per folder meant a run touching several folders opened several fresh connections in a
+        # row, and hit TransIP's occasional connection resets roughly 5x more often than the
+        # single-session HTML upload. The upload step below is chunked the same way, just across
+        # the combined file list from every folder instead of per folder, so it stays similarly
+        # session-frugal without giving up the existing _BACKUP_CHUNK_SIZE protection against one
+        # giant session (see that constant's own comment).
         by_folder: Dict[str, List[Path]] = {}
         for path in args.logfiles:
             by_folder.setdefault(path.parent.name, []).append(path)
+        remote_dir_by_folder = {
+            folder_name: f"{args.backup_remote_path}/{folder_name}" for folder_name in by_folder
+        }
 
-        backed_up_count = 0  # set before the loop so the except below can always reference it
+        backed_up_count = 0  # set before the try so the except below can always reference it
         already_there_count = 0
         try:
+            already_backed_up = list_remote_filenames_multi(
+                list(remote_dir_by_folder.values()),
+                host=args.upload_host,
+                user=args.upload_user,
+                key_file=args.upload_key_file,
+                port=args.upload_port,
+            )
+            new_files: List[Tuple[str, Path]] = []  # (remote_dir, local_path) pairs still to send
             for folder_name in sorted(by_folder):
                 folder_files = by_folder[folder_name]
-                remote_folder_dir = f"{args.backup_remote_path}/{folder_name}"
-                already_backed_up = list_remote_filenames(
+                folder_new = [p for p in folder_files if p.name not in already_backed_up]
+                already_there_count += len(folder_files) - len(folder_new)
+                new_files.extend((remote_dir_by_folder[folder_name], p) for p in folder_new)
+
+            for start in range(0, len(new_files), _BACKUP_CHUNK_SIZE):
+                chunk = new_files[start : start + _BACKUP_CHUNK_SIZE]
+                chunk_by_dir: Dict[str, List[Path]] = {}
+                for remote_dir, path in chunk:
+                    chunk_by_dir.setdefault(remote_dir, []).append(path)
+                upload_files_to_dirs(
+                    chunk_by_dir,
                     host=args.upload_host,
                     user=args.upload_user,
-                    remote_dir=remote_folder_dir,
                     key_file=args.upload_key_file,
                     port=args.upload_port,
                 )
-                new_files = [path for path in folder_files if path.name not in already_backed_up]
-                already_there_count += len(folder_files) - len(new_files)
-                for start in range(0, len(new_files), _BACKUP_CHUNK_SIZE):
-                    chunk = new_files[start : start + _BACKUP_CHUNK_SIZE]
-                    upload_files(
-                        chunk,
-                        host=args.upload_host,
-                        user=args.upload_user,
-                        remote_dir=remote_folder_dir,
-                        key_file=args.upload_key_file,
-                        port=args.upload_port,
-                    )
-                    backed_up_count += len(chunk)
-                    # A backup of hundreds/thousands of files can genuinely take a while; without
-                    # any feedback in between, it can look stuck and invite closing the terminal
-                    # early -- which kills the whole (still-blocking) run, backup included (found
-                    # in practice).
-                    if len(new_files) > _BACKUP_CHUNK_SIZE:
-                        log(f"[info] ...backed up {backed_up_count} new logfile(s) so far")
+                backed_up_count += len(chunk)
+                # A backup of hundreds/thousands of files can genuinely take a while; without
+                # any feedback in between, it can look stuck and invite closing the terminal
+                # early -- which kills the whole (still-blocking) run, backup included (found
+                # in practice).
+                if len(new_files) > _BACKUP_CHUNK_SIZE:
+                    log(f"[info] ...backed up {backed_up_count} new logfile(s) so far")
             log(
                 f"[ok] Backed up {backed_up_count} new logfile(s) to "
                 f"{args.upload_user}@{args.upload_host}:{args.backup_remote_path} "
