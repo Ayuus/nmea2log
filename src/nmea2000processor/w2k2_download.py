@@ -71,6 +71,17 @@ class DownloadCancelled(Exception):
 TIMEOUT = 30  # seconds per API request
 DOWNLOAD_TIMEOUT = 300  # more headroom for the ~5 MB files
 
+# A real ~5 MB file over the boat's hotspot normally takes well under a minute -- generous
+# headroom, but a single file still not done past this is more likely being starved to a crawl by
+# something (found in practice: the phone's own hotspot deprioritizing its host app's own traffic
+# while a different connected client -- e.g. a laptop also downloading at the same time -- stays
+# busy) than genuinely still progressing. DOWNLOAD_TIMEOUT alone doesn't catch this: it's a
+# per-read socket timeout, so a connection that's still trickling *some* bytes through every so
+# often -- just far too slowly to ever realistically finish -- never triggers it, and the transfer
+# can hang for many minutes with no error at all (found in practice: 30+ minutes, no exception,
+# no progress, no way to notice short of watching the log for a stalled timestamp).
+_MAX_DOWNLOAD_SECONDS = 120
+
 # The boat's own wifi hotspot can drop out mid-transfer -- retry a couple of times before giving
 # up on a single file rather than aborting the whole remaining download queue over one transient
 # reset (found in practice: ConnectionResetError mid-download crashed the entire run).
@@ -210,6 +221,7 @@ class _Session:
     ) -> None:
         url = self.base_url + path + "?" + _urlencode(params)
         request = urllib.request.Request(url, headers=self._headers())
+        start = time.monotonic()
         with urllib.request.urlopen(request, timeout=DOWNLOAD_TIMEOUT) as response, target.open("wb") as fh:
             while True:
                 # Checked per chunk, not just once before the request -- otherwise cancelling
@@ -219,6 +231,15 @@ class _Session:
                 # size-mismatch check in _needs_download() already re-fetches it next time.
                 if should_cancel is not None and should_cancel():
                     raise DownloadCancelled()
+                # A wall-clock cap on the whole transfer, not just DOWNLOAD_TIMEOUT's per-read
+                # socket timeout -- see _MAX_DOWNLOAD_SECONDS for why the two catch different
+                # failure modes. TimeoutError is a plain OSError subclass, so download_file()'s
+                # existing "except (urllib.error.URLError, OSError)" retry/give-up handling
+                # already covers this without needing its own case.
+                if time.monotonic() - start > _MAX_DOWNLOAD_SECONDS:
+                    raise TimeoutError(
+                        f"no full file after {_MAX_DOWNLOAD_SECONDS}s -- giving up on this attempt"
+                    )
                 chunk = response.read(65536)
                 if not chunk:
                     break
