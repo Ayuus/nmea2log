@@ -7,8 +7,10 @@ from nmea2000processor.upload import (
     UploadError,
     _local_to_sftp_path,
     list_remote_filenames,
+    list_remote_filenames_multi,
     upload_file,
     upload_files,
+    upload_files_to_dirs,
 )
 
 
@@ -368,3 +370,125 @@ def test_upload_files_retries_and_succeeds_after_a_transient_failure(tmp_path: P
     upload_files([a], host="example.com", user="me", remote_dir="private/ebl-backup", key_file=key_file)
 
     assert len(calls) == 2
+
+
+def test_list_remote_filenames_multi_is_a_noop_for_an_empty_list(tmp_path: Path, monkeypatch):
+    key_file = tmp_path / "id_ed25519"
+    key_file.write_text("fake key", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: calls.append(1))
+
+    names = list_remote_filenames_multi([], host="example.com", user="me", key_file=key_file)
+
+    assert names == set()
+    assert calls == []
+
+
+def test_list_remote_filenames_multi_checks_every_directory_in_one_session(tmp_path: Path, monkeypatch):
+    """The whole point of this function over calling list_remote_filenames per directory: one
+    SFTP connection covering every directory, not one per directory (found in practice: opening
+    several fresh connections in a row hit the server's occasional resets far more often)."""
+    key_file = tmp_path / "id_ed25519"
+    key_file.write_text("fake key", encoding="utf-8")
+    captured = {}
+
+    def fake_run(cmd, capture_output, text):
+        captured["cmd"] = cmd
+        batch_path = Path(cmd[cmd.index("-b") + 1])
+        captured["batch_contents"] = batch_path.read_text(encoding="utf-8")
+        return _FakeCompletedProcess(returncode=0, stdout="a.ebl\nb.ebl\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    names = list_remote_filenames_multi(
+        ["private/ebl-backup/EBL000000", "private/ebl-backup/EBL000007"],
+        host="example.com", user="me", key_file=key_file,
+    )
+
+    assert names == {"a.ebl", "b.ebl"}
+    # one sftp connection covering both directories, not one per directory
+    assert captured["cmd"].count("sftp") == 1
+    batch = captured["batch_contents"]
+    assert '-mkdir "private/ebl-backup/EBL000000"' in batch
+    assert 'ls -1 "private/ebl-backup/EBL000000"' in batch
+    assert '-mkdir "private/ebl-backup/EBL000007"' in batch
+    assert 'ls -1 "private/ebl-backup/EBL000007"' in batch
+
+
+def test_list_remote_filenames_multi_raises_with_the_sftp_error_message(tmp_path: Path, monkeypatch):
+    key_file = tmp_path / "id_ed25519"
+    key_file.write_text("fake key", encoding="utf-8")
+
+    def fake_run(cmd, capture_output, text):
+        return _FakeCompletedProcess(returncode=1, stderr="Connection reset by peer")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr("nmea2000processor.upload.time.sleep", lambda s: None)
+
+    with pytest.raises(UploadError, match="Connection reset by peer"):
+        list_remote_filenames_multi(
+            ["private/ebl-backup/EBL000000"], host="example.com", user="me", key_file=key_file,
+        )
+
+
+def test_upload_files_to_dirs_is_a_noop_when_nothing_to_upload(tmp_path: Path, monkeypatch):
+    key_file = tmp_path / "id_ed25519"
+    key_file.write_text("fake key", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: calls.append(1))
+
+    upload_files_to_dirs({}, host="example.com", user="me", key_file=key_file)
+    upload_files_to_dirs(
+        {"private/ebl-backup/EBL000000": []}, host="example.com", user="me", key_file=key_file,
+    )
+
+    assert calls == []
+
+
+def test_upload_files_to_dirs_uploads_to_several_directories_in_one_session(tmp_path: Path, monkeypatch):
+    a = tmp_path / "a.ebl"
+    b = tmp_path / "b.ebl"
+    a.write_text("a", encoding="utf-8")
+    b.write_text("b", encoding="utf-8")
+    key_file = tmp_path / "id_ed25519"
+    key_file.write_text("fake key", encoding="utf-8")
+    captured = {}
+
+    def fake_run(cmd, capture_output, text):
+        captured["cmd"] = cmd
+        batch_path = Path(cmd[cmd.index("-b") + 1])
+        captured["batch_contents"] = batch_path.read_text(encoding="utf-8")
+        return _FakeCompletedProcess(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    upload_files_to_dirs(
+        {"private/ebl-backup/EBL000000": [a], "private/ebl-backup/EBL000007": [b]},
+        host="example.com", user="me", key_file=key_file,
+    )
+
+    # one sftp connection covering both directories, not one per directory
+    assert captured["cmd"].count("sftp") == 1
+    batch = captured["batch_contents"]
+    assert '-mkdir "private/ebl-backup/EBL000000"' in batch
+    assert f'put "{_local_to_sftp_path(a)}" "private/ebl-backup/EBL000000/a.ebl"' in batch
+    assert '-mkdir "private/ebl-backup/EBL000007"' in batch
+    assert f'put "{_local_to_sftp_path(b)}" "private/ebl-backup/EBL000007/b.ebl"' in batch
+
+
+def test_upload_files_to_dirs_raises_with_the_sftp_error_message(tmp_path: Path, monkeypatch):
+    a = tmp_path / "a.ebl"
+    a.write_text("a", encoding="utf-8")
+    key_file = tmp_path / "id_ed25519"
+    key_file.write_text("fake key", encoding="utf-8")
+
+    def fake_run(cmd, capture_output, text):
+        return _FakeCompletedProcess(returncode=1, stderr="Connection timed out")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr("nmea2000processor.upload.time.sleep", lambda s: None)
+
+    with pytest.raises(UploadError, match="Connection timed out"):
+        upload_files_to_dirs(
+            {"private/ebl-backup/EBL000000": [a]}, host="example.com", user="me", key_file=key_file,
+        )
