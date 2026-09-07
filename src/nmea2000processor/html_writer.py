@@ -405,6 +405,36 @@ def _map_log_points(trip: TripLeg, offset_hours: float, interval_minutes: float)
     return points
 
 
+def _max_speed_marker(trip: TripLeg, offset_hours: float) -> Optional[dict]:
+    """Position + ready-made tooltip fields for the trip's max-speed marker on the map -- a
+    distinct color/icon from the plain numbered log points, so the single fastest moment of a trip
+    stands out at a glance instead of needing the Details popup opened. Includes RPM per engine,
+    same reasoning as the "Topsnelheid" table cell's own tooltip (_max_speed_html): a bare speed
+    number doesn't say whether it was a brief downwind surge at low RPM or genuinely flat-out.
+
+    Looked up by matching ``max_speed_at`` against the track's own samples, not stored separately
+    on TripLeg -- ``_speed_stats_kn`` already picks that time from one of ``group``'s own points
+    (see tripbuilder.py), so it's always an exact match, never an interpolation."""
+    if trip.max_speed_at is None or trip.max_speed_kn is None:
+        return None
+    sample = next((s for s in trip.track if s.time == trip.max_speed_at), None)
+    if sample is None:
+        return None
+    if len(trip.max_speed_rpm) == 1:
+        rpm_text = f"{next(iter(trip.max_speed_rpm.values())):.0f} rpm"
+    elif trip.max_speed_rpm:
+        rpm_text = ", ".join(
+            f"#{instance}: {rpm:.0f} rpm" for instance, rpm in sorted(trip.max_speed_rpm.items())
+        )
+    else:
+        rpm_text = None
+    return {
+        "lat": round(sample.lat, 6),
+        "lon": round(sample.lon, 6),
+        "time": f"{_to_local(trip.max_speed_at, offset_hours):%H:%M}",
+        "speed": f"{_nl_num(trip.max_speed_kn)} kn",
+        "rpm": rpm_text,
+    }
 
 
 def _trip_title(trip: TripLeg, depart_local: datetime) -> str:
@@ -940,6 +970,7 @@ def write_html_logbook(
             "log": _map_log_points(
                 trip, _trip_utc_offset_hours(trip, utc_offset_hours), log_interval_minutes
             ),
+            "maxSpeed": _max_speed_marker(trip, _trip_utc_offset_hours(trip, utc_offset_hours)),
         }
         for idx, trip in enumerate(trips)
         if trip.track
@@ -1106,6 +1137,13 @@ def write_html_logbook(
     background: #1a6ecc; color: white; border: 1px solid white; border-radius: 50%;
     width: 14px; height: 14px; display: flex; align-items: center; justify-content: center;
     font-size: 9px; font-weight: 600;
+  }}
+  /* Orange, not the log points' blue -- needs to stand out at a glance against both the blue
+     route line and the blue numbered log markers. */
+  .max-speed-marker {{
+    background: #e67e22; color: white; border: 1px solid white; border-radius: 50%;
+    width: 16px; height: 16px; display: flex; align-items: center; justify-content: center;
+    font-size: 10px;
   }}
   .noscript-warning {{
     background: #fff3cd; color: #664d03; border: 1px solid #ffe69c; border-radius: 8px;
@@ -1311,6 +1349,20 @@ document.querySelectorAll('.show-map').forEach(function(btn) {{
         }});
         L.marker([entry.lat, entry.lon], {{icon: icon}}).addTo(map).bindTooltip(entryTooltip(String(i + 1), entry));
       }});
+      // Orange lightning-bolt marker for the trip's single fastest moment -- a distinct color/icon
+      // from the plain numbered log points (asked for explicitly), so it stands out without
+      // opening the Details popup. Absent (maxSpeed is null) whenever a trip has no RPM/speed data
+      // to place it from at all (see _max_speed_marker in html_writer.py).
+      var maxSpeed = TRIPS[idx].maxSpeed;
+      if (maxSpeed) {{
+        var maxSpeedIcon = L.divIcon({{
+          className: 'max-speed-marker', html: '&#9889;', iconSize: [16, 16], iconAnchor: [8, 8]
+        }});
+        var maxSpeedParts = [I18N[currentLang].map_marker_max_speed, maxSpeed.time, maxSpeed.speed];
+        if (maxSpeed.rpm) maxSpeedParts.push(maxSpeed.rpm);
+        L.marker([maxSpeed.lat, maxSpeed.lon], {{icon: maxSpeedIcon}}).addTo(map)
+          .bindTooltip(maxSpeedParts.join(' &middot; '));
+      }}
       map.fitBounds(line.getBounds(), {{padding: [20, 20]}});
       setTimeout(function() {{ map.invalidateSize(); }}, 0);
     }}

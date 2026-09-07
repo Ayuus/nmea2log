@@ -88,6 +88,7 @@ NL: Dict[str, str] = {
     "map_button_show": "Kaart",
     "map_marker_departure": "Vertrek",
     "map_marker_arrival": "Aankomst",
+    "map_marker_max_speed": "Topsnelheid",
     # Details popup (water temperature, motion, periodic log)
     "details_button": "Log",
     "log_close_button": "Sluiten",
@@ -175,6 +176,7 @@ EN: Dict[str, str] = {
     "map_button_show": "Map",
     "map_marker_departure": "Departure",
     "map_marker_arrival": "Arrival",
+    "map_marker_max_speed": "Top speed",
     "details_button": "Log",
     "log_close_button": "Close",
     "log_header_number": "No.",
@@ -255,6 +257,7 @@ FR: Dict[str, str] = {
     "map_button_show": "Carte",
     "map_marker_departure": "Départ",
     "map_marker_arrival": "Arrivée",
+    "map_marker_max_speed": "Vitesse max.",
     "details_button": "Journal",
     "log_close_button": "Fermer",
     "log_header_number": "N°",
@@ -335,6 +338,7 @@ DE: Dict[str, str] = {
     "map_button_show": "Karte",
     "map_marker_departure": "Abfahrt",
     "map_marker_arrival": "Ankunft",
+    "map_marker_max_speed": "Höchstgeschwindigkeit",
     "details_button": "Log",
     "log_close_button": "Schließen",
     "log_header_number": "Nr.",
@@ -385,4 +389,7 @@ LANGUAGES: Dict[str, Dict[str, str]] = {"nl": NL, "en": EN, "fr": FR, "de": DE}
 MONTH_ABBR: Dict[str, Dict[str, str]] = {
     "nl": MONTH_ABBR_NL, "en": MONTH_ABBR_EN, "fr": MONTH_ABBR_FR, "de": MONTH_ABBR_DE,
 }
-LANGUAGE_FLAGS: Dict[str, str] = {"nl": "\U0001F1F3\U0001F1F1", "en": "\U0001F1EC\U0001F1E7", "fr": "\U0001F1EB\U0001F1F7", "de": "\U0001F1E9\U0001F1EA"}
+# "en" is plain text, not a country flag, unlike the others -- English isn't tied to one country
+# the way Dutch/French/German are here, and a UK flag (the obvious flag choice) reads as "GB" to
+# a lot of people rather than "English" (asked for explicitly to change).
+LANGUAGE_FLAGS: Dict[str, str] = {"nl": "\U0001F1F3\U0001F1F1", "en": "EN", "fr": "\U0001F1EB\U0001F1F7", "de": "\U0001F1E9\U0001F1EA"}

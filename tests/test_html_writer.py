@@ -448,6 +448,60 @@ def test_write_html_logbook_embeds_log_points_for_the_map(tmp_path: Path):
     assert log_points[-1]["time"] == "10:30"
 
 
+def test_write_html_logbook_embeds_max_speed_marker_for_the_map(tmp_path: Path):
+    """A trip's single fastest moment gets its own marker position + ready-made tooltip fields
+    embedded as TRIPS[idx].maxSpeed, looked up from the track by matching max_speed_at -- so JS
+    doesn't have to re-derive which of the track's own points that was, and can't drift out of
+    sync with the "Topsnelheid" table cell's own tooltip."""
+    max_speed_time = datetime(2026, 7, 15, 9, 20)
+    track = _track_every_10_minutes(10)
+    trip = _trip(track=track, max_speed_kn=18.5, max_speed_at=max_speed_time, max_speed_rpm={0: 3200.0})
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([trip], out_path, utc_offset_hours=0)
+
+    html = out_path.read_text(encoding="utf-8")
+    trips_json = json.loads(re.search(r"const TRIPS = (\{.*?\});", html).group(1))
+    max_speed = trips_json["0"]["maxSpeed"]
+    matching_sample = next(s for s in track if s.time == max_speed_time)
+    assert max_speed["lat"] == round(matching_sample.lat, 6)
+    assert max_speed["lon"] == round(matching_sample.lon, 6)
+    assert max_speed["time"] == "09:20"
+    assert "18,5" in max_speed["speed"]
+    assert "3200" in max_speed["rpm"]
+    # a distinct marker/color from the plain numbered log points (asked for explicitly)
+    assert "max-speed-marker" in html
+
+
+def test_write_html_logbook_max_speed_marker_lists_rpm_per_engine(tmp_path: Path):
+    max_speed_time = datetime(2026, 7, 15, 9, 20)
+    track = _track_every_10_minutes(10)
+    trip = _trip(
+        track=track, max_speed_kn=18.5, max_speed_at=max_speed_time, max_speed_rpm={0: 3200.0, 1: 2950.0}
+    )
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([trip], out_path, utc_offset_hours=0)
+
+    html = out_path.read_text(encoding="utf-8")
+    trips_json = json.loads(re.search(r"const TRIPS = (\{.*?\});", html).group(1))
+    rpm_text = trips_json["0"]["maxSpeed"]["rpm"]
+    assert "3200" in rpm_text
+    assert "2950" in rpm_text
+
+
+def test_write_html_logbook_no_max_speed_marker_without_max_speed_at(tmp_path: Path):
+    track = _track_every_10_minutes(10)
+    trip = _trip(track=track, max_speed_kn=18.5, max_speed_at=None)
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([trip], out_path, utc_offset_hours=0)
+
+    html = out_path.read_text(encoding="utf-8")
+    trips_json = json.loads(re.search(r"const TRIPS = (\{.*?\});", html).group(1))
+    assert trips_json["0"]["maxSpeed"] is None
+
+
 def _log_table_html(html: str) -> str:
     """Isolates the Details popup's own log table from the rest of the page -- the main trips
     table has its own Vertrek/Aankomst *columns* with the same time values, so a plain substring
