@@ -10,6 +10,7 @@ dist/
 .weather_cache.json
 .marine_cache.json
 .ebl_sample_cache.pkl
+.trip_cache.pkl
 .nmea2log.lock
 logbook.csv
 logbook.gpx

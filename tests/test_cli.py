@@ -817,12 +817,6 @@ def _stub_samples_by_path(monkeypatch, paths, samples_by_name, call_log):
     monkeypatch.setattr("nmea2000processor.cli._collect_samples", fake_collect_samples)
 
 
-@pytest.mark.skip(
-    reason="trip cache is unconditionally disabled in _run() (see its own comment there) -- "
-    "several of build_trips()'s 'first run in the whole dataset' edge cases fired incorrectly on "
-    "'first run of this reprocessed window' instead, producing real duplicate trips on live data. "
-    "Re-enable this test once that's fixed and the trip_cache_store = None short-circuit is removed."
-)
 def test_main_trip_cache_skips_decoding_already_settled_files_on_a_later_run(tmp_path, monkeypatch, capsys):
     """Integration test for the trip cache: a second run with a new file appended must not
     re-decode the file(s) whose trip(s) are already fully settled -- only the still-open last
@@ -859,7 +853,135 @@ def test_main_trip_cache_skips_decoding_already_settled_files_on_a_later_run(tmp
     assert "[info] 3 trip(s) found" in captured.err  # trip1 (cached) + trip2 + trip3, none lost or duplicated
 
 
-@pytest.mark.skip(reason="trip cache is unconditionally disabled in _run() -- see the skip reason above")
+def _make_mid_transit_resume_fixture(tmp_path: Path):
+    """Like _make_trip_cache_fixture, but g2 deliberately straddles a moving-to-stationary
+    boundary partway through its own data (the last 3 minutes of trip1's transit, then stay1)
+    instead of starting cleanly at the stay -- so choose_resume_index() picks g2 as the resume
+    file (its own first sample is still before stay1 begins), and a plain resume from g2 alone
+    starts mid-transit: g0/g1 (trip1's own departure stay and the bulk of its transit) are
+    excluded, real distance is not the whole tail's own though, exercising the exact real-world
+    bug this fixture is for.
+        g0: stay0 (dep)         g1: most of the move -> trip1   g2: rest of the move, then stay1
+        g3: move -> trip2, stay2                                 g4: move -> trip3, stay3
+    """
+    def _dt(minute: int) -> datetime:
+        return datetime(2026, 7, 15, 8, 0, 0) + timedelta(minutes=minute)
+
+    def _stay(minutes, lat, lon):
+        fixes = [PositionFix(_dt(m), lat, lon) for m in minutes]
+        sogs = [SogSample(_dt(m), 0.0) for m in minutes]
+        return fixes, sogs
+
+    def _move(minutes, lat0, lon0, lat1, lon1):
+        minutes = list(minutes)
+        fixes, sogs = [], []
+        for i, m in enumerate(minutes):
+            frac = i / (len(minutes) - 1)
+            fixes.append(PositionFix(_dt(m), lat0 + (lat1 - lat0) * frac, lon0 + (lon1 - lon0) * frac))
+            sogs.append(SogSample(_dt(m), 3.0))
+        return fixes, sogs
+
+    f0_fixes, f0_sogs = _stay(range(0, 12), 52.30, 4.90)
+    # One continuous move (min 12..41, 30 points) from 52.30,4.90 to 52.40,4.95, split so g1 gets
+    # all but the last 3 points and g2 gets those last 3 -- g2's own first sample (min 39) is
+    # still mid-transit, 3 minutes before stay1 actually begins (min 42).
+    move1_fixes, move1_sogs = _move(range(12, 42), 52.30, 4.90, 52.40, 4.95)
+    f1_fixes, f1_sogs = move1_fixes[:-3], move1_sogs[:-3]
+    tail_fixes, tail_sogs = move1_fixes[-3:], move1_sogs[-3:]
+    stay1_fixes, stay1_sogs = _stay(range(42, 54), 52.40, 4.95)
+    f2_fixes, f2_sogs = tail_fixes + stay1_fixes, tail_sogs + stay1_sogs
+    move2_fixes, move2_sogs = _move(range(54, 84), 52.40, 4.95, 52.50, 5.00)
+    stay2_fixes, stay2_sogs = _stay(range(84, 96), 52.50, 5.00)
+    f3_fixes, f3_sogs = move2_fixes + stay2_fixes, move2_sogs + stay2_sogs
+    move3_fixes, move3_sogs = _move(range(96, 126), 52.50, 5.00, 52.60, 5.05)
+    stay3_fixes, stay3_sogs = _stay(range(126, 138), 52.60, 5.05)
+    f4_fixes, f4_sogs = move3_fixes + stay3_fixes, move3_sogs + stay3_sogs
+
+    paths = {name: tmp_path / f"{name}.ebl" for name in ("f0", "f1", "f2", "f3", "f4")}
+    for path in paths.values():
+        path.write_bytes(b"x" * 100)
+
+    samples_by_name = {
+        "f0": ({10: f0_fixes}, {10: f0_sogs}, [], [], {}, {}, {}, [], {}),
+        "f1": ({10: f1_fixes}, {10: f1_sogs}, [], [], {}, {}, {}, [], {}),
+        "f2": ({10: f2_fixes}, {10: f2_sogs}, [], [], {}, {}, {}, [], {}),
+        "f3": ({10: f3_fixes}, {10: f3_sogs}, [], [], {}, {}, {}, [], {}),
+        "f4": ({10: f4_fixes}, {10: f4_sogs}, [], [], {}, {}, {}, [], {}),
+    }
+    return paths, samples_by_name
+
+
+def test_main_trip_cache_widens_the_window_when_it_resumed_mid_transit(tmp_path, monkeypatch, capsys):
+    """Regression test for a real bug found on live data: choose_resume_index() can only pick
+    resume points at file granularity, and a stay that begins partway through its own resume
+    file (rather than right at its start) leaves the reprocessed window starting mid-transit --
+    build_trips() then has no known stay to depart the still-open trip from, and reports it as
+    starting outside the log file instead of folding correctly into the real trip. _run() must
+    detect this (an "Unknown (start outside log file)" first trip in a resumed window) and widen
+    by decoding one more file before trusting the result."""
+    paths, samples_by_name = _make_mid_transit_resume_fixture(tmp_path)
+    call_log: list = []
+    _stub_samples_by_path(monkeypatch, paths, samples_by_name, call_log)
+
+    common_args = [
+        "-o", str(tmp_path / "logbook.csv"), "--no-geocode", "--no-weather", "--no-marine",
+        "--no-sample-cache", "--lock-radius-m", "-1", "--min-leg-distance-nm", "0.2",
+        "--trip-cache-file", str(tmp_path / "trips.pkl"),
+    ]
+    run1_files = [paths["f0"], paths["f1"], paths["f2"], paths["f3"]]
+
+    exit_code = main([str(p) for p in run1_files] + common_args)
+
+    assert exit_code == 0
+    assert "[info] 2 trip(s) found" in capsys.readouterr().err
+
+    call_log.clear()
+    run2_files = run1_files + [paths["f4"]]
+
+    exit_code = main([str(p) for p in run2_files] + common_args)
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "started mid-transit" in captured.err  # the widening actually fired, not a fluke pass
+    assert "[info] 3 trip(s) found" in captured.err  # still exactly 3 -- no duplicate, no phantom
+    # No trip anywhere in the output reports the "start outside log file" fallback -- the widened
+    # window found trip1's real departure stay instead of guessing.
+    assert "Unknown (start outside log file)" not in captured.err
+    html = (tmp_path / "logbook.html").read_text(encoding="utf-8")
+    assert "Unknown (start outside log file)" not in html
+
+
+def test_main_trip_cache_widen_retries_more_than_once_when_needed(tmp_path, monkeypatch, capsys):
+    """Same scenario as above, but with the transit split so that even one widened file is still
+    entirely "moving" with no stay in it at all -- the retry must keep widening (not give up
+    after a single attempt) until it actually reaches trip1's real departure stay (g0)."""
+    paths, samples_by_name = _make_mid_transit_resume_fixture(tmp_path)
+    # Cut f1 down to nothing (an empty file) so the first widen attempt (which would normally
+    # land on f1, all-moving) still finds no stay -- forcing a second widen, all the way to f0.
+    samples_by_name["f1"] = ({10: []}, {10: []}, [], [], {}, {}, {}, [], {})
+
+    call_log: list = []
+    _stub_samples_by_path(monkeypatch, paths, samples_by_name, call_log)
+
+    common_args = [
+        "-o", str(tmp_path / "logbook.csv"), "--no-geocode", "--no-weather", "--no-marine",
+        "--no-sample-cache", "--lock-radius-m", "-1", "--min-leg-distance-nm", "0.2",
+        "--trip-cache-file", str(tmp_path / "trips.pkl"),
+    ]
+    run1_files = [paths["f0"], paths["f1"], paths["f2"], paths["f3"]]
+    main([str(p) for p in run1_files] + common_args)
+    capsys.readouterr()
+
+    run2_files = run1_files + [paths["f4"]]
+    exit_code = main([str(p) for p in run2_files] + common_args)
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert captured.err.count("started mid-transit") >= 2  # widened more than once
+    assert "[info] 3 trip(s) found" in captured.err
+    assert "Unknown (start outside log file)" not in captured.err
+
+
 def test_main_trip_cache_is_invalidated_by_a_changed_threshold(tmp_path, monkeypatch, capsys):
     """A cache built under one set of build_trips() parameters must never be served to a run with
     different ones -- see config_signature() in trip_cache.py. Proven here by a changed
@@ -891,7 +1013,6 @@ def test_main_trip_cache_is_invalidated_by_a_changed_threshold(tmp_path, monkeyp
     assert call_log == ["f0", "f1", "f2", "f3"]  # the changed threshold invalidated the cache entirely
 
 
-@pytest.mark.skip(reason="trip cache is unconditionally disabled in _run() -- see the skip reason above")
 def test_main_trip_cache_falls_back_when_the_resume_file_is_gone(tmp_path, monkeypatch, capsys):
     """If the file a cached run recorded as its resume point can no longer be found among the
     given logfiles (moved, deleted, or --ebl-dir/logfiles now points somewhere else), the cache

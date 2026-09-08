@@ -20,6 +20,7 @@ from typing import Callable, Dict, List, Optional
 from . import w2k2_download
 from .cli import (
     _DECODE_PROGRESS_INTERVAL_S,
+    _MAX_RESUME_WIDEN_ATTEMPTS,
     _collect_samples,
     _discover_ebl_files,
     _dominant_source_only,
@@ -111,20 +112,6 @@ def run_pipeline(
     if not logfiles:
         return {"ok": False, "error": "No .ebl files given."}
 
-    # fixes_by_source/sogs_by_source accumulate as FixArray/SogArray (see fix_array.py), not
-    # plain lists -- same reasoning as cli.py's _run(): position/speed are this app's highest-
-    # cardinality sample types, and holding a season's worth of them as Python objects rather
-    # than array.array columns is what actually got this app OOM-killed by the phone's OS.
-    fixes_by_source: Dict[int, FixArray] = {}
-    sogs_by_source: Dict[int, SogArray] = {}
-    depth_by_source: Dict[int, DepthArray] = {}
-    water_temp_by_source: Dict[int, WaterTempArray] = {}
-    battery_by_source: Dict[int, BatteryArray] = {}
-    attitude_by_source: Dict[int, AttitudeArray] = {}
-    all_engine = []
-    all_trip_fuel = []
-    all_rpm = []
-
     # Same trip cache as cli.py's _run() (see trip_cache.py) -- a settled trip never changes, so
     # a normal day-to-day sync only needs to decode and rebuild the recent window since the last
     # known trip's own departure instead of the whole season every time. Kept next to the logbook
@@ -143,116 +130,24 @@ def run_pipeline(
         language="nl",
         engine_count=args.engine_count,
     )
-    # Disabled unconditionally for now -- see the matching comment in cli.py's _run(): several of
-    # build_trips()'s "this is the very first run in the whole dataset" edge cases fire
-    # incorrectly on "the first run of this reprocessed window" once trips are cached, producing
-    # real duplicate/junk trips (confirmed live on the desktop CLI's own real data). Needs a
-    # redesign before this is safe to re-enable.
-    trip_cache_store = None
+    trip_cache_store = TripCache(Path(output_html_path).parent / ".trip_cache.pkl")
     settled_trips: list = []
     resume_index = 0
-    ebl_time_state: dict = {}
-    cached_trip_data = trip_cache_store.load(trip_signature) if trip_cache_store is not None else None
+    resume_ebl_time_state_seed: object = None
+    cached_trip_data = trip_cache_store.load(trip_signature)
     if cached_trip_data is not None:
         cached_settled_trips, resume_from_file, resume_ebl_time_state = cached_trip_data
         found_index = find_resume_index(logfiles, resume_from_file)
         if found_index is not None:
             settled_trips = cached_settled_trips
             resume_index = found_index
-            ebl_time_state["current"] = resume_ebl_time_state
+            resume_ebl_time_state_seed = resume_ebl_time_state
             log(
                 f"[cache] Reusing {len(settled_trips)} already-settled trip(s); skipping "
                 f"decode of {resume_index}/{len(logfiles)} file(s)."
             )
 
     sample_cache = SampleCache(Path(sample_cache_path))
-    last_progress_log = time.monotonic()
-    file_first_time_by_index: Dict[int, Optional[datetime]] = {}
-    ebl_time_state_before_file: dict = {}
-    for idx, path in enumerate(logfiles, start=1):
-        if should_cancel is not None and should_cancel():
-            return {"ok": False, "error": "Sync cancelled.", "cancelled": True}
-        file_index = idx - 1
-        if file_index < resume_index:
-            # Already fully represented by settled_trips -- never even touched, not even to
-            # check the sample cache, which is exactly the decode-time and decompression cost
-            # this trip cache exists to avoid paying every single run (see cli.py's own decode
-            # loop, which this mirrors).
-            continue
-        if not path.exists():
-            return {"ok": False, "error": f"Log file not found: {path}"}
-
-        ebl_time_state_before_file[file_index] = ebl_time_state.get("current")
-
-        cached = sample_cache.get(path)
-        if cached is not None:
-            samples, time_state_after = cached
-            fixes, sogs, engine, trip_fuel, depth, water_temp, battery, rpm, attitude = samples
-            ebl_time_state["current"] = time_state_after
-        else:
-            frames = _iter_frames_for_path(path, ebl_time_state)
-            samples = _collect_samples(frames)
-            fixes, sogs, engine, trip_fuel, depth, water_temp, battery, rpm, attitude = samples
-            sample_cache.put(path, samples, ebl_time_state.get("current"))
-
-        file_first_time: Optional[datetime] = None
-        for source_fixes in fixes.values():
-            if source_fixes:
-                candidate_time = min(f.time for f in source_fixes)
-                file_first_time = candidate_time if file_first_time is None else min(file_first_time, candidate_time)
-        file_first_time_by_index[file_index] = file_first_time
-
-        # A phone's CPU decodes far slower than a desktop's -- found in practice: a run whose
-        # cache hadn't (yet) been saved from a prior, interrupted attempt spent several silent
-        # minutes here with nothing on screen to tell a real decode from a hang (see
-        # _DECODE_PROGRESS_INTERVAL_S in cli.py, shared so both platforms behave the same way).
-        now = time.monotonic()
-        if now - last_progress_log >= _DECODE_PROGRESS_INTERVAL_S and idx < len(logfiles):
-            log(f"[info] ...decoded {idx}/{len(logfiles)} logfile(s) so far")
-            last_progress_log = now
-
-        _merge_array_by_source(fixes_by_source, fixes, FixArray)
-        _merge_array_by_source(sogs_by_source, sogs, SogArray)
-        all_engine += engine
-        all_trip_fuel += trip_fuel
-        _merge_array_by_source(depth_by_source, depth, DepthArray)
-        _merge_array_by_source(water_temp_by_source, water_temp, WaterTempArray)
-        _merge_array_by_source(battery_by_source, battery, BatteryArray)
-        all_rpm += rpm
-        _merge_array_by_source(attitude_by_source, attitude, AttitudeArray)
-
-    # Unconditional, unlike the in-loop progress line above (which deliberately skips the very
-    # last file) -- found in practice: since that in-loop line is also time-gated, the previous
-    # progress line could be a couple of seconds stale even when decode genuinely finished
-    # cleanly, leaving no explicit confirmation the last file was ever reached rather than the
-    # run having silently died one file short.
-    log(f"[info] ...decoded {len(logfiles)}/{len(logfiles)} logfile(s) so far")
-
-    all_fixes, all_sogs, _primary_gps_source = _select_primary_gps_source(fixes_by_source, sogs_by_source)
-    all_depth = _dominant_source_only(depth_by_source)
-    all_water_temp = _dominant_source_only(water_temp_by_source)
-    all_battery = _dominant_source_only(battery_by_source)
-    all_attitude = _dominant_source_only(attitude_by_source)
-
-    # The four *_by_source dicts above (and sample_cache) are dead weight from here on: each
-    # all_* variable already holds its own direct reference to the one source array it needs
-    # (see _select_primary_gps_source/_dominant_source_only in cli.py -- "by_source[dominant]",
-    # not a copy), so the dicts themselves now only hold every *non*-dominant source's full
-    # array for nothing. On a boat with more than one device sending the same PGN (e.g. two GPS
-    # antennas), that's real, otherwise-unreachable memory -- found in practice: a real OOM kill
-    # (lmkd reaped this process at ~2.6 GB rss) landed inside build_trips() itself just below,
-    # the single most memory-hungry phase of the whole run, so freeing this now (not desktop,
-    # which has never once hit this ceiling) buys real headroom right where it matters most.
-    del fixes_by_source, sogs_by_source, depth_by_source, water_temp_by_source, battery_by_source
-    del attitude_by_source, sample_cache
-    gc.collect()
-
-    if not all_fixes and not settled_trips:
-        return {"ok": False, "error": "No position data (PGN 129025) found."}
-
-    if args.engine_count == 1:
-        all_engine, all_trip_fuel, all_rpm = _filter_to_dominant_engine(all_engine, all_trip_fuel, all_rpm)
-
     # One shared instance (not a fresh Geocoder() per call below) -- write_html_logbook()'s own
     # "latest position" lookup below then reuses build_trips()'s in-memory cache instead of
     # possibly re-requesting a position it (or a nearby one, same rounded cache key) already
@@ -260,38 +155,184 @@ def run_pipeline(
     # sync_from_w2k2()'s nmea2log.log placement, so the cache survives between runs instead of
     # re-requesting every already-known place's name on every single sync.
     geocoder = Geocoder(cache_file=Path(output_html_path).parent / ".geocode_cache.json", language="nl")
-    if all_fixes:
-        # Found in practice: build_trips() (and write_html_logbook() below) can run for a real
-        # stretch of time on a full multi-year archive (millions of merged GPS fixes) with zero
-        # log output in between -- decode's own progress logging (see
-        # _DECODE_PROGRESS_INTERVAL_S) stops the moment the last file is read, leaving nothing on
-        # screen (or in nmea2log.log) to tell "still working" apart from "hung" or "already
-        # crashed silently" for however long this phase takes on a phone's much slower CPU.
-        log(f"[info] Reizen opbouwen uit {len(all_fixes)} GPS-posities...")
-        fresh_trips = build_trips(
-            all_fixes,
-            all_sogs,
-            all_engine,
-            all_trip_fuel,
-            all_depth,
-            all_water_temp,
-            all_battery,
-            all_rpm,
-            all_attitude,
-            geocoder=geocoder,
-            speed_threshold_kn=args.speed_threshold_kn,
-            min_stop_minutes=args.min_stop_minutes,
-            max_gap_minutes=args.max_gap_minutes,
-            min_trip_distance_nm=args.min_trip_distance_nm,
-            min_leg_distance_nm=args.min_leg_distance_nm,
-            lock_radius_m=args.lock_radius_m if args.lock_radius_m >= 0 else None,
-            lock_max_duration_minutes=args.lock_max_duration_minutes,
-        )
-    else:
-        # The reprocessed window (from the last known trip's own departure onward, see
-        # resume_index above) happened to contain no position data at all -- nothing left to
-        # (re)build; settled_trips alone, below, is still a perfectly good result.
-        fresh_trips = []
+
+    # Retried with resume_index widened by one file at a time -- see the check right after
+    # build_trips() below -- if a resumed window turns out to have started mid-transit rather
+    # than genuinely at the start of a stay. See cli.py's own _run() for the full reasoning; this
+    # mirrors it.
+    widen_attempts = 0
+    while True:
+        # fixes_by_source/sogs_by_source accumulate as FixArray/SogArray (see fix_array.py), not
+        # plain lists -- same reasoning as cli.py's _run(): position/speed are this app's
+        # highest-cardinality sample types, and holding a season's worth of them as Python
+        # objects rather than array.array columns is what actually got this app OOM-killed by
+        # the phone's OS.
+        fixes_by_source: Dict[int, FixArray] = {}
+        sogs_by_source: Dict[int, SogArray] = {}
+        depth_by_source: Dict[int, DepthArray] = {}
+        water_temp_by_source: Dict[int, WaterTempArray] = {}
+        battery_by_source: Dict[int, BatteryArray] = {}
+        attitude_by_source: Dict[int, AttitudeArray] = {}
+        all_engine = []
+        all_trip_fuel = []
+        all_rpm = []
+
+        # The cache's own recorded seed only applies to the *original* resume point -- see
+        # cli.py's own _run() for why a widened attempt starts one file earlier with no seed at
+        # all instead.
+        ebl_time_state: dict = {}
+        if widen_attempts == 0 and resume_ebl_time_state_seed is not None:
+            ebl_time_state["current"] = resume_ebl_time_state_seed
+
+        last_progress_log = time.monotonic()
+        file_first_time_by_index: Dict[int, Optional[datetime]] = {}
+        ebl_time_state_before_file: dict = {}
+        for idx, path in enumerate(logfiles, start=1):
+            if should_cancel is not None and should_cancel():
+                return {"ok": False, "error": "Sync cancelled.", "cancelled": True}
+            file_index = idx - 1
+            if file_index < resume_index:
+                # Already fully represented by settled_trips -- never even touched, not even to
+                # check the sample cache, which is exactly the decode-time and decompression cost
+                # this trip cache exists to avoid paying every single run (see cli.py's own decode
+                # loop, which this mirrors).
+                continue
+            if not path.exists():
+                return {"ok": False, "error": f"Log file not found: {path}"}
+
+            ebl_time_state_before_file[file_index] = ebl_time_state.get("current")
+
+            cached = sample_cache.get(path)
+            if cached is not None:
+                samples, time_state_after = cached
+                fixes, sogs, engine, trip_fuel, depth, water_temp, battery, rpm, attitude = samples
+                ebl_time_state["current"] = time_state_after
+            else:
+                frames = _iter_frames_for_path(path, ebl_time_state)
+                samples = _collect_samples(frames)
+                fixes, sogs, engine, trip_fuel, depth, water_temp, battery, rpm, attitude = samples
+                sample_cache.put(path, samples, ebl_time_state.get("current"))
+
+            file_first_time: Optional[datetime] = None
+            for source_fixes in fixes.values():
+                if source_fixes:
+                    candidate_time = min(f.time for f in source_fixes)
+                    file_first_time = candidate_time if file_first_time is None else min(file_first_time, candidate_time)
+            file_first_time_by_index[file_index] = file_first_time
+
+            # A phone's CPU decodes far slower than a desktop's -- found in practice: a run whose
+            # cache hadn't (yet) been saved from a prior, interrupted attempt spent several silent
+            # minutes here with nothing on screen to tell a real decode from a hang (see
+            # _DECODE_PROGRESS_INTERVAL_S in cli.py, shared so both platforms behave the same way).
+            now = time.monotonic()
+            if now - last_progress_log >= _DECODE_PROGRESS_INTERVAL_S and idx < len(logfiles):
+                log(f"[info] ...decoded {idx}/{len(logfiles)} logfile(s) so far")
+                last_progress_log = now
+
+            _merge_array_by_source(fixes_by_source, fixes, FixArray)
+            _merge_array_by_source(sogs_by_source, sogs, SogArray)
+            all_engine += engine
+            all_trip_fuel += trip_fuel
+            _merge_array_by_source(depth_by_source, depth, DepthArray)
+            _merge_array_by_source(water_temp_by_source, water_temp, WaterTempArray)
+            _merge_array_by_source(battery_by_source, battery, BatteryArray)
+            all_rpm += rpm
+            _merge_array_by_source(attitude_by_source, attitude, AttitudeArray)
+
+        # Unconditional, unlike the in-loop progress line above (which deliberately skips the very
+        # last file) -- found in practice: since that in-loop line is also time-gated, the previous
+        # progress line could be a couple of seconds stale even when decode genuinely finished
+        # cleanly, leaving no explicit confirmation the last file was ever reached rather than the
+        # run having silently died one file short.
+        log(f"[info] ...decoded {len(logfiles)}/{len(logfiles)} logfile(s) so far")
+
+        all_fixes, all_sogs, _primary_gps_source = _select_primary_gps_source(fixes_by_source, sogs_by_source)
+        all_depth = _dominant_source_only(depth_by_source)
+        all_water_temp = _dominant_source_only(water_temp_by_source)
+        all_battery = _dominant_source_only(battery_by_source)
+        all_attitude = _dominant_source_only(attitude_by_source)
+
+        # The four *_by_source dicts above are dead weight from here on: each all_* variable
+        # already holds its own direct reference to the one source array it needs (see
+        # _select_primary_gps_source/_dominant_source_only in cli.py -- "by_source[dominant]",
+        # not a copy), so the dicts themselves now only hold every *non*-dominant source's full
+        # array for nothing. On a boat with more than one device sending the same PGN (e.g. two
+        # GPS antennas), that's real, otherwise-unreachable memory -- found in practice: a real
+        # OOM kill (lmkd reaped this process at ~2.6 GB rss) landed inside build_trips() itself
+        # just below, the single most memory-hungry phase of the whole run, so freeing this now
+        # (not desktop, which has never once hit this ceiling) buys real headroom right where it
+        # matters most. sample_cache stays alive across a widened retry (see the loop above), so
+        # it's freed once, after the loop, not here.
+        del fixes_by_source, sogs_by_source, depth_by_source, water_temp_by_source, battery_by_source
+        del attitude_by_source
+        gc.collect()
+
+        if not all_fixes and not settled_trips:
+            return {"ok": False, "error": "No position data (PGN 129025) found."}
+
+        if args.engine_count == 1:
+            all_engine, all_trip_fuel, all_rpm = _filter_to_dominant_engine(all_engine, all_trip_fuel, all_rpm)
+
+        if all_fixes:
+            # Found in practice: build_trips() (and write_html_logbook() below) can run for a real
+            # stretch of time on a full multi-year archive (millions of merged GPS fixes) with zero
+            # log output in between -- decode's own progress logging (see
+            # _DECODE_PROGRESS_INTERVAL_S) stops the moment the last file is read, leaving nothing on
+            # screen (or in nmea2log.log) to tell "still working" apart from "hung" or "already
+            # crashed silently" for however long this phase takes on a phone's much slower CPU.
+            log(f"[info] Reizen opbouwen uit {len(all_fixes)} GPS-posities...")
+            fresh_trips = build_trips(
+                all_fixes,
+                all_sogs,
+                all_engine,
+                all_trip_fuel,
+                all_depth,
+                all_water_temp,
+                all_battery,
+                all_rpm,
+                all_attitude,
+                geocoder=geocoder,
+                speed_threshold_kn=args.speed_threshold_kn,
+                min_stop_minutes=args.min_stop_minutes,
+                max_gap_minutes=args.max_gap_minutes,
+                min_trip_distance_nm=args.min_trip_distance_nm,
+                min_leg_distance_nm=args.min_leg_distance_nm,
+                lock_radius_m=args.lock_radius_m if args.lock_radius_m >= 0 else None,
+                lock_max_duration_minutes=args.lock_max_duration_minutes,
+            )
+        else:
+            # The reprocessed window (from the last known trip's own departure onward, see
+            # resume_index above) happened to contain no position data at all -- nothing left to
+            # (re)build; settled_trips alone, below, is still a perfectly good result.
+            fresh_trips = []
+
+        # See cli.py's own _run() for the full reasoning: a resumed window whose own first trip
+        # has no known stay before it started mid-transit, not genuinely at the very first thing
+        # in the whole archive -- widen by one file and retry, popping settled_trips' own last
+        # entry too if it's about to be reconstructed fresh as part of the wider window.
+        if (
+            resume_index > 0
+            and fresh_trips
+            and fresh_trips[0].depart_place == "Unknown (start outside log file)"
+            and widen_attempts < _MAX_RESUME_WIDEN_ATTEMPTS
+        ):
+            widen_attempts += 1
+            resume_index -= 1
+            if settled_trips and widen_attempts == 1:
+                # Popped exactly once, on the *first* widen only -- see cli.py's own _run() for
+                # why every subsequent widen this same run is still about resolving that same one
+                # trip's boundary, not a second, different trip to also un-freeze.
+                settled_trips = settled_trips[:-1]
+            log(
+                f"[cache] Resumed window started mid-transit (no known stay before its first "
+                f"trip) -- widening by one file ({logfiles[resume_index].name}) and retrying "
+                f"(attempt {widen_attempts}/{_MAX_RESUME_WIDEN_ATTEMPTS})."
+            )
+            continue
+        break
+
+    del sample_cache
+    gc.collect()
 
     trips = settled_trips + fresh_trips
 
