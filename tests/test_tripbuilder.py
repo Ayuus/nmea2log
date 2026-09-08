@@ -847,8 +847,9 @@ def test_negligible_trip_between_two_stays_is_folded_into_one_combined_stay():
     (the boat's position right after arriving, before the nudge) was reported as the trip's
     arrival, silently dropping its actual final position. The fix folds the too-short move back
     into a single combined stay, so the reported arrival reflects the boat's real final spot --
-    and splices the nudge's own GPS points onto the trip's track, so the line drawn on the map
-    actually reaches near the arrival marker instead of stopping short of it at the first stay."""
+    and (see _track_reaching_markers) splices a synthetic point at the marker's own position onto
+    the trip's track, so the line drawn on the map always reaches the arrival marker exactly,
+    whatever its exact position ends up being -- not just "near" it."""
     fixes, sogs, engine_samples = _build_scenario()
 
     # first stay: 24 minutes at the original mooring spot (well above min_stop_minutes)
@@ -881,12 +882,15 @@ def test_negligible_trip_between_two_stays_is_folded_into_one_combined_stay():
     # the reported arrival is pulled toward the final spot, not stuck at the first stay
     assert trips[0].arrive_lat > 52.40
     assert trips[0].arrive_lon > 4.95
-    # the drawn track reaches (near) the arrival marker, not stuck at the first stay either --
-    # not forced to match exactly (see git history: that forcing was reverted, on the reasoning
-    # that a real, visible gap here is a useful signal something's off, not something to paper
-    # over), just close to it (well within a stay's own averaging jitter).
-    assert trips[0].track[-1].lat == pytest.approx(trips[0].arrive_lat, abs=1e-3)
-    assert trips[0].track[-1].lon == pytest.approx(trips[0].arrive_lon, abs=1e-3)
+    # the drawn track always ends exactly on the arrival marker, whatever its exact position is --
+    # restored after a real regression (see this function's own git history: an intermediate
+    # commit dropped this splice on the reasoning that a visible gap is a useful diagnostic
+    # signal, but the gap here isn't signaling an actual problem -- it's just the expected,
+    # already-understood consequence of _settled_position() averaging over a different sample
+    # subset than the track's own raw last fix, confirmed live on real data as a real, unwanted
+    # gap between a trip's line and its own marker, not a signal of anything else being wrong).
+    assert trips[0].track[-1].lat == pytest.approx(trips[0].arrive_lat)
+    assert trips[0].track[-1].lon == pytest.approx(trips[0].arrive_lon)
 
 
 def test_min_trip_distance_nm_can_be_disabled():

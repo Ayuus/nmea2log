@@ -617,6 +617,40 @@ def _merge_negligible_trips(
     return result
 
 
+def _track_reaching_markers(
+    group: List[NavSample],
+    depart_time: datetime,
+    depart_lat: float,
+    depart_lon: float,
+    arrive_time: datetime,
+    arrive_lat: float,
+    arrive_lon: float,
+) -> List[NavSample]:
+    """The drawn track (for the map, GPX export, and the periodic log table) should always
+    visually reach the departure/arrival markers -- those are placed at the stay's own averaged,
+    "settled" position (see TripLeg.depart_lat/arrive_lat and _settled_position()), which
+    practically never lands exactly on ``group``'s own first/last GPS fix. Left alone, that gap is
+    small most of the time but can grow to several metres -- and however small, there's no reason
+    to leave *any* gap between a line and its own labelled endpoint when the endpoint's exact
+    position is already known. Regression, found in practice, on real data: this exact fix existed
+    before, then was lost somewhere along the way without a test ever catching its absence (see
+    this function's own git history) -- a visible gap between a trip's drawn line and its own
+    arrival marker on the live site is what caught it again. Prepending/appending a synthetic
+    point at each marker's own position closes it outright, for every trip, rather than relying on
+    the averaging happening to land close enough.
+
+    A synthetic point's own speed is 0 -- it represents the boat while moored, which is what the
+    average position it's placed at actually describes."""
+    track = group
+    if (track[0].lat, track[0].lon) != (depart_lat, depart_lon):
+        start = NavSample(depart_time, depart_lat, depart_lon, 0.0, track[0].depth_m, track[0].water_temp_c)
+        track = [start] + track
+    if (track[-1].lat, track[-1].lon) != (arrive_lat, arrive_lon):
+        end = NavSample(arrive_time, arrive_lat, arrive_lon, 0.0, track[-1].depth_m, track[-1].water_temp_c)
+        track = track + [end]
+    return track
+
+
 def _moving_duration(group: List[NavSample], max_gap: timedelta) -> timedelta:
     """Sum of the time between consecutive points in a trip, excluding gaps >= ``max_gap``
     within it -- those don't count as "time underway", since we don't know what happened during
@@ -1219,7 +1253,9 @@ def build_trips(
                 pitch_variation_deg=pitch_variation_deg,
                 roll_range_deg=roll_range_deg,
                 pitch_range_deg=pitch_range_deg,
-                track=group,
+                track=_track_reaching_markers(
+                    group, depart_time, depart_lat, depart_lon, arrive_time, arrive_lat, arrive_lon
+                ),
                 max_speed_at=max_speed_at,
                 max_speed_rpm=max_speed_rpm,
             )
