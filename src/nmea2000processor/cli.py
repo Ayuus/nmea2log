@@ -937,13 +937,6 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
 
-    # When this run actually happened, not the latest timestamp found in the data -- the earlier
-    # version used the latter (PGN 126992's last known time), but that made "Laatst bijgewerkt"
-    # ambiguous: it looked unchanged after a fresh run whenever the boat itself hadn't produced
-    # new data since the previous run, when what it's actually meant to answer is "is this page
-    # showing a stale file" (found in practice, asked for explicitly).
-    latest_data_at = datetime.now(timezone.utc).replace(tzinfo=None)
-
     all_fixes, all_sogs, primary_gps_source = _select_primary_gps_source(fixes_by_source, sogs_by_source)
     all_depth = _dominant_source_only(depth_by_source)
     all_water_temp = _dominant_source_only(water_temp_by_source)
@@ -1034,6 +1027,18 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
 
     log(f"[info] {len(trips)} trip(s) found, writing logbook...", file=sys.stderr)
     trip_uids = assign_trip_ids(trips, utc_offset_hours=args.utc_offset)
+
+    # When the logbook is actually about to be written, not the latest timestamp found in the
+    # data (an earlier version used the latter -- PGN 126992's last known time -- but that made
+    # "Laatst bijgewerkt" ambiguous: it looked unchanged after a fresh run whenever the boat
+    # itself hadn't produced new data since the previous run) and not right after decode either
+    # (an even earlier version of *this* fix used that instead -- found in practice, on a real
+    # slow run: geocoding/build_trips() can take several extra minutes after decode finishes,
+    # e.g. waiting out Overpass rate-limit retries, so a decode-time stamp could sit visibly
+    # behind the moment the page was actually produced, reading as if the file were already
+    # stale the instant it went up). This is what's actually meant to answer: "is this page
+    # showing a stale file".
+    latest_data_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
     if args.csv:
         write_csv(

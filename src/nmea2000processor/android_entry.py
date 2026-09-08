@@ -228,10 +228,6 @@ def run_pipeline(
     # run having silently died one file short.
     log(f"[info] ...decoded {len(logfiles)}/{len(logfiles)} logfile(s) so far")
 
-    # When this run actually happened, not the latest timestamp found in the data -- same
-    # reasoning as _run() (see cli.py).
-    latest_data_at = datetime.now(timezone.utc).replace(tzinfo=None)
-
     all_fixes, all_sogs, _primary_gps_source = _select_primary_gps_source(fixes_by_source, sogs_by_source)
     all_depth = _dominant_source_only(depth_by_source)
     all_water_temp = _dominant_source_only(water_temp_by_source)
@@ -329,6 +325,12 @@ def run_pipeline(
 
     log(f"[info] {len(trips)} trip(s) found, writing logbook...")
     trip_uids = assign_trip_ids(trips, utc_offset_hours=args.utc_offset)
+
+    # When the logbook is actually about to be written, not right after decode -- same reasoning
+    # as _run() (see cli.py): geocoding/build_trips() can run for real extra minutes after decode
+    # finishes, so a decode-time stamp could sit visibly behind when the page was actually
+    # produced.
+    latest_data_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
     html_path = Path(output_html_path)
     write_html_logbook(
