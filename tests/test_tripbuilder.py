@@ -909,6 +909,51 @@ def test_min_trip_distance_nm_can_be_disabled():
     assert len(trips) == 2  # with the filter disabled, the tiny trip counts too
 
 
+def test_arrival_position_uses_only_the_final_resting_stretch_after_a_folded_intermediate_stop():
+    """Regression test for a real bug found on live data (Port du Crouesty, 2026-09-07): the boat
+    stopped at an intermediate spot (engine off, ~11 min), then the engine came back on for a
+    short transit (~0.14 nm, folded into one continuous trip by --min-leg-distance-nm) to its
+    actual final berth, where the engine went off again for good. Folding the short transit leg
+    also merges the stationary run on either side of it into one "stay" (see
+    _merge_negligible_trips's own stationary-merge branch) -- every sample from the intermediate
+    stop was just as much "engine off" as the real final berth, so _settled_position's plain
+    engine-on exclusion couldn't tell them apart, and averaged the reported arrival position to
+    roughly halfway between two genuinely different places (confirmed on the real data: about
+    70 m off from the boat's actual, confirmed berth). Only samples after the *last* engine
+    restart -- see _settled_position's own fix -- are the boat's real final resting position."""
+    fixes = []
+    sogs = []
+    engine_samples = []
+
+    def add(m, lat, sog, fuel):
+        fixes.append(PositionFix(_dt(m), lat, 4.90))
+        sogs.append(SogSample(_dt(m), sog))
+        engine_samples.append(EngineSample(_dt(m), 0, fuel, 3600 * 100 + m * 60))
+
+    for m in range(0, 12):
+        add(m, 52.30, 0.0, 0.0)  # depart, port A
+    for i, m in enumerate(range(12, 42)):
+        add(m, 52.30 + 0.10 * (i / 29), 3.0, 8.0)  # underway, engine on
+    for m in range(42, 54):
+        add(m, 52.40, 0.0, 0.0)  # intermediate stop, engine off, 12 min
+    for i, m in enumerate(range(54, 57)):
+        # short transit (~0.14 nm, safely under --min-leg-distance-nm's 0.2 nm default, safely
+        # over --min-trip-distance-nm's own 0.1 nm), engine back on
+        add(m, 52.40 + 0.002246 * (i / 2), 2.0, 3.0)
+    for m in range(57, 69):
+        add(m, 52.402246, 0.0, 0.0)  # the boat's real final berth, engine off for good, 12 min
+
+    geocoder = _StubGeocoder()
+    trips = build_trips(
+        fixes, sogs, engine_samples, geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+        min_leg_distance_nm=0.2,
+    )
+
+    assert len(trips) == 1  # the intermediate stop no longer shows up as its own separate trip
+    # Not the halfway point (52.401123) -- the boat's own actual final berth.
+    assert trips[0].arrive_lat == pytest.approx(52.402246, abs=1e-6)
+
+
 def test_min_leg_distance_nm_folds_an_in_harbour_reposition_into_one_trip():
     """Regression test for a real bug found with real data: after arriving and mooring briefly,
     the boat repositioned about 0.3 nm within the same harbour (a real, non-negligible move by

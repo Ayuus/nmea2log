@@ -348,7 +348,30 @@ def _settled_position(
     reads as literally 0.0 kn) doesn't leave nothing qualifying. Each filter falls back to the
     next-loosest result (speed-and-engine, then speed-only, then the whole group) rather than
     ever computing an average over zero samples -- e.g. an unusually short or noisy stay, or one
-    where the engine happens to still be running for its entire recorded duration."""
+    where the engine happens to still be running for its entire recorded duration.
+
+    First narrowed to samples after the *last* engine restart within the group's own span, if
+    any -- found in practice, on real data: a boat that engine-off'd briefly at an intermediate
+    stop (e.g. floating near a waypoint while waiting) before a short engine-on transit to its
+    actual final berth had both stops folded into one continuous "stay" (a short in-transit leg
+    between them, folded by _merge_negligible_trips, also merges the stationary run on either
+    side of it -- see that function's own stationary-merge branch). Every sample from the
+    intermediate stop was just as much "engine off" as the real final berth, so the plain
+    engine-on exclusion above couldn't tell them apart -- averaging over both diluted the
+    reported arrival position to roughly halfway between two genuinely different places,
+    regardless of how briefly the boat was actually at the first one (confirmed on real data: a
+    ~600-sample intermediate stop and a similarly-sized final one landed the reported position
+    about 70 m from the boat's actual, confirmed berth). Only the time after the boat's *last*
+    engine shutdown is its own actual final resting stretch; anything before that belongs to an
+    earlier, already-departed-from sub-stop within the same merged stay. Falls back to the whole
+    group when there's no such restart (the common case: the engine simply never came back on
+    once it stopped)."""
+    last_restart_end = max(
+        (end for start, end in on_intervals if group[0].time <= start <= group[-1].time),
+        default=None,
+    )
+    if last_restart_end is not None:
+        group = [s for s in group if s.time >= last_restart_end] or group
     slow_enough = [s for s in group if s.sog_ms <= speed_threshold_ms / 2] or group
     settled = [s for s in slow_enough if not _engine_on_at(on_intervals, s.time)] or slow_enough
     lat = sum(s.lat for s in settled) / len(settled)
