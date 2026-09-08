@@ -1036,10 +1036,10 @@ def write_html_logbook(
      glyph at all) on at least one real device/browser this site is viewed from, see
      translations.py's LANGUAGE_FLAGS for the full history. Without this class, plain text sits in
      the same box as an emoji would but reads as unstyled leftover text rather than a matching
-     button; a fixed min-width plus a subtle background/weight gives it the same visual footprint
-     an emoji flag would have had. */
+     button; a fixed min-width plus a subtle background gives it the same visual footprint an
+     emoji flag would have had -- normal weight, not bold, on request. */
   .lang-flag-text {{
-    min-width: 1.6em; text-align: center; font-size: 0.75em; font-weight: 700;
+    min-width: 1.6em; text-align: center; font-size: 0.75em;
     background: #eef3fa; letter-spacing: 0.02em;
   }}
   .lang-flag.active {{ border-color: #1a6ecc; box-shadow: 0 0 0 1px #1a6ecc inset; }}
