@@ -847,8 +847,8 @@ def test_negligible_trip_between_two_stays_is_folded_into_one_combined_stay():
     (the boat's position right after arriving, before the nudge) was reported as the trip's
     arrival, silently dropping its actual final position. The fix folds the too-short move back
     into a single combined stay, so the reported arrival reflects the boat's real final spot --
-    and splices the nudge's own GPS points onto the trip's track, so the line drawn on the map
-    actually reaches near the arrival marker instead of stopping short of it at the first stay."""
+    and (see _track_reaching_markers) splices a synthetic point at the marker's own position onto
+    the trip's track, so the line drawn on the map always reaches the arrival marker exactly."""
     fixes, sogs, engine_samples = _build_scenario()
 
     # first stay: 24 minutes at the original mooring spot (well above min_stop_minutes)
@@ -881,12 +881,86 @@ def test_negligible_trip_between_two_stays_is_folded_into_one_combined_stay():
     # the reported arrival is pulled toward the final spot, not stuck at the first stay
     assert trips[0].arrive_lat > 52.40
     assert trips[0].arrive_lon > 4.95
-    # the drawn track reaches (near) the arrival marker, not stuck at the first stay either --
-    # not forced to match exactly (see git history: that forcing was reverted, on the reasoning
-    # that a real, visible gap here is a useful signal something's off, not something to paper
-    # over), just close to it (well within a stay's own averaging jitter).
-    assert trips[0].track[-1].lat == pytest.approx(trips[0].arrive_lat, abs=1e-3)
-    assert trips[0].track[-1].lon == pytest.approx(trips[0].arrive_lon, abs=1e-3)
+    # the drawn track always ends exactly on the arrival marker, whatever its exact position is
+    assert trips[0].track[-1].lat == pytest.approx(trips[0].arrive_lat)
+    assert trips[0].track[-1].lon == pytest.approx(trips[0].arrive_lon)
+
+
+def test_same_stay_looks_right_as_a_departure_but_needs_the_marker_splice_as_an_arrival():
+    """Regression test for a real report: the same physical stay (Les Sables-d'Olonne, reached
+    after a difficult, wave-tossed approach) looked wrong as an *arrival* but fine as the very
+    next trip's *departure* -- confirmed, on the real data, to be the same settled position both
+    times (sub-metre difference, pure floating-point rounding), with an 8.4 m gap between the
+    arriving trip's own last raw GPS point and that marker (still drifting right up to the last
+    sample) versus only 0.6 m for the departing trip's first point (naturally close to where the
+    boat just was). This scenario reproduces that shape directly: an arrival whose last sample is
+    still meaningfully off from the stay's own averaged centre, immediately followed by a
+    departure whose first sample already sits exactly on it."""
+    fixes = []
+    sogs = []
+    engine_samples = []
+
+    def add(m, lat, lon, sog, fuel):
+        fixes.append(PositionFix(_dt(m), lat, lon))
+        sogs.append(SogSample(_dt(m), sog))
+        engine_samples.append(EngineSample(_dt(m), 0, fuel, 3600 * 100 + m * 60))
+
+    # first stay: 12 min at the departure port
+    for m in range(0, 12):
+        add(m, 52.30, 4.90, 0.0, 0.5)
+
+    # arrival leg: 30 min underway, still drifting/circling right up to its very last sample --
+    # well short of the stay it's about to settle into (~90 m away)
+    for i, m in enumerate(range(12, 42)):
+        frac = i / 29
+        add(m, 52.30 + 0.1008 * frac, 4.90 + 0.0508 * frac, 3.0, 8.0)
+
+    # the stay itself (Les Sables-d'Olonne, in the real report): 12 min, settled exactly here
+    for m in range(42, 54):
+        add(m, 52.4000, 4.9500, 0.0, 0.5)
+
+    # departure leg: first sample already sits exactly on the stay's own position -- naturally
+    # close, since the boat was just there
+    for i, m in enumerate(range(54, 84)):
+        frac = i / 29
+        add(m, 52.4000 + 0.1 * frac, 4.9500 + 0.1 * frac, 3.0, 8.0)
+
+    # final stay
+    for m in range(84, 96):
+        add(m, 52.50, 5.00, 0.0, 0.5)
+
+    geocoder = _StubGeocoder()
+    trips = build_trips(
+        fixes, sogs, engine_samples, geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+    )
+
+    assert len(trips) == 2
+    arriving, departing = trips
+
+    # the shared stay's marker is the same real position both times (sub-metre float noise only)
+    assert arriving.arrive_lat == pytest.approx(departing.depart_lat, abs=1e-6)
+    assert arriving.arrive_lon == pytest.approx(departing.depart_lon, abs=1e-6)
+    assert arriving.arrive_lat == pytest.approx(52.4000)
+    assert arriving.arrive_lon == pytest.approx(4.9500)
+
+    # the arrival's own last raw sample was genuinely away from the marker -- a real gap existed
+    # before the splice
+    raw_last = fixes[41]
+    assert (raw_last.lat, raw_last.lon) != (arriving.arrive_lat, arriving.arrive_lon)
+
+    # the fix closes it: the drawn arrival track always ends exactly on the marker, with the
+    # original raw point preserved right before it
+    assert arriving.track[-1].lat == pytest.approx(arriving.arrive_lat)
+    assert arriving.track[-1].lon == pytest.approx(arriving.arrive_lon)
+    assert arriving.track[-2].lat == pytest.approx(raw_last.lat)
+    assert arriving.track[-2].lon == pytest.approx(raw_last.lon)
+
+    # the departure's first sample already matched the marker -- no synthetic point needed, and
+    # none was added (track length unchanged at the start)
+    assert departing.track[0].lat == pytest.approx(departing.depart_lat)
+    assert departing.track[0].lon == pytest.approx(departing.depart_lon)
+    assert departing.track[0].lat == pytest.approx(fixes[54].lat)
+    assert departing.track[0].lon == pytest.approx(fixes[54].lon)
 
 
 def test_min_trip_distance_nm_can_be_disabled():

@@ -664,6 +664,48 @@ def _merge_negligible_trips(
     return result
 
 
+def _track_reaching_markers(
+    group: List[NavSample],
+    depart_time: datetime,
+    depart_lat: float,
+    depart_lon: float,
+    arrive_time: datetime,
+    arrive_lat: float,
+    arrive_lon: float,
+) -> List[NavSample]:
+    """The drawn track (map, GPX export, periodic log table) should always visually reach its
+    own departure/arrival markers -- those sit at the stay's own averaged, "settled" position
+    (see TripLeg.depart_lat/arrive_lat and _settled_position()), which practically never lands
+    exactly on ``group``'s own first/last raw GPS fix.
+
+    Confirmed on real data, specifically: a Les Sables-d'Olonne arrival reached after a difficult,
+    wave-tossed approach (samples still drifting/circling right up to the last one) left an 8.4m
+    gap between the track's own last point and the settled arrival marker -- visibly wrong on the
+    map. The very same physical stay's *departure* leg the following trip started only 0.6m from
+    its own marker (the first sample after leaving is naturally close to where the boat just was),
+    so the identical spot read as correct there. A nearby, unremarkable arrival (Port-Joinville,
+    normal approach) had only a 1.9m gap and read as fine. The gap size tracks how much the boat
+    was still moving around near the very end of a stay's own averaging window, not anything wrong
+    with the marker's position itself -- but however small or large, there's no reason to leave any
+    gap between a line and its own labelled endpoint when that endpoint's exact position is
+    already known.
+
+    This exact fix existed before (see this function's own git history), then was reverted without
+    the underlying gap ever actually being re-examined -- it came back once the gap was traced, on
+    real data, to a genuine rendering defect rather than a signal of anything else being wrong.
+
+    A synthetic point's own speed is 0 -- it represents the boat while moored, which is what the
+    average position it's placed at actually describes."""
+    track = group
+    if (track[0].lat, track[0].lon) != (depart_lat, depart_lon):
+        start = NavSample(depart_time, depart_lat, depart_lon, 0.0, track[0].depth_m, track[0].water_temp_c)
+        track = [start] + track
+    if (track[-1].lat, track[-1].lon) != (arrive_lat, arrive_lon):
+        end = NavSample(arrive_time, arrive_lat, arrive_lon, 0.0, track[-1].depth_m, track[-1].water_temp_c)
+        track = track + [end]
+    return track
+
+
 def _moving_duration(group: List[NavSample], max_gap: timedelta) -> timedelta:
     """Sum of the time between consecutive points in a trip, excluding gaps >= ``max_gap``
     within it -- those don't count as "time underway", since we don't know what happened during
@@ -1266,7 +1308,9 @@ def build_trips(
                 pitch_variation_deg=pitch_variation_deg,
                 roll_range_deg=roll_range_deg,
                 pitch_range_deg=pitch_range_deg,
-                track=group,
+                track=_track_reaching_markers(
+                    group, depart_time, depart_lat, depart_lon, arrive_time, arrive_lat, arrive_lon
+                ),
                 max_speed_at=max_speed_at,
                 max_speed_rpm=max_speed_rpm,
             )
