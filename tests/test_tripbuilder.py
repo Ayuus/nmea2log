@@ -946,12 +946,56 @@ def test_arrival_position_uses_only_the_final_resting_stretch_after_a_folded_int
     geocoder = _StubGeocoder()
     trips = build_trips(
         fixes, sogs, engine_samples, geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
-        min_leg_distance_nm=0.2,
+        min_leg_distance_nm=0.2, lock_radius_m=10.0,
     )
 
     assert len(trips) == 1  # the intermediate stop no longer shows up as its own separate trip
     # Not the halfway point (52.401123) -- the boat's own actual final berth.
     assert trips[0].arrive_lat == pytest.approx(52.402246, abs=1e-6)
+
+
+def test_arrival_position_stays_the_full_average_when_an_engine_restart_did_not_move_the_boat():
+    """Regression test for a real bug found on live data (La Baule-Escoublac, 2026-09-05), right
+    after the fix above: the engine cycled back on for a few minutes while already moored (e.g.
+    running a generator/charging batteries), with the boat's SOG never once leaving 0.0 the whole
+    stay -- so there's no folded intermediate stop here at all, just one continuous stay whose
+    engine happened to restart briefly in the middle. The reported position barely moved (a few
+    metres, real GPS noise) across that restart. Narrowing to "samples after the last restart"
+    regardless would have traded this stay's full ~1000+ samples for just the handful after the
+    restart, for no real gain -- the position genuinely never went anywhere. Only narrows when
+    the position before vs. after the restart differs by more than lock_radius_m."""
+    fixes = []
+    sogs = []
+    engine_samples = []
+
+    def add(m, lat, sog, fuel):
+        fixes.append(PositionFix(_dt(m), lat, 4.90))
+        sogs.append(SogSample(_dt(m), sog))
+        engine_samples.append(EngineSample(_dt(m), 0, fuel, 3600 * 100 + m * 60))
+
+    for m in range(0, 12):
+        add(m, 52.30, 0.0, 0.0)  # depart, port A
+    for i, m in enumerate(range(12, 42)):
+        add(m, 52.30 + 0.10 * (i / 29), 3.0, 8.0)  # underway, engine on
+    for m in range(42, 54):
+        add(m, 52.40, 0.0, 0.0)  # moored, engine off, 12 min -- SOG stays 0.0 throughout
+    for m in range(54, 57):
+        add(m, 52.40, 0.0, 3.0)  # engine restarts briefly (generator/charging), boat doesn't move
+    for m in range(57, 69):
+        # engine off again -- position barely different (~8 m, real GPS noise), not a real move
+        # -- safely under lock_radius_m=10.0
+        add(m, 52.40007, 0.0, 0.0)
+
+    geocoder = _StubGeocoder()
+    trips = build_trips(
+        fixes, sogs, engine_samples, geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+        lock_radius_m=10.0,
+    )
+
+    assert len(trips) == 1
+    # The full stay's own average (15 of 27 samples at 52.40, dominant) -- not narrowed down to
+    # just the 12 samples after the restart, which alone would average much closer to 52.40007.
+    assert trips[0].arrive_lat == pytest.approx(52.40, abs=4e-5)
 
 
 def test_min_leg_distance_nm_folds_an_in_harbour_reposition_into_one_trip():

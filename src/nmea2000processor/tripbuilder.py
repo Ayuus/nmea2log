@@ -321,7 +321,10 @@ def _spatial_spread_m(group: List[NavSample]) -> float:
 
 
 def _settled_position(
-    group: List[NavSample], speed_threshold_ms: float, on_intervals: List[Tuple[datetime, datetime]]
+    group: List[NavSample],
+    speed_threshold_ms: float,
+    on_intervals: List[Tuple[datetime, datetime]],
+    lock_radius_m: Optional[float] = None,
 ) -> Tuple[float, float]:
     """Averaged (lat, lon) for a stationary stay, using only its own genuinely-at-rest samples --
     excludes anything under half ``speed_threshold_ms`` still counts as gliding, and anything
@@ -363,15 +366,36 @@ def _settled_position(
     ~600-sample intermediate stop and a similarly-sized final one landed the reported position
     about 70 m from the boat's actual, confirmed berth). Only the time after the boat's *last*
     engine shutdown is its own actual final resting stretch; anything before that belongs to an
-    earlier, already-departed-from sub-stop within the same merged stay. Falls back to the whole
-    group when there's no such restart (the common case: the engine simply never came back on
-    once it stopped)."""
+    earlier, already-departed-from sub-stop within the same merged stay.
+
+    Only actually narrows when the position before vs. after that restart differs by more than
+    ``lock_radius_m`` -- found in practice, on real data, right after the fix above: a stay whose
+    engine cycled back on for a few minutes (e.g. running a generator/charging batteries while
+    already moored) but whose position barely changed (~8 m) got needlessly narrowed from over a
+    thousand samples down to a dozen, trading a robust average for a noisy one to "fix" a gap
+    that was never really there -- the earlier fix's own reasoning (two genuinely different
+    places) simply didn't apply when the boat never actually went anywhere. Reuses
+    ``lock_radius_m`` for the same reason ``_merge_negligible_trips`` does (see its own
+    docstring): both are really asking the same question, "did the boat actually leave about this
+    radius". Skips the narrowing entirely (falls back to the whole group, today's -- pre-this-
+    fix's -- behavior) when ``lock_radius_m`` is ``None``, same as lock/bridge detection itself
+    being off: without a confinement radius to judge "did it really move" against, guessing
+    either way risks being wrong, so this stays conservative and leaves the whole group alone."""
     last_restart_end = max(
         (end for start, end in on_intervals if group[0].time <= start <= group[-1].time),
         default=None,
     )
-    if last_restart_end is not None:
-        group = [s for s in group if s.time >= last_restart_end] or group
+    if last_restart_end is not None and lock_radius_m is not None:
+        after_restart = [s for s in group if s.time >= last_restart_end]
+        before_restart = [s for s in group if s.time < last_restart_end]
+        if after_restart and before_restart:
+            before_lat = sum(s.lat for s in before_restart) / len(before_restart)
+            before_lon = sum(s.lon for s in before_restart) / len(before_restart)
+            after_lat = sum(s.lat for s in after_restart) / len(after_restart)
+            after_lon = sum(s.lon for s in after_restart) / len(after_restart)
+            moved_m = _haversine_nm(before_lat, before_lon, after_lat, after_lon) * 1852.0
+            if moved_m > lock_radius_m:
+                group = after_restart
     slow_enough = [s for s in group if s.sog_ms <= speed_threshold_ms / 2] or group
     settled = [s for s in slow_enough if not _engine_on_at(on_intervals, s.time)] or slow_enough
     lat = sum(s.lat for s in settled) / len(settled)
@@ -1173,7 +1197,7 @@ def build_trips(
         if label != "stationary":
             stays.append(None)
             continue
-        lat, lon = _settled_position(group, speed_threshold_ms, on_intervals)
+        lat, lon = _settled_position(group, speed_threshold_ms, on_intervals, lock_radius_m)
         place = geocoder.place_name(lat, lon)
         stays.append(Stay(group[0].time, group[-1].time, lat, lon, place))
 
