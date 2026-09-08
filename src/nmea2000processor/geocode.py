@@ -18,6 +18,7 @@ import urllib.request
 from pathlib import Path
 from typing import Optional, Tuple
 
+from ._net import urlopen_ipv4_first
 from .log import log
 
 _NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
@@ -66,7 +67,7 @@ def _distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * _EARTH_RADIUS_M * math.asin(math.sqrt(a))
 
 
-_LANDMARK_MAX_RETRIES = 9
+_LANDMARK_MAX_RETRIES = 2
 
 # Address levels that count as "a village name" -- used by _pick_place_name (a real village/
 # town/city beats an obscure leisure match, see there) and shared here so anything else that
@@ -139,7 +140,7 @@ def _nearby_islet_name(lat: float, lon: float, user_agent: str) -> Tuple[Optiona
         request = urllib.request.Request(_OVERPASS_URL, data=data, headers={"User-Agent": user_agent})
         status = None
         try:
-            with urllib.request.urlopen(request, timeout=15) as response:
+            with urlopen_ipv4_first(request, timeout=15) as response:
                 status = response.status
                 payload = json.loads(response.read().decode("utf-8"))
             if payload.get("remark"):
@@ -195,7 +196,7 @@ class Geocoder:
         cache_file: Optional[Path] = None,
         user_agent: str = "nmea2000processor/0.1 (personal sailing logbook)",
         language: str = "nl",
-        precision: int = 4,
+        precision: int = 3,
     ) -> None:
         self.cache_file = cache_file
         self.user_agent = user_agent
@@ -204,9 +205,47 @@ class Geocoder:
         self._cache: dict[str, str] = {}
         self._last_request = 0.0
         if cache_file is not None and cache_file.exists():
-            self._cache = json.loads(cache_file.read_text(encoding="utf-8"))
+            self._cache = self._migrate_cache_precision(json.loads(cache_file.read_text(encoding="utf-8")))
+
+    def _migrate_cache_precision(self, raw_cache: dict[str, str]) -> dict[str, str]:
+        """Re-keys every entry in an already-loaded cache to this instance's own current
+        ``precision`` -- found in practice, a real bug: changing the default precision (see
+        ``_key``'s own doc comment) left every entry already on disk keyed at the *old*
+        precision, so none of them ever matched a freshly-computed key again -- every single
+        lookup missed the cache and re-hit Nominatim/Overpass for a place that had, in fact,
+        already been looked up before. Re-keying (not just re-rounding the string -- the key
+        itself already lost precision once, so this parses the coordinates back out and rounds
+        them again at the current precision) makes every already-known place reachable again
+        under the key ``_key`` would compute for it today. Collisions (two old keys now rounding
+        to the same new one) just keep whichever entry happens to be seen last -- harmless, since
+        they already named the same real-world place closely enough to share a bucket.
+        Re-saved immediately below if anything actually changed, so this migration only runs
+        once, not on every subsequent load."""
+        migrated: dict[str, str] = {}
+        changed = False
+        for key, value in raw_cache.items():
+            try:
+                lat_str, lon_str = key.split(",")
+                new_key = self._key(float(lat_str), float(lon_str))
+            except ValueError:
+                continue  # a malformed/unexpected key -- drop it rather than crash the whole load
+            migrated[new_key] = value
+            if new_key != key:
+                changed = True
+        if changed and self.cache_file is not None:
+            self.cache_file.write_text(json.dumps(migrated, ensure_ascii=False, indent=2), encoding="utf-8")
+        return migrated
 
     def _key(self, lat: float, lon: float) -> str:
+        # precision=3 (~110 m at this latitude), not 4 (~11 m) -- found in practice, on a real,
+        # growing cache file: the same real-world stay's own averaged position (see
+        # tripbuilder.py's Stay construction) isn't perfectly deterministic run to run -- slightly
+        # different sample grouping/cache hits shift it by a few metres, easily enough to land in
+        # a different 4-decimal bucket and silently miss an already-cached place name every time,
+        # defeating the whole point of caching it (several near-duplicate keys for the exact same
+        # harbour, a few metres apart, were found sitting side by side in one real cache file).
+        # ~110 m is loose enough to absorb that drift while still comfortably narrower than the
+        # distance between two genuinely different, separately-named real-world moorings.
         return f"{round(lat, self.precision)},{round(lon, self.precision)}"
 
     def place_name(self, lat: float, lon: float) -> str:
@@ -256,7 +295,7 @@ class Geocoder:
             f"{_NOMINATIM_URL}?{params}", headers={"User-Agent": self.user_agent}
         )
         try:
-            with urllib.request.urlopen(request, timeout=10) as response:
+            with urlopen_ipv4_first(request, timeout=10) as response:
                 payload = json.loads(response.read().decode("utf-8"))
         # OSError alongside URLError: some connection failures (e.g. the server dropping the
         # connection mid-response) surface as a raw ConnectionResetError/http.client exception,

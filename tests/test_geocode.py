@@ -225,7 +225,32 @@ def test_successful_lookup_is_cached_and_not_looked_up_again(monkeypatch, tmp_pa
 
     assert call_count == 2  # Nominatim + the nearby-islet check (see _nearby_islet_name), once
     saved = json.loads(cache_file.read_text(encoding="utf-8"))
-    assert saved == {"47.8387,-4.1759": "Loctudy"}
+    assert saved == {"47.839,-4.176": "Loctudy"}
+
+
+def test_cache_entries_from_an_older_precision_are_migrated_and_stay_usable(monkeypatch, tmp_path):
+    """Regression test for a real bug: raising the cache's own default precision (see
+    Geocoder._key's own doc comment, coarsened to absorb small run-to-run drift in a stay's
+    averaged position) left every entry already on disk keyed at the *old*, finer precision, so
+    none of them ever matched a freshly-computed key again -- every lookup for an already-known
+    place missed the cache and re-hit Nominatim/Overpass regardless. An entry written under the
+    old 4-decimal-place key must still be found (no network call at all) once loaded by a
+    Geocoder using today's coarser precision, and the file on disk gets rewritten to the new key
+    so this migration only ever has to run once."""
+    def fake_urlopen(request, timeout=10):
+        raise AssertionError("must not make a real request for an already-cached place")
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    cache_file = tmp_path / "cache.json"
+    cache_file.write_text(
+        json.dumps({"47.8387,-4.1759": "Loctudy"}), encoding="utf-8"
+    )
+
+    geocoder = Geocoder(cache_file=cache_file)  # default precision=3, the entry above was 4
+
+    assert geocoder.place_name(47.8387, -4.1759) == "Loctudy"
+    migrated = json.loads(cache_file.read_text(encoding="utf-8"))
+    assert migrated == {"47.839,-4.176": "Loctudy"}
 
 
 def test_place_name_prefers_a_nearby_islet_over_nominatims_own_match(monkeypatch, tmp_path):
@@ -436,7 +461,7 @@ def test_place_name_retries_the_landmark_check_after_a_transient_failure(monkeyp
     assert overpass_call_count == 2
 
 
-def test_landmark_check_retries_nine_times_before_giving_up(monkeypatch, tmp_path):
+def test_landmark_check_retries_twice_before_giving_up(monkeypatch, tmp_path):
     overpass_call_count = 0
 
     def fake_urlopen(request, timeout=10):
@@ -452,7 +477,7 @@ def test_landmark_check_retries_nine_times_before_giving_up(monkeypatch, tmp_pat
 
     geocoder.place_name(47.5707, -2.8853)
 
-    assert overpass_call_count == 10  # the first attempt plus 9 retries
+    assert overpass_call_count == 3  # the first attempt plus 2 retries
 
 
 def test_landmark_check_logs_each_failed_attempt(monkeypatch, tmp_path, capsys):
@@ -468,7 +493,7 @@ def test_landmark_check_logs_each_failed_attempt(monkeypatch, tmp_path, capsys):
     geocoder.place_name(47.5707, -2.8853)
 
     err = capsys.readouterr().err
-    assert err.count("Overpass islet check failed") == 10
+    assert err.count("Overpass islet check failed") == 3
 
 
 def test_result_is_not_cached_when_the_landmark_check_fails_entirely(monkeypatch, tmp_path):

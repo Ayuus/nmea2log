@@ -24,6 +24,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Dict, Optional
 
+from ._net import urlopen_ipv4_first
 from .log import log
 
 _ARCHIVE_URL = "https://marine-api.open-meteo.com/v1/marine"
@@ -116,7 +117,7 @@ class MarineFetcher:
             if wait > 0:
                 time.sleep(wait)
             try:
-                with urllib.request.urlopen(request, timeout=15) as response:
+                with urlopen_ipv4_first(request, timeout=15) as response:
                     payload = json.loads(response.read().decode("utf-8"))
                 self._last_request = time.monotonic()
                 break
