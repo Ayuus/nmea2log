@@ -125,6 +125,88 @@ def test_trip_depart_and_arrive_lat_lon_are_the_stays_averaged_position_not_a_si
     assert trip.arrive_lon == pytest.approx(4.95, abs=1e-9)
 
 
+def test_arrival_position_excludes_still_gliding_samples_right_after_arrival():
+    """Regression test for a real bug found with real data: a boat gliding the last few metres
+    into a berth crosses below speed_threshold_kn (already counted "stationary" by
+    _classify_runs) before it's actually stopped moving -- a real arrival's last "moving" sample
+    was recorded doing exactly the default 0.5 kn threshold, meaning the stay's own first couple
+    of samples right after are still likely doing a bit less than that while continuing to glide
+    those last few metres, not yet at the boat's true final position. Averaging the whole stay
+    from its very first sample (as if it were already fully at rest) pulled the reported arrival
+    a little way back along the approach path -- small in absolute terms (a few metres) but a
+    real, visible gap between the drawn track's own last point and the arrival marker on a
+    zoomed-in map. Only samples under half the classification threshold now count towards the
+    stay's own averaged position (see _settled_position)."""
+    fixes = []
+    sogs = []
+
+    for m in range(0, 12):
+        fixes.append(PositionFix(_dt(m), 52.30, 4.90))
+        sogs.append(SogSample(_dt(m), 0.0))
+    for i, m in enumerate(range(12, 40)):
+        frac = i / 27
+        fixes.append(PositionFix(_dt(m), 52.30 + 0.10 * frac, 4.90))
+        sogs.append(SogSample(_dt(m), 3.0))  # ~5.8 kn, underway
+    # still gliding into the berth: already classified "stationary" (0.20/0.15 m/s < the 0.5 kn
+    # / 0.2572 m/s threshold) but not yet settled (still above half that, 0.1286 m/s) -- position
+    # still moving towards the boat's real final spot
+    fixes.append(PositionFix(_dt(40), 52.4010, 4.90))
+    sogs.append(SogSample(_dt(40), 0.20))
+    fixes.append(PositionFix(_dt(41), 52.4005, 4.90))
+    sogs.append(SogSample(_dt(41), 0.15))
+    # genuinely settled from here -- 12 minutes at the boat's real final position
+    for m in range(42, 54):
+        fixes.append(PositionFix(_dt(m), 52.40, 4.90))
+        sogs.append(SogSample(_dt(m), 0.0))
+
+    geocoder = _StubGeocoder()
+    trips = build_trips(
+        fixes, sogs, [], geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+    )
+
+    assert len(trips) == 1
+    # not pytest.approx(52.40, abs=1e-9) -- the pre-fix average (all 14 samples, including the
+    # two still-gliding ones) works out to roughly 52.40011, so a tolerance has to be tight
+    # enough to actually catch that regression rather than accepting either result.
+    assert trips[0].arrive_lat == pytest.approx(52.40, abs=1e-6)
+
+
+def test_arrival_position_excludes_samples_while_the_engine_is_still_running():
+    """Asked for explicitly: SOG alone can already read ~0 while the skipper is still actively
+    working the boat into its berth (a bow thruster nudge, a brief burst in reverse, ...) with
+    the engine still running -- _settled_position's speed-only filter can't see that. A sample
+    still under power, even at zero net movement, doesn't yet count as the boat's real final
+    position; only once the engine is confirmed off does a sample count towards the average."""
+    fixes = []
+    sogs = []
+    engine_samples = []
+
+    def add(m, lat, sog, fuel):
+        fixes.append(PositionFix(_dt(m), lat, 4.90))
+        sogs.append(SogSample(_dt(m), sog))
+        engine_samples.append(EngineSample(_dt(m), 0, fuel, 3600 * 100 + m * 60))
+
+    for m in range(0, 12):
+        add(m, 52.30, 0.0, 0.5)  # port A, engine idling but off per _ENGINE_IDLE_FUEL_LPH
+    for i, m in enumerate(range(12, 40)):
+        add(m, 52.30 + 0.10 * (i / 27), 3.0, 8.0)  # underway, ~5.8 kn, engine on
+    # SOG already reads 0.0 (well under the speed filter's own cutoff) but the engine is still
+    # confirmed running -- still working the boat into its berth, not yet genuinely at rest
+    add(40, 52.4010, 0.0, 3.0)
+    add(41, 52.4005, 0.0, 3.0)
+    # engine off from here -- 12 minutes at the boat's real final position
+    for m in range(42, 54):
+        add(m, 52.40, 0.0, 0.0)
+
+    geocoder = _StubGeocoder()
+    trips = build_trips(
+        fixes, sogs, engine_samples, geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+    )
+
+    assert len(trips) == 1
+    assert trips[0].arrive_lat == pytest.approx(52.40, abs=1e-6)
+
+
 def test_reject_gps_outliers_drops_a_single_corrupted_fix():
     """Regression test for a real incident, values taken from the actual corrupted record found
     in a real .ebl file: the correct 8-byte position payload (46.916294, -2.3801566) with its
@@ -827,6 +909,153 @@ def test_min_trip_distance_nm_can_be_disabled():
     assert len(trips) == 2  # with the filter disabled, the tiny trip counts too
 
 
+def test_min_leg_distance_nm_folds_an_in_harbour_reposition_into_one_trip():
+    """Regression test for a real bug found with real data: after arriving and mooring briefly,
+    the boat repositioned about 0.3 nm within the same harbour (a real, non-negligible move by
+    --min-trip-distance-nm's own default of 0.1 nm, so it wasn't filtered as GPS/speed noise) to
+    its actual berth -- splitting what was really one continuous arrival into two logbook trips.
+    --min-leg-distance-nm (default 0.5 nm, deliberately looser than --min-trip-distance-nm) folds
+    an in-transit leg this short back into its surrounding stay."""
+    fixes, sogs, engine_samples = _build_scenario()
+    for m in range(54, 54 + 12):
+        fixes.append(PositionFix(_dt(m), 52.40, 4.95))
+        sogs.append(SogSample(_dt(m), 0.0))
+        engine_samples.append(EngineSample(_dt(m), 0, 0.5, 3600 * 100 + m * 60))
+    fixes.append(PositionFix(_dt(66), 52.40, 4.95))  # still at the old spot, first moving reading
+    sogs.append(SogSample(_dt(66), 2.0))
+    engine_samples.append(EngineSample(_dt(66), 0, 3.0, 3600 * 100 + 66 * 60))
+    fixes.append(PositionFix(_dt(67), 52.405, 4.95))  # ~0.3 nm further into the harbour
+    sogs.append(SogSample(_dt(67), 2.0))
+    engine_samples.append(EngineSample(_dt(67), 0, 3.0, 3600 * 100 + 67 * 60))
+    for m in range(68, 68 + 12):
+        fixes.append(PositionFix(_dt(m), 52.405, 4.95))
+        sogs.append(SogSample(_dt(m), 0.0))
+        engine_samples.append(EngineSample(_dt(m), 0, 0.5, 3600 * 100 + m * 60))
+
+    geocoder = _StubGeocoder()
+
+    # Unset (defaults to --min-trip-distance-nm's own value, same as before this feature existed):
+    # the 0.3 nm reposition is a real trip on its own, splitting the visit in two.
+    trips_default = build_trips(
+        fixes, sogs, engine_samples, geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+    )
+    assert len(trips_default) == 2
+
+    # With --min-leg-distance-nm=0.5 (the CLI's own default): folded into one continuous arrival.
+    trips_with_leg_distance = build_trips(
+        fixes, sogs, engine_samples, geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+        min_leg_distance_nm=0.5,
+    )
+    assert len(trips_with_leg_distance) == 1
+    assert trips_with_leg_distance[0].arrive_place.startswith("Port@52.40")
+
+
+def test_noisy_low_speed_blip_is_folded_by_spatial_spread_even_though_its_path_length_adds_up():
+    """Regression test for a real bug found on live data (La Baule-Escoublac, 2026-09-05): a boat
+    already back at its berth, engine idling, had SOG noise reading just above
+    speed_threshold_kn for several minutes while GPS jitter moved its reported position back and
+    forth by only a few meters each step -- individually tiny, but summed over many samples
+    (_trip_distance_nm) that add up to more than min_leg_distance_nm, even though the boat was
+    never meaningfully away from where it started. Showed up as its own bogus 9-minute "trip"
+    with no real destination. lock_radius_m (already used for lock/bridge detection) also folds a
+    "moving" run whose own _spatial_spread_m never exceeds it, regardless of summed path length --
+    a metric that isn't fooled by many small jittery steps the way summed distance is."""
+    fixes = []
+    sogs = []
+
+    for m in range(0, 12):  # confirmed stop, port A
+        fixes.append(PositionFix(_dt(m), 52.30, 4.90))
+        sogs.append(SogSample(_dt(m), 0.0))
+
+    # 60 samples oscillating between two points ~4.5 m apart, SOG just above the default
+    # speed_threshold_kn=0.5 -- summed path length ~262 m (0.14 nm, over min_leg_distance_nm's
+    # own 0.1 nm default), but never more than ~2.2 m from the midpoint between them.
+    for m in range(12, 72):
+        lat = 52.30 if (m - 12) % 2 == 0 else 52.30 + 0.00004
+        fixes.append(PositionFix(_dt(m), lat, 4.90))
+        sogs.append(SogSample(_dt(m), 0.6))
+
+    for m in range(72, 84):  # confirmed stop again, same berth
+        fixes.append(PositionFix(_dt(m), 52.30, 4.90))
+        sogs.append(SogSample(_dt(m), 0.0))
+
+    geocoder = _StubGeocoder()
+    trips = build_trips(
+        fixes, sogs, [], geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+        lock_radius_m=10.0,
+    )
+
+    assert trips == []  # no bogus trip -- folded entirely into one continuous stay
+
+
+def test_noisy_low_speed_blip_is_not_folded_when_lock_radius_m_is_none():
+    """Same scenario as above, but without lock/bridge detection opted in (lock_radius_m=None,
+    build_trips()'s own default): the new spatial-spread check stays off, same as before this fix
+    -- only the existing summed-path-length check applies, and that one doesn't catch this blip
+    (its summed distance is, deliberately, over min_leg_distance_nm's own default)."""
+    fixes = []
+    sogs = []
+
+    for m in range(0, 12):
+        fixes.append(PositionFix(_dt(m), 52.30, 4.90))
+        sogs.append(SogSample(_dt(m), 0.0))
+
+    for m in range(12, 72):
+        lat = 52.30 if (m - 12) % 2 == 0 else 52.30 + 0.00004
+        fixes.append(PositionFix(_dt(m), lat, 4.90))
+        sogs.append(SogSample(_dt(m), 0.6))
+
+    for m in range(72, 84):
+        fixes.append(PositionFix(_dt(m), 52.30, 4.90))
+        sogs.append(SogSample(_dt(m), 0.0))
+
+    geocoder = _StubGeocoder()
+    trips = build_trips(
+        fixes, sogs, [], geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+    )
+
+    assert len(trips) == 1  # unchanged from before this fix -- the blip still shows as its own trip
+
+
+def test_real_short_there_and_back_trip_is_not_folded_despite_near_zero_net_displacement():
+    """Regression guard for the risk this fix could otherwise introduce: a genuine short trip that
+    returns to its own starting berth (net displacement ~0, same as the noise-blip case above) must
+    not disappear just because it ends up back where it started -- _spatial_spread_m (unlike a
+    naive start-vs-end displacement check) measures how far the boat actually got from its own
+    centroid at any point, so a real ~200 m excursion is never confused with a few meters of
+    dockside GPS jitter, however the trip's own net displacement compares."""
+    fixes = []
+    sogs = []
+
+    for m in range(0, 12):  # depart, port A
+        fixes.append(PositionFix(_dt(m), 52.30, 4.90))
+        sogs.append(SogSample(_dt(m), 0.0))
+
+    # ~200 m out, then back to the exact same spot -- one continuous "moving" run the whole time.
+    for i, m in enumerate(range(12, 27)):
+        frac = i / 14
+        fixes.append(PositionFix(_dt(m), 52.30 + 0.0018 * frac, 4.90))
+        sogs.append(SogSample(_dt(m), 3.0))
+    for i, m in enumerate(range(27, 42)):
+        frac = i / 14
+        fixes.append(PositionFix(_dt(m), 52.30 + 0.0018 * (1 - frac), 4.90))
+        sogs.append(SogSample(_dt(m), 3.0))
+
+    for m in range(42, 54):  # arrive back, same berth
+        fixes.append(PositionFix(_dt(m), 52.30, 4.90))
+        sogs.append(SogSample(_dt(m), 0.0))
+
+    geocoder = _StubGeocoder()
+    trips = build_trips(
+        fixes, sogs, [], geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+        lock_radius_m=10.0,
+    )
+
+    assert len(trips) == 1  # a real excursion, not folded away
+    assert trips[0].depart_place.startswith("Port@52.30")
+    assert trips[0].arrive_place.startswith("Port@52.30")  # back at the same berth, still a real trip
+
+
 def test_gap_masked_by_moving_noise_on_both_sides_still_splits_the_trip():
     """Regression test for a real bug found with real data: right as the boat actually arrived
     and stopped, a couple of noisy SOG readings stayed just above speed_threshold_kn (GPS jitter
@@ -950,6 +1179,115 @@ def test_anchor_stop_with_drift_is_not_folded_as_a_lock():
     )
 
     assert len(trips) == 2  # the drift disqualifies it as a lock
+
+
+def test_confined_stop_with_engine_running_is_folded_like_a_lock():
+    """Regression test for a real bug found with real data: a boat arriving at a crowded marina
+    circled in place for ~10 minutes waiting for a berth to free up, engine kept running the
+    whole time (never actually switched off, unlike a lock/bridge pause), then moved a short
+    distance to the berth itself -- split what was really one continuous arrival into two
+    separate logbook trips. _engine_off_span finds no off-then-on cycle to widen here (the
+    engine never goes off), so this only reaches the fallback branch in _reclassify_locks that
+    checks the stop's own GPS-measured boundaries directly."""
+    fixes = []
+    sogs = []
+    engine_samples = []
+
+    def add(m, lat, lon, sog, fuel):
+        fixes.append(PositionFix(_dt(m), lat, lon))
+        sogs.append(SogSample(_dt(m), sog))
+        engine_samples.append(EngineSample(_dt(m), 0, fuel, 3600 * 100 + m * 60))
+
+    for m in range(0, 12):
+        add(m, 52.30, 4.90, 0.0, 0.0)  # port A, 11 min
+    for i, m in enumerate(range(12, 42)):
+        add(m, 52.30 + 0.10 * (i / 29), 4.90, 3.0, 8.0)  # underway to the marina
+    for m in range(42, 54):
+        add(m, 52.40, 4.90, 0.2, 2.0)  # circling for a berth, 11 min (>= min_stop_minutes on its
+        # own, so this specifically exercises _reclassify_locks's engine-still-running fallback,
+        # not just the plain too-short-to-count check _merge_short_stops already does), engine
+        # idling (not off)
+    for i, m in enumerate(range(54, 57)):
+        add(m, 52.40 + 0.003 * (i / 2), 4.90, 0.6, 3.0)  # short hop to the actual berth (~0.18
+        # nm, safely clear of the default min_trip_distance_nm=0.1 filter -- this test's own
+        # variable is lock/bridge detection, not the separate negligible-distance filter)
+    for m in range(57, 69):
+        add(m, 52.403, 4.90, 0.0, 0.0)  # the actual berth, 11 min, engine off
+
+    geocoder = _StubGeocoder()
+    trips = build_trips(
+        fixes, sogs, engine_samples, geocoder=geocoder,
+        speed_threshold_kn=0.5, min_stop_minutes=10,
+        lock_radius_m=10.0, lock_max_duration_minutes=120.0,
+    )
+
+    assert len(trips) == 1  # the wait-for-a-berth pause doesn't show up as a separate port visit
+    assert trips[0].depart_place.startswith("Port@52.30")
+    assert trips[0].arrive_place.startswith("Port@52.40")
+
+
+def test_confined_stop_with_engine_running_stays_a_real_stop_without_lock_detection():
+    """Same scenario as above, but without opting in to lock/bridge detection: the old, purely
+    speed-based behavior stays unchanged -- a 10-minute stop is a real port visit."""
+    fixes = []
+    sogs = []
+    engine_samples = []
+
+    def add(m, lat, lon, sog, fuel):
+        fixes.append(PositionFix(_dt(m), lat, lon))
+        sogs.append(SogSample(_dt(m), sog))
+        engine_samples.append(EngineSample(_dt(m), 0, fuel, 3600 * 100 + m * 60))
+
+    for m in range(0, 12):
+        add(m, 52.30, 4.90, 0.0, 0.0)
+    for i, m in enumerate(range(12, 42)):
+        add(m, 52.30 + 0.10 * (i / 29), 4.90, 3.0, 8.0)
+    for m in range(42, 54):
+        add(m, 52.40, 4.90, 0.2, 2.0)
+    for i, m in enumerate(range(54, 57)):
+        add(m, 52.40 + 0.003 * (i / 2), 4.90, 0.6, 3.0)
+    for m in range(57, 69):
+        add(m, 52.403, 4.90, 0.0, 0.0)
+
+    geocoder = _StubGeocoder()
+    trips = build_trips(
+        fixes, sogs, engine_samples, geocoder=geocoder,
+        speed_threshold_kn=0.5, min_stop_minutes=10,
+    )
+
+    assert len(trips) == 2
+
+
+def test_confined_stop_with_engine_running_is_not_folded_when_it_is_the_last_run():
+    """Regression guard, mirrors test_lock_check_never_applies_to_a_stop_the_engine_never_restarts_from
+    for the engine-running case: a confined stop with nothing following it in the data (the log
+    simply ends there) must never be folded away, however short and tight it looks -- there's no
+    way to tell "still waiting" from "arrived here for good"."""
+    fixes = []
+    sogs = []
+    engine_samples = []
+
+    def add(m, lat, lon, sog, fuel):
+        fixes.append(PositionFix(_dt(m), lat, lon))
+        sogs.append(SogSample(_dt(m), sog))
+        engine_samples.append(EngineSample(_dt(m), 0, fuel, 3600 * 100 + m * 60))
+
+    for m in range(0, 12):
+        add(m, 52.30, 4.90, 0.0, 0.0)
+    for i, m in enumerate(range(12, 42)):
+        add(m, 52.30 + 0.10 * (i / 29), 4.90, 3.0, 8.0)
+    for m in range(42, 54):
+        add(m, 52.40, 4.90, 0.2, 2.0)  # confined, engine idling, 11 min -- but the log ends right here
+
+    geocoder = _StubGeocoder()
+    trips = build_trips(
+        fixes, sogs, engine_samples, geocoder=geocoder,
+        speed_threshold_kn=0.5, min_stop_minutes=10,
+        lock_radius_m=10.0, lock_max_duration_minutes=120.0,
+    )
+
+    assert len(trips) == 1
+    assert trips[0].arrive_place.startswith("Port@52.40")  # kept as a real arrival, not folded away
 
 
 def test_lock_check_does_not_apply_to_the_first_stop_in_the_data():

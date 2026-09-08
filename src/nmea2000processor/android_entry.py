@@ -10,6 +10,7 @@ the way the desktop CLI can.
 
 from __future__ import annotations
 
+import gc
 import time
 import urllib.error
 from datetime import datetime, timezone
@@ -29,14 +30,15 @@ from .cli import (
     build_arg_parser,
 )
 from .fix_array import AttitudeArray, BatteryArray, DepthArray, FixArray, SogArray, WaterTempArray
-from .geocode import NoGeocoder
+from .geocode import Geocoder
 from .html_writer import write_html_logbook
 from .log import log, set_log_file, set_log_sink
-from .marine import NoMarine
+from .marine import MarineFetcher
 from .sample_cache import SampleCache
+from .trip_cache import TripCache, choose_resume_index, config_signature, find_resume_index
 from .trip_ids import assign_trip_ids
 from .tripbuilder import build_trips
-from .weather import NoWeather
+from .weather import WeatherFetcher
 
 
 def _report_result(progress_callback, result: dict) -> None:
@@ -78,9 +80,15 @@ def run_pipeline(
     should_cancel: Optional[Callable[[], bool]] = None,
 ) -> dict:
     """Decodes the given .ebl files, builds trips, and writes an HTML logbook to
-    output_html_path. Geocoding/weather/marine lookups are always skipped for now (no settings
-    toggle for them yet, and they'd otherwise ride the phone's cellular data every run -- see
-    docs/android-app-plan.md's "Cellular data cost" note).
+    output_html_path -- geocoding, weather, and marine (wave/current) lookups are all enabled by
+    default here, same as the desktop CLI's own default (no --no-geocode/--no-weather/--no-marine
+    equivalent on Android yet -- asked for explicitly: app and desktop should behave as identically
+    as possible, not a deliberately reduced feature set). Each rides a small, per-day-per-~1km-cell
+    cache file next to the logbook itself (.geocode_cache.json/.weather_cache.json/
+    .marine_cache.json, same file names cli.py itself defaults to), so a full season's worth of
+    lookups only really costs cellular data once -- a later run over the same waters mostly hits
+    the cache instead of the network. See docs/android-app-plan.md's "Cellular data cost" note if
+    that ever needs its own settings toggle instead.
 
     fetch_failed mirrors --download-failed on the desktop CLI: set it when this run is showing
     the last-known-good logbook because a download attempt failed, so the page can mark itself as
@@ -117,14 +125,64 @@ def run_pipeline(
     all_trip_fuel = []
     all_rpm = []
 
+    # Same trip cache as cli.py's _run() (see trip_cache.py) -- a settled trip never changes, so
+    # a normal day-to-day sync only needs to decode and rebuild the recent window since the last
+    # known trip's own departure instead of the whole season every time. Kept next to the logbook
+    # itself, same as the geocode/weather/marine caches below. This is the single biggest lever
+    # on both this run's decode time and its peak memory (see the *_by_source cleanup further
+    # down) -- found in practice: a real full-season sync peaked at ~3.7 GB RSS decoding and
+    # rebuilding data that, for all but the most recent trip, never actually changes run to run.
+    trip_signature = config_signature(
+        speed_threshold_kn=args.speed_threshold_kn,
+        min_stop_minutes=args.min_stop_minutes,
+        max_gap_minutes=args.max_gap_minutes,
+        min_trip_distance_nm=args.min_trip_distance_nm,
+        min_leg_distance_nm=args.min_leg_distance_nm,
+        lock_radius_m=args.lock_radius_m,
+        lock_max_duration_minutes=args.lock_max_duration_minutes,
+        language="nl",
+        engine_count=args.engine_count,
+    )
+    # Disabled unconditionally for now -- see the matching comment in cli.py's _run(): several of
+    # build_trips()'s "this is the very first run in the whole dataset" edge cases fire
+    # incorrectly on "the first run of this reprocessed window" once trips are cached, producing
+    # real duplicate/junk trips (confirmed live on the desktop CLI's own real data). Needs a
+    # redesign before this is safe to re-enable.
+    trip_cache_store = None
+    settled_trips: list = []
+    resume_index = 0
     ebl_time_state: dict = {}
+    cached_trip_data = trip_cache_store.load(trip_signature) if trip_cache_store is not None else None
+    if cached_trip_data is not None:
+        cached_settled_trips, resume_from_file, resume_ebl_time_state = cached_trip_data
+        found_index = find_resume_index(logfiles, resume_from_file)
+        if found_index is not None:
+            settled_trips = cached_settled_trips
+            resume_index = found_index
+            ebl_time_state["current"] = resume_ebl_time_state
+            log(
+                f"[cache] Reusing {len(settled_trips)} already-settled trip(s); skipping "
+                f"decode of {resume_index}/{len(logfiles)} file(s)."
+            )
+
     sample_cache = SampleCache(Path(sample_cache_path))
     last_progress_log = time.monotonic()
+    file_first_time_by_index: Dict[int, Optional[datetime]] = {}
+    ebl_time_state_before_file: dict = {}
     for idx, path in enumerate(logfiles, start=1):
         if should_cancel is not None and should_cancel():
             return {"ok": False, "error": "Sync cancelled.", "cancelled": True}
+        file_index = idx - 1
+        if file_index < resume_index:
+            # Already fully represented by settled_trips -- never even touched, not even to
+            # check the sample cache, which is exactly the decode-time and decompression cost
+            # this trip cache exists to avoid paying every single run (see cli.py's own decode
+            # loop, which this mirrors).
+            continue
         if not path.exists():
             return {"ok": False, "error": f"Log file not found: {path}"}
+
+        ebl_time_state_before_file[file_index] = ebl_time_state.get("current")
 
         cached = sample_cache.get(path)
         if cached is not None:
@@ -136,6 +194,13 @@ def run_pipeline(
             samples = _collect_samples(frames)
             fixes, sogs, engine, trip_fuel, depth, water_temp, battery, rpm, attitude = samples
             sample_cache.put(path, samples, ebl_time_state.get("current"))
+
+        file_first_time: Optional[datetime] = None
+        for source_fixes in fixes.values():
+            if source_fixes:
+                candidate_time = min(f.time for f in source_fixes)
+                file_first_time = candidate_time if file_first_time is None else min(file_first_time, candidate_time)
+        file_first_time_by_index[file_index] = file_first_time
 
         # A phone's CPU decodes far slower than a desktop's -- found in practice: a run whose
         # cache hadn't (yet) been saved from a prior, interrupted attempt spent several silent
@@ -173,40 +238,94 @@ def run_pipeline(
     all_battery = _dominant_source_only(battery_by_source)
     all_attitude = _dominant_source_only(attitude_by_source)
 
-    if not all_fixes:
+    # The four *_by_source dicts above (and sample_cache) are dead weight from here on: each
+    # all_* variable already holds its own direct reference to the one source array it needs
+    # (see _select_primary_gps_source/_dominant_source_only in cli.py -- "by_source[dominant]",
+    # not a copy), so the dicts themselves now only hold every *non*-dominant source's full
+    # array for nothing. On a boat with more than one device sending the same PGN (e.g. two GPS
+    # antennas), that's real, otherwise-unreachable memory -- found in practice: a real OOM kill
+    # (lmkd reaped this process at ~2.6 GB rss) landed inside build_trips() itself just below,
+    # the single most memory-hungry phase of the whole run, so freeing this now (not desktop,
+    # which has never once hit this ceiling) buys real headroom right where it matters most.
+    del fixes_by_source, sogs_by_source, depth_by_source, water_temp_by_source, battery_by_source
+    del attitude_by_source, sample_cache
+    gc.collect()
+
+    if not all_fixes and not settled_trips:
         return {"ok": False, "error": "No position data (PGN 129025) found."}
 
     if args.engine_count == 1:
         all_engine, all_trip_fuel, all_rpm = _filter_to_dominant_engine(all_engine, all_trip_fuel, all_rpm)
 
-    # Found in practice: build_trips() (and write_html_logbook() below) can run for a real
-    # stretch of time on a full multi-year archive (millions of merged GPS fixes) with zero log
-    # output in between -- decode's own progress logging (see _DECODE_PROGRESS_INTERVAL_S) stops
-    # the moment the last file is read, leaving nothing on screen (or in nmea2log.log) to tell
-    # "still working" apart from "hung" or "already crashed silently" for however long this phase
-    # takes on a phone's much slower CPU.
-    log(f"[info] Reizen opbouwen uit {len(all_fixes)} GPS-posities...")
-    trips = build_trips(
-        all_fixes,
-        all_sogs,
-        all_engine,
-        all_trip_fuel,
-        all_depth,
-        all_water_temp,
-        all_battery,
-        all_rpm,
-        all_attitude,
-        geocoder=NoGeocoder(),
-        speed_threshold_kn=args.speed_threshold_kn,
-        min_stop_minutes=args.min_stop_minutes,
-        max_gap_minutes=args.max_gap_minutes,
-        min_trip_distance_nm=args.min_trip_distance_nm,
-        lock_radius_m=args.lock_radius_m if args.lock_radius_m >= 0 else None,
-        lock_max_duration_minutes=args.lock_max_duration_minutes,
-    )
+    # One shared instance (not a fresh Geocoder() per call below) -- write_html_logbook()'s own
+    # "latest position" lookup below then reuses build_trips()'s in-memory cache instead of
+    # possibly re-requesting a position it (or a nearby one, same rounded cache key) already
+    # looked up moments ago. Cached to a file next to the logbook itself, same as
+    # sync_from_w2k2()'s nmea2log.log placement, so the cache survives between runs instead of
+    # re-requesting every already-known place's name on every single sync.
+    geocoder = Geocoder(cache_file=Path(output_html_path).parent / ".geocode_cache.json", language="nl")
+    if all_fixes:
+        # Found in practice: build_trips() (and write_html_logbook() below) can run for a real
+        # stretch of time on a full multi-year archive (millions of merged GPS fixes) with zero
+        # log output in between -- decode's own progress logging (see
+        # _DECODE_PROGRESS_INTERVAL_S) stops the moment the last file is read, leaving nothing on
+        # screen (or in nmea2log.log) to tell "still working" apart from "hung" or "already
+        # crashed silently" for however long this phase takes on a phone's much slower CPU.
+        log(f"[info] Reizen opbouwen uit {len(all_fixes)} GPS-posities...")
+        fresh_trips = build_trips(
+            all_fixes,
+            all_sogs,
+            all_engine,
+            all_trip_fuel,
+            all_depth,
+            all_water_temp,
+            all_battery,
+            all_rpm,
+            all_attitude,
+            geocoder=geocoder,
+            speed_threshold_kn=args.speed_threshold_kn,
+            min_stop_minutes=args.min_stop_minutes,
+            max_gap_minutes=args.max_gap_minutes,
+            min_trip_distance_nm=args.min_trip_distance_nm,
+            min_leg_distance_nm=args.min_leg_distance_nm,
+            lock_radius_m=args.lock_radius_m if args.lock_radius_m >= 0 else None,
+            lock_max_duration_minutes=args.lock_max_duration_minutes,
+        )
+    else:
+        # The reprocessed window (from the last known trip's own departure onward, see
+        # resume_index above) happened to contain no position data at all -- nothing left to
+        # (re)build; settled_trips alone, below, is still a perfectly good result.
+        fresh_trips = []
+
+    trips = settled_trips + fresh_trips
 
     if not trips:
         return {"ok": False, "error": "No trips found (maybe never stopped or underway long enough)."}
+
+    if trip_cache_store is not None and fresh_trips:
+        # Every trip except the newest one is now eligible to freeze -- see trip_cache.py's
+        # module docstring for why the newest trip specifically is never cached, even here.
+        new_settled_trips = settled_trips + fresh_trips[:-1]
+        resume_reference_time = (
+            new_settled_trips[-1].arrive_time if new_settled_trips else fresh_trips[-1].depart_time
+        )
+        new_resume_index = choose_resume_index(
+            sorted(file_first_time_by_index.items()), resume_reference_time, resume_index
+        )
+        new_resume_file = str(logfiles[new_resume_index].resolve())
+        new_resume_state = ebl_time_state_before_file.get(new_resume_index)
+        trip_cache_store.save(new_settled_trips, new_resume_file, new_resume_state, trip_signature)
+
+    # trips (a small, already-summarized list of TripLeg) is everything write_html_logbook()
+    # below needs -- the season's worth of raw per-sample arrays that built it are pure dead
+    # weight from here on, except the one still-needed latest_position value, captured first.
+    # Same reasoning as the *_by_source cleanup above: real headroom for a phase that now also
+    # runs real (not instant) geocoding/weather/marine network lookups per trip, extending how
+    # long this data would otherwise sit in memory unused.
+    latest_position = all_fixes[-1] if all_fixes else None
+    del all_fixes, all_sogs, all_depth, all_water_temp, all_battery, all_attitude
+    del all_engine, all_trip_fuel, all_rpm
+    gc.collect()
 
     log(f"[info] {len(trips)} trip(s) found, writing logbook...")
     trip_uids = assign_trip_ids(trips, utc_offset_hours=args.utc_offset)
@@ -225,10 +344,10 @@ def run_pipeline(
         fetch_failed=fetch_failed,
         log_interval_minutes=args.log_interval_minutes,
         remarks_api_url=args.remarks_api_url,
-        weather=NoWeather(),
-        marine=NoMarine(),
-        geocoder=NoGeocoder(),
-        latest_position=all_fixes[-1] if all_fixes else None,
+        weather=WeatherFetcher(cache_file=html_path.parent / ".weather_cache.json"),
+        marine=MarineFetcher(cache_file=html_path.parent / ".marine_cache.json"),
+        geocoder=geocoder,
+        latest_position=latest_position,
     )
     log(f"[ok] Logboek geschreven: {html_path} ({len(trips)} reis/reizen)")
 

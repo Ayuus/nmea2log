@@ -320,6 +320,46 @@ def _spatial_spread_m(group: List[NavSample]) -> float:
     return max(_haversine_nm(lat, lon, s.lat, s.lon) * 1852.0 for s in group)
 
 
+def _settled_position(
+    group: List[NavSample], speed_threshold_ms: float, on_intervals: List[Tuple[datetime, datetime]]
+) -> Tuple[float, float]:
+    """Averaged (lat, lon) for a stationary stay, using only its own genuinely-at-rest samples --
+    excludes anything under half ``speed_threshold_ms`` still counts as gliding, and anything
+    the engine was still confirmed running for -- rather than every sample in the group.
+
+    Found in practice, on real data: a boat gliding the last few metres into a berth crosses
+    below ``speed_threshold_ms`` (so those samples already count as "stationary") before it's
+    actually stopped moving -- e.g. a real arrival whose last "moving" sample was still doing
+    0.5 kn, right at the default threshold, meaning the *next* few samples right after are still
+    likely doing 0.4, 0.3, 0.2 kn while continuing to glide those last few metres. Averaging the
+    whole stay from its very first sample pulled the reported arrival position back along that
+    approach path, a real (if usually small, a few metres) offset from the boat's actual final
+    position, showing up as a visible gap between the drawn track's own last point and the
+    arrival marker on the map.
+
+    The engine-on exclusion (asked for explicitly) catches the same kind of not-really-at-rest-
+    yet sample a different way: while the engine's still running, the skipper may still be
+    actively working the boat into its final spot (bow thruster nudges, brief reversing, ...)
+    even at a moment SOG itself already reads near zero, which the speed filter alone can't see.
+
+    Half the classification threshold, not some much stricter fixed value: strict enough to
+    exclude a still-gliding sample sitting close to the classification boundary, loose enough
+    that ordinary GPS jitter on a genuinely stationary boat (which real data shows rarely
+    reads as literally 0.0 kn) doesn't leave nothing qualifying. Each filter falls back to the
+    next-loosest result (speed-and-engine, then speed-only, then the whole group) rather than
+    ever computing an average over zero samples -- e.g. an unusually short or noisy stay, or one
+    where the engine happens to still be running for its entire recorded duration."""
+    slow_enough = [s for s in group if s.sog_ms <= speed_threshold_ms / 2] or group
+    settled = [s for s in slow_enough if not _engine_on_at(on_intervals, s.time)] or slow_enough
+    lat = sum(s.lat for s in settled) / len(settled)
+    lon = sum(s.lon for s in settled) / len(settled)
+    return lat, lon
+
+
+def _engine_on_at(on_intervals: List[Tuple[datetime, datetime]], t: datetime) -> bool:
+    return any(start <= t <= end for start, end in on_intervals)
+
+
 def _engine_on_intervals(engine_samples: List[EngineSample]) -> List[Tuple[datetime, datetime]]:
     """Merged time ranges (across all engine instances) during which an engine was actually
     running, based on fuel consumption -- a much more direct "is it running" signal than merely
@@ -403,7 +443,17 @@ def _reclassify_locks(
     This is a deliberately simple heuristic and knowingly conflates a lock with any other brief,
     tightly-confined pause where the engine happens to be cycled off and on again the same day
     (e.g. a quick stop at a quay) -- telling those apart would require knowing where the lock
-    actually is, which is not available without unreliable external geocoding."""
+    actually is, which is not available without unreliable external geocoding.
+
+    A stop where the engine never confirms going off at all (_engine_off_span finds nothing to
+    widen) gets the same treatment if it's still short and tightly confined by its own GPS-
+    measured boundaries -- found in practice, on real data: a 10-minute stop, boat barely moving
+    (well under lock_radius_m) while circling to wait for a berth to free up in a crowded marina,
+    engine kept running the whole time, split what was really one continuous arrival into two
+    separate logbook trips. Still gated on a later run existing (idx + 1 < len(runs)) -- the same
+    "confirmed running again" reasoning _engine_off_span itself already applies for the engine-off
+    case: without a next run, there's no way to tell "still waiting" from "arrived here and the
+    log simply ends", so it's left as a real stop rather than guessed away."""
     relabelled = []
     for idx, (label, group) in enumerate(runs):
         if label == "stationary" and idx > 0:
@@ -414,6 +464,12 @@ def _reclassify_locks(
                     span_samples = [s for s in samples if off_start <= s.time <= off_end] or group
                     if _spatial_spread_m(span_samples) <= lock_radius_m:
                         label = "moving"
+            elif idx + 1 < len(runs):
+                if (
+                    group[-1].time - group[0].time <= lock_max_duration
+                    and _spatial_spread_m(group) <= lock_radius_m
+                ):
+                    label = "moving"
         relabelled.append((label, group))
     return relabelled
 
@@ -466,17 +522,46 @@ def _trip_distance_nm(group: List[NavSample]) -> float:
 
 
 def _merge_negligible_trips(
-    runs: List[Tuple[str, List[NavSample]]], min_trip_distance_nm: float, max_gap: timedelta
+    runs: List[Tuple[str, List[NavSample]]],
+    min_leg_distance_nm: float,
+    max_gap: timedelta,
+    lock_radius_m: Optional[float] = None,
 ) -> List[Tuple[str, List[NavSample]]]:
-    """A "moving" run covering less than ``min_trip_distance_nm`` doesn't get to end a trip and
+    """A "moving" run covering less than ``min_leg_distance_nm`` doesn't get to end a trip and
     start a new stay on its own -- it's GPS/speed noise or a brief manoeuvre (e.g. nudging a few
-    meters along the quay with the engine), not a real trip to a new port. Its samples are real
+    meters along the quay with the engine, or repositioning within the same harbour -- found in
+    practice, on real data: moving under half a mile within the same harbour, engine briefly off
+    in between, still split what was really one continuous arrival into two logbook trips), not a
+    real trip to a new port. Deliberately a separate, looser threshold from ``min_trip_distance_nm``
+    (see ``build_trips``'s own doc comment) -- that one also decides whether a *finished* trip is
+    real enough to even show in the logbook at all, so raising it to cover a longer in-harbour
+    manoeuvre would silently delete genuinely short, real trips between two different places
+    instead of just folding an in-between leg into its surrounding stay. Its samples are real
     GPS points though, not noise to throw away: they're spliced onto the end of the nearest
     *preceding* real trip's own track, so the route drawn on the map visually reaches the boat's
     actual final position instead of stopping short at wherever it first happened to stop.
     Removing the run from ``runs`` entirely (rather than merely relabelling it) also lets the
     stationary periods on either side of it merge into a single stay for arrival-position
     purposes (see ``_merge_adjacent`` below), same effect as before.
+
+    Also negligible, independent of ``min_leg_distance_nm``, when ``lock_radius_m`` is given and
+    the run never actually strayed more than that from its own centroid (see
+    ``_spatial_spread_m``) -- found in practice, on real data: several minutes of a boat sitting
+    almost still at the quay (engine idling, waiting/manoeuvring to moor) with SOG noise reading
+    just above ``speed_threshold_kn`` accumulated enough summed point-to-point distance (this
+    function's *other* check, ``_trip_distance_nm``) to clear ``min_leg_distance_nm`` even though
+    the boat was never meaningfully away from where it started -- showing up as its own bogus
+    9-minute "trip" with no real destination. Summed path length is vulnerable to exactly this:
+    many small jittery steps add up even when net position barely changes. Deliberately NOT the
+    same as checking start-vs-end displacement instead of path length -- a real short there-and-
+    back trip (motor out a couple hundred meters, turn around, return to the same berth) has
+    near-zero net displacement too, and must not disappear from the logbook; what actually tells
+    the two apart is whether the boat ever got meaningfully far from its own centroid at all,
+    which is exactly what ``_spatial_spread_m`` (already used for lock/bridge detection, see
+    ``_reclassify_locks``) measures. Reuses ``lock_radius_m`` itself rather than a separate
+    parameter -- both ask the same underlying question ("did the boat stay confined to about this
+    radius the whole time"), and this stays off automatically when lock/bridge detection itself is
+    off (``lock_radius_m=None``), consistent with that setting's existing on/off behavior.
 
     Falls back to just relabelling it "stationary" -- merged into the surrounding stay, same as
     any other stationary period, contributing to its averaged position -- when there's no
@@ -504,7 +589,10 @@ def _merge_negligible_trips(
             last_moving_group = None  # a real data gap -- never splice/merge across it
         prev_end_time = group[-1].time
 
-        if label == "moving" and _trip_distance_nm(group) < min_trip_distance_nm:
+        is_negligible = _trip_distance_nm(group) < min_leg_distance_nm or (
+            lock_radius_m is not None and _spatial_spread_m(group) <= lock_radius_m
+        )
+        if label == "moving" and is_negligible:
             if last_moving_group is not None:
                 last_moving_group.extend(group)
                 continue
@@ -955,6 +1043,7 @@ def build_trips(
     min_stop_minutes: float = 10.0,
     max_gap_minutes: Optional[float] = None,
     min_trip_distance_nm: float = 0.1,
+    min_leg_distance_nm: Optional[float] = None,
     lock_radius_m: Optional[float] = None,
     lock_max_duration_minutes: Optional[float] = None,
 ) -> List[TripLeg]:
@@ -964,6 +1053,16 @@ def build_trips(
     you have to be stationary", the other "how long can there be no data". Ports are still
     linked across such a gap (see ``_merge_short_stops``) -- only the trip's *duration* ignores
     the gap, not the departure/arrival port itself.
+
+    ``min_leg_distance_nm``: how short an in-transit "moving" leg between two stays can be before
+    it's folded into its surrounding stay instead of ending one trip and starting another (see
+    ``_merge_negligible_trips``) -- e.g. repositioning within the same harbour. Deliberately a
+    separate, looser threshold from ``min_trip_distance_nm`` below: that one also decides whether
+    an already-finished trip is real enough to appear in the logbook at all, so it has to stay
+    tight -- raising it to cover a longer in-harbour manoeuvre would silently delete genuinely
+    short, real trips between two different places instead of just merging an in-between leg.
+    Defaults to the same value as ``min_trip_distance_nm`` when left unset, keeping today's
+    behavior for any caller that doesn't know about this distinction yet.
 
     ``min_trip_distance_nm``: trips covering less than this are filtered out. This is
     GPS/speed noise (a few seconds just above ``speed_threshold_kn``), not a real trip (found
@@ -1024,18 +1123,26 @@ def build_trips(
 
     # Needed regardless of the lock/bridge settings below -- also used to widen each trip's own
     # "Gelogde motoruren" with however long its engine ran continuously right before departure
-    # and after arrival (see _extend_engine_window).
+    # and after arrival (see _extend_engine_window), and by _settled_position below (every stay,
+    # not just when lock/bridge detection is on) to keep excluding a still-under-power docking
+    # manoeuvre from a stay's own averaged position even past the point its speed alone already
+    # reads as "stopped" -- asked for explicitly: while the engine's still running, the skipper
+    # may still be actively working the boat into its final spot (bow thruster nudges, reversing,
+    # ...), not yet genuinely at rest, regardless of what the instantaneous SOG says.
     on_intervals_by_instance = _engine_on_intervals_by_instance(engine_samples)
+    on_intervals = _engine_on_intervals(engine_samples)
 
     runs = _classify_runs(samples, speed_threshold_ms)
     runs = _merge_short_stops(runs, min_stop, max_gap)
     if lock_radius_m is not None and lock_max_duration_minutes is not None:
-        on_intervals = _engine_on_intervals(engine_samples)
         lock_max_duration = timedelta(minutes=lock_max_duration_minutes)
         runs = _reclassify_locks(runs, samples, on_intervals, lock_radius_m, lock_max_duration)
         runs = _merge_adjacent(runs)
     runs = _split_runs_on_gaps(runs, max_gap)
-    runs = _merge_negligible_trips(runs, min_trip_distance_nm, max_gap)
+    effective_min_leg_distance_nm = (
+        min_leg_distance_nm if min_leg_distance_nm is not None else min_trip_distance_nm
+    )
+    runs = _merge_negligible_trips(runs, effective_min_leg_distance_nm, max_gap, lock_radius_m)
     log(f"[info] ...{len(runs)} run(s) classified, computing per-trip statistics...")
 
     stays: List[Optional[Stay]] = []
@@ -1043,8 +1150,7 @@ def build_trips(
         if label != "stationary":
             stays.append(None)
             continue
-        lat = sum(s.lat for s in group) / len(group)
-        lon = sum(s.lon for s in group) / len(group)
+        lat, lon = _settled_position(group, speed_threshold_ms, on_intervals)
         place = geocoder.place_name(lat, lon)
         stays.append(Stay(group[0].time, group[-1].time, lat, lon, place))
 

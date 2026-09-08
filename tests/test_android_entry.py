@@ -2,7 +2,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from nmea2000processor import android_entry
+from nmea2000processor.geocode import NoGeocoder
+from nmea2000processor.marine import NoMarine
 from nmea2000processor.model import PositionFix, SogSample
+from nmea2000processor.weather import NoWeather
 
 
 def _write_fake_ebl(tmp_path: Path, name: str = "000000_000.ebl") -> Path:
@@ -35,6 +38,13 @@ def _stub_one_trip_samples(monkeypatch):
     fixed_samples = ({10: fixes}, {10: sogs}, [], [], {}, {}, {}, [], {})
     monkeypatch.setattr(android_entry, "_collect_samples", lambda frames: fixed_samples)
     monkeypatch.setattr(android_entry, "_iter_frames_for_path", lambda path, state: iter([]))
+    # run_pipeline() now uses real Geocoder/WeatherFetcher/MarineFetcher instances by default (see
+    # its own doc comment) -- stubbed out here the same way test_cli.py's own tests always pass
+    # --no-geocode/--no-weather/--no-marine, so a plain test run never makes a real network request
+    # (Nominatim/Overpass/Open-Meteo).
+    monkeypatch.setattr(android_entry, "Geocoder", lambda **kwargs: NoGeocoder())
+    monkeypatch.setattr(android_entry, "WeatherFetcher", lambda **kwargs: NoWeather())
+    monkeypatch.setattr(android_entry, "MarineFetcher", lambda **kwargs: NoMarine())
 
 
 def test_run_pipeline_returns_error_for_no_ebl_paths(tmp_path):

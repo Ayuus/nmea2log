@@ -157,6 +157,43 @@ def test_config_file_no_backup_remote_path_leaves_backup_ebl_off(tmp_path, monke
     assert args.backup_ebl is False
 
 
+def test_config_file_with_all_upload_fields_enables_upload_without_a_separate_flag(tmp_path, monkeypatch):
+    """upload is no longer a separate enabled=true/false setting to keep in sync with the other
+    upload fields (asked for explicitly, to match the Android app's own settings: SettingsStore.
+    isSftpConfigComplete just checks host/user/password/remote_path are all filled in, no separate
+    toggle) -- a config file with host/user/remote_path/key_file all set, but no 'enabled' key at
+    all, must still default args.upload to True."""
+    config_path = tmp_path / "nmea2log.ini"
+    key_file = tmp_path / "key"
+    key_file.write_text("fake key", encoding="utf-8")
+    config_path.write_text(
+        "[nmea2log]\nno_geocode = true\n\n"
+        f"[upload]\nhost = example.com\nuser = me\nremote_path = logbook.html\nkey_file = {key_file}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    args = build_arg_parser().parse_args([])
+
+    assert args.upload is True
+
+
+def test_config_file_missing_one_upload_field_leaves_upload_off(tmp_path, monkeypatch):
+    """The same four-field completeness check as the Android app's isSftpConfigComplete -- a
+    config file missing even one of host/user/remote_path/key_file must not enable --upload by
+    default (there's nothing complete enough to actually connect with)."""
+    config_path = tmp_path / "nmea2log.ini"
+    config_path.write_text(
+        "[nmea2log]\nno_geocode = true\n\n[upload]\nhost = example.com\nuser = me\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    args = build_arg_parser().parse_args([])
+
+    assert args.upload is False
+
+
 def test_filter_to_dominant_engine_keeps_only_largest_instance():
     engine_samples = (
         [EngineSample(datetime(2026, 7, 15, 9, 0), 0, 8.0, 3600) for _ in range(10)]
@@ -341,9 +378,10 @@ def test_main_backs_up_only_the_logfiles_not_already_on_the_server(tmp_path, mon
     server (per list_remote_filenames_multi) must not be uploaded again, so a run only ever sends
     what's new since the last one."""
     # Isolated from any real nmea2log.ini for the same reason as the --upload test above -- this
-    # project's own [upload] section (enabled=true, a real remote_path) would otherwise supply
-    # defaults that trigger a *real* (if doomed-to-fail) --upload attempt before ever reaching
-    # the backup step this test is actually about (found in practice).
+    # project's own [upload] section (a real host/user/remote_path/key_file, complete enough to
+    # enable --upload by default) would otherwise supply defaults that trigger a *real* (if
+    # doomed-to-fail) --upload attempt before ever reaching the backup step this test is actually
+    # about (found in practice).
     monkeypatch.chdir(tmp_path)
     folder = tmp_path / "EBL000000"
     folder.mkdir()
@@ -708,3 +746,179 @@ def test_main_releases_the_lock_after_finishing(tmp_path: Path, monkeypatch):
     output = _run_with_one_trip(tmp_path, monkeypatch)
 
     assert not (output.parent / ".nmea2log.lock").exists()
+
+
+def _make_trip_cache_fixture(tmp_path: Path):
+    """Five files, each a clean stationary/moving slice of a season with three real trips split
+    across them:
+        f0: stay0 (dep)              f1: move -> trip1         f2: stay1 (arr trip1 / dep trip2)
+        f3: move -> trip2, stay2 (arr trip2 / dep trip3)        f4: move -> trip3, stay3 (arr trip3)
+    A run over f0..f3 finds exactly 2 trips (trip1, trip2); adding f4 in a later run finds a 3rd
+    (trip3) without changing the first two. Deliberately not split one-trip-per-file -- trip2's
+    own data straddles f2/f3, which is what makes the "back up one file" margin in
+    choose_resume_index() (trip_cache.py) actually matter for this test."""
+    def _dt(minute: int) -> datetime:
+        return datetime(2026, 7, 15, 8, 0, 0) + timedelta(minutes=minute)
+
+    def _stay(minutes, lat, lon):
+        fixes = [PositionFix(_dt(m), lat, lon) for m in minutes]
+        sogs = [SogSample(_dt(m), 0.0) for m in minutes]
+        return fixes, sogs
+
+    def _move(minutes, lat0, lon0, lat1, lon1):
+        minutes = list(minutes)
+        fixes, sogs = [], []
+        for i, m in enumerate(minutes):
+            frac = i / (len(minutes) - 1)
+            fixes.append(PositionFix(_dt(m), lat0 + (lat1 - lat0) * frac, lon0 + (lon1 - lon0) * frac))
+            sogs.append(SogSample(_dt(m), 3.0))
+        return fixes, sogs
+
+    f0_fixes, f0_sogs = _stay(range(0, 12), 52.30, 4.90)
+    f1_fixes, f1_sogs = _move(range(12, 42), 52.30, 4.90, 52.40, 4.95)
+    f2_fixes, f2_sogs = _stay(range(42, 54), 52.40, 4.95)
+    move2_fixes, move2_sogs = _move(range(54, 84), 52.40, 4.95, 52.50, 5.00)
+    stay2_fixes, stay2_sogs = _stay(range(84, 96), 52.50, 5.00)
+    f3_fixes, f3_sogs = move2_fixes + stay2_fixes, move2_sogs + stay2_sogs
+    move3_fixes, move3_sogs = _move(range(96, 126), 52.50, 5.00, 52.60, 5.05)
+    stay3_fixes, stay3_sogs = _stay(range(126, 138), 52.60, 5.05)
+    f4_fixes, f4_sogs = move3_fixes + stay3_fixes, move3_sogs + stay3_sogs
+
+    paths = {name: tmp_path / f"{name}.ebl" for name in ("f0", "f1", "f2", "f3", "f4")}
+    for path in paths.values():
+        path.write_bytes(b"x" * 100)
+
+    samples_by_name = {
+        "f0": ({10: f0_fixes}, {10: f0_sogs}, [], [], {}, {}, {}, [], {}),
+        "f1": ({10: f1_fixes}, {10: f1_sogs}, [], [], {}, {}, {}, [], {}),
+        "f2": ({10: f2_fixes}, {10: f2_sogs}, [], [], {}, {}, {}, [], {}),
+        "f3": ({10: f3_fixes}, {10: f3_sogs}, [], [], {}, {}, {}, [], {}),
+        "f4": ({10: f4_fixes}, {10: f4_sogs}, [], [], {}, {}, {}, [], {}),
+    }
+    return paths, samples_by_name
+
+
+def _stub_samples_by_path(monkeypatch, paths, samples_by_name, call_log):
+    """Like _stub_one_trip_samples, but returns *different* fixed samples per .ebl path instead
+    of the same ones for every file -- needed to test the trip cache's per-file skip logic, which
+    only makes sense when different files carry different data."""
+    path_to_name = {path.resolve(): name for name, path in paths.items()}
+
+    def fake_iter_frames_for_path(path, state):
+        return iter([path])  # frames are otherwise unused -- just a sentinel _collect_samples reads back
+
+    def fake_collect_samples(frames):
+        path = list(frames)[0]
+        name = path_to_name[Path(path).resolve()]
+        call_log.append(name)
+        return samples_by_name[name]
+
+    monkeypatch.setattr("nmea2000processor.cli._iter_frames_for_path", fake_iter_frames_for_path)
+    monkeypatch.setattr("nmea2000processor.cli._collect_samples", fake_collect_samples)
+
+
+@pytest.mark.skip(
+    reason="trip cache is unconditionally disabled in _run() (see its own comment there) -- "
+    "several of build_trips()'s 'first run in the whole dataset' edge cases fired incorrectly on "
+    "'first run of this reprocessed window' instead, producing real duplicate trips on live data. "
+    "Re-enable this test once that's fixed and the trip_cache_store = None short-circuit is removed."
+)
+def test_main_trip_cache_skips_decoding_already_settled_files_on_a_later_run(tmp_path, monkeypatch, capsys):
+    """Integration test for the trip cache: a second run with a new file appended must not
+    re-decode the file(s) whose trip(s) are already fully settled -- only the still-open last
+    known trip's own window, plus whatever's genuinely new, gets decoded again."""
+    paths, samples_by_name = _make_trip_cache_fixture(tmp_path)
+    call_log: list = []
+    _stub_samples_by_path(monkeypatch, paths, samples_by_name, call_log)
+
+    common_args = [
+        "-o", str(tmp_path / "logbook.csv"), "--no-geocode", "--no-weather", "--no-marine",
+        "--no-sample-cache", "--lock-radius-m", "-1",
+        "--trip-cache-file", str(tmp_path / "trips.pkl"),
+    ]
+    run1_files = [paths["f0"], paths["f1"], paths["f2"], paths["f3"]]
+
+    exit_code = main([str(p) for p in run1_files] + common_args)
+
+    assert exit_code == 0
+    assert call_log == ["f0", "f1", "f2", "f3"]  # nothing cached yet -- everything decoded
+    assert "[info] 2 trip(s) found" in capsys.readouterr().err
+
+    call_log.clear()
+    run2_files = run1_files + [paths["f4"]]
+
+    exit_code = main([str(p) for p in run2_files] + common_args)
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "f0" not in call_log  # fully part of the now-settled first trip -- never touched again
+    assert "f4" in call_log  # genuinely new data is always decoded
+    assert len(call_log) < 5  # a real saving happened, not just "decode everything anyway"
+    assert "[cache] Reusing" in captured.err
+    assert "already-settled trip(s)" in captured.err
+    assert "[info] 3 trip(s) found" in captured.err  # trip1 (cached) + trip2 + trip3, none lost or duplicated
+
+
+@pytest.mark.skip(reason="trip cache is unconditionally disabled in _run() -- see the skip reason above")
+def test_main_trip_cache_is_invalidated_by_a_changed_threshold(tmp_path, monkeypatch, capsys):
+    """A cache built under one set of build_trips() parameters must never be served to a run with
+    different ones -- see config_signature() in trip_cache.py. Proven here by a changed
+    --speed-threshold-kn forcing every file to be decoded again, not just the usual recent
+    window."""
+    paths, samples_by_name = _make_trip_cache_fixture(tmp_path)
+    call_log: list = []
+    _stub_samples_by_path(monkeypatch, paths, samples_by_name, call_log)
+
+    trip_cache_file = tmp_path / "trips.pkl"
+    run1_files = [paths["f0"], paths["f1"], paths["f2"], paths["f3"]]
+    main(
+        [str(p) for p in run1_files]
+        + ["-o", str(tmp_path / "logbook.csv"), "--no-geocode", "--no-weather", "--no-marine",
+           "--no-sample-cache", "--lock-radius-m", "-1",
+           "--trip-cache-file", str(trip_cache_file)]
+    )
+    call_log.clear()
+    capsys.readouterr()
+
+    exit_code = main(
+        [str(p) for p in run1_files]
+        + ["-o", str(tmp_path / "logbook.csv"), "--no-geocode", "--no-weather", "--no-marine",
+           "--no-sample-cache", "--lock-radius-m", "-1",
+           "--trip-cache-file", str(trip_cache_file), "--speed-threshold-kn", "0.8"]
+    )
+
+    assert exit_code == 0
+    assert call_log == ["f0", "f1", "f2", "f3"]  # the changed threshold invalidated the cache entirely
+
+
+@pytest.mark.skip(reason="trip cache is unconditionally disabled in _run() -- see the skip reason above")
+def test_main_trip_cache_falls_back_when_the_resume_file_is_gone(tmp_path, monkeypatch, capsys):
+    """If the file a cached run recorded as its resume point can no longer be found among the
+    given logfiles (moved, deleted, or --ebl-dir/logfiles now points somewhere else), the cache
+    must not be guessed at -- it's logged and the run falls back to treating every given file as
+    needing to be decoded, exactly like there was no cache at all."""
+    paths, samples_by_name = _make_trip_cache_fixture(tmp_path)
+    call_log: list = []
+    _stub_samples_by_path(monkeypatch, paths, samples_by_name, call_log)
+
+    trip_cache_file = tmp_path / "trips.pkl"
+    run1_files = [paths["f0"], paths["f1"], paths["f2"], paths["f3"]]
+    main(
+        [str(p) for p in run1_files]
+        + ["-o", str(tmp_path / "logbook.csv"), "--no-geocode", "--no-weather", "--no-marine",
+           "--no-sample-cache", "--lock-radius-m", "-1",
+           "--trip-cache-file", str(trip_cache_file)]
+    )
+    call_log.clear()
+    capsys.readouterr()
+
+    # A disjoint file set -- none of these were the run's own recorded resume file.
+    main(
+        [str(paths["f4"])]
+        + ["-o", str(tmp_path / "logbook.csv"), "--no-geocode", "--no-weather", "--no-marine",
+           "--no-sample-cache", "--lock-radius-m", "-1",
+           "--trip-cache-file", str(trip_cache_file)]
+    )
+
+    assert call_log == ["f4"]  # still decoded -- fallback, not a skip based on a guess
+    assert "resume file isn't among the given logfiles" in capsys.readouterr().err

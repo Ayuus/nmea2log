@@ -21,6 +21,26 @@ _log_sink: Optional[Callable[[str], None]] = None
 
 DEFAULT_LOG_RETENTION_DAYS = 90.0
 
+# "info" (the default) and "debug", in ascending verbosity -- deliberately just two, not a full
+# logging-module-style hierarchy: the only distinction this app actually needs is "worth showing
+# on a normal run" vs. "routine per-item chatter that's only useful when actively troubleshooting"
+# (e.g. one line per already-downloaded .ebl file -- found in practice: a normal day-to-day sync
+# with a couple thousand files already local produced that many lines on screen/in the Android
+# notification for zero new information, drowning out the handful of lines that actually mattered).
+_LEVELS = {"debug": 0, "info": 1}
+_console_level = "info"
+
+
+def set_log_level(level: str) -> None:
+    """Changes the minimum level printed to the console/forwarded to the log sink (see
+    set_log_sink) -- the log file itself (see set_log_file) always receives every level
+    regardless, so lowering this never loses anything from the on-disk troubleshooting history,
+    it only trims what's shown live."""
+    if level not in _LEVELS:
+        raise ValueError(f"unknown log level {level!r} (expected one of {sorted(_LEVELS)})")
+    global _console_level
+    _console_level = level
+
 
 def set_log_sink(sink: Optional[Callable[[str], None]]) -> None:
     """Lets a caller receive every log() line as it's produced, on top of the normal print (and
@@ -64,7 +84,7 @@ def _prune_old_lines(path: Path, retention_days: float) -> None:
         path.write_text("".join(kept), encoding="utf-8")
 
 
-def log(message: str, *, file: TextIO = sys.stdout) -> None:
+def log(message: str, *, file: TextIO = sys.stdout, level: str = "info") -> None:
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     # Every line, not just the first -- a lot of what gets logged here is a multi-line dump of
     # someone else's output (e.g. the sftp client's own error text, banner included), and with
@@ -72,11 +92,15 @@ def log(message: str, *, file: TextIO = sys.stdout) -> None:
     # happened meant hunting upward for the nearest timestamp above it (found in practice, asked
     # for explicitly).
     line = "\n".join(f"{timestamp} {part}" for part in message.split("\n"))
-    print(line, file=file)
     if _log_file is not None:
         # Flushed immediately, not just on process exit -- if the process gets killed abruptly
         # (e.g. the terminal window closed mid-run, the exact scenario this file exists to help
-        # diagnose), whatever was logged right up to that point should still be on disk.
+        # diagnose), whatever was logged right up to that point should still be on disk. Written
+        # regardless of _console_level -- this file is the one place the full detail always
+        # survives, console/sink filtering is purely about what's shown *live*.
         print(line, file=_log_file, flush=True)
+    if _LEVELS[level] < _LEVELS[_console_level]:
+        return
+    print(line, file=file)
     if _log_sink is not None:
         _log_sink(line)

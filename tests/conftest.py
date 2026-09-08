@@ -7,7 +7,7 @@ def _isolate_cwd_from_the_real_nmea2log_ini(tmp_path, monkeypatch):
     directory. ``config.DEFAULT_CONFIG_PATH`` resolves "nmea2log.ini" relative to the current
     working directory, so without this, any test that builds an argparse namespace (via
     ``build_arg_parser()``/``main()``) picks up this project's own real ``nmea2log.ini`` as
-    config defaults -- including its real ``[upload] enabled = true`` and real SFTP credentials.
+    config defaults -- including its real, complete ``[upload]`` settings and real SFTP credentials.
 
     Found in practice: a test with a fixed, deterministic single-trip fixture (see
     ``_run_with_one_trip`` in test_cli.py) that didn't isolate its cwd silently uploaded that

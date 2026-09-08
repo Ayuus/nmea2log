@@ -55,7 +55,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .config import DEFAULT_CONFIG_PATH, load_section
-from .log import log
+from .log import log, set_log_level
 
 SD_LOG_ROOT = "/sdcard/logs/ebl_data_logs"
 
@@ -311,7 +311,12 @@ def download_file(
     target = target_dir / info["file_name"]
 
     if not _will_download(target, info):
-        log(f"[skip] {folder}/{info['file_name']} already complete locally")
+        # debug, not info: on a normal day-to-day sync this fires for every already-downloaded
+        # file in the folder being checked -- easily a couple thousand lines with zero new
+        # information, drowning out the one summary line (build_download_plan()'s own "N of M
+        # file(s) still need downloading") that actually says anything. Still written to the log
+        # file in full (see log()), just not shown live/forwarded to the Android UI.
+        log(f"[skip] {folder}/{info['file_name']} already complete locally", level="debug")
         return
 
     if should_cancel is not None and should_cancel():
@@ -420,6 +425,11 @@ def download_file(
         stamp = datetime.fromtimestamp(file_time, tz=timezone.utc).isoformat()
     else:
         stamp = "NO GPS TIME (1980 stamp)"
+    # Stays at info, unlike the "[skip] ... already complete locally" line above -- found in
+    # practice, immediately: with both at debug there was no visible progress signal at all during
+    # an actual download (only the totals logged once up front), which for a real multi-file
+    # download (easily minutes long) reads exactly like a hang. "[skip]" is pure noise (every
+    # already-local file, every run); a genuinely new download is the actual work happening.
     log(f"[ok] {folder}/{info['file_name']} ({info['file_size']} bytes, {stamp})")
 
 
@@ -502,11 +512,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help=f"Path to the INI config file (default: {DEFAULT_CONFIG_PATH})",
     )
+    parser.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help="Show routine per-item detail too (every already-local .ebl file skipped), not "
+        "just the per-run summary lines",
+    )
     return parser
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_arg_parser().parse_args(argv)
+    if args.verbose:
+        set_log_level("debug")
     config = load_config(args.config)
 
     try:

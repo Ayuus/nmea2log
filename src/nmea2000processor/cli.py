@@ -16,7 +16,7 @@ from .marine import MarineFetcher, NoMarine
 from .weather import NoWeather, WeatherFetcher
 from .gpx_writer import write_gpx
 from .html_writer import _DEFAULT_LOG_INTERVAL_MINUTES, _DEFAULT_REMARKS_API_URL, write_html_logbook
-from .log import DEFAULT_LOG_RETENTION_DAYS, log, set_log_file
+from .log import DEFAULT_LOG_RETENTION_DAYS, log, set_log_file, set_log_level
 from .logbook_writer import write_csv
 from .model import (
     AttitudeSample,
@@ -31,6 +31,7 @@ from .model import (
     WaterTempSample,
 )
 from .sample_cache import SampleCache
+from .trip_cache import TripCache, choose_resume_index, config_signature, find_resume_index
 from .pgn_decode import (
     PGN_ATTITUDE,
     PGN_BATTERY_STATUS,
@@ -315,6 +316,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         f"{DEFAULT_LOG_RETENTION_DAYS:g} days)",
     )
     parser.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help="Show routine per-item detail too (every already-local .ebl file skipped, ...), "
+        "not just the per-run summary lines -- this detail is always in nmea2log.log regardless, "
+        "so this only affects what's printed to the console",
+    )
+    parser.add_argument(
         "--speed-threshold-kn",
         type=float,
         default=0.5,
@@ -338,8 +346,27 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--min-trip-distance-nm",
         type=float,
         default=0.1,
-        help="Trips covering less than this are filtered out as GPS/speed noise instead of "
-        "shown as a (meaningless) logbook row (default 0.1 nm)",
+        help="A *finished* trip covering less than this is filtered out entirely as GPS/speed "
+        "noise instead of shown as a (meaningless) logbook row (default 0.1 nm)",
+    )
+    parser.add_argument(
+        "--min-leg-distance-nm",
+        type=float,
+        default=0.2,
+        help="How short an in-transit leg between two stays can be before it's folded into its "
+        "surrounding stay instead of ending one trip and starting another -- e.g. repositioning "
+        "within the same harbour. Deliberately separate from and looser than "
+        "--min-trip-distance-nm, which also decides whether an already-finished trip is real "
+        "enough to appear in the logbook at all, so it has to stay tight. Set with a real "
+        "tradeoff in mind, using the closest two real, confirmed anchors found so far: a genuine "
+        "same-harbour final-approach hop (0.142 nm, Kerners -> Port du Crouesty) that must fold, "
+        "and a genuine trip to a real, different nearby place (0.488 nm, Port Olona -> Les "
+        "Sables-d'Olonne) that must not -- 0.2 nm sits closer to the fold case, on the owner's own "
+        "judgment that Port du Crouesty's own harbour is sizeable enough that a value nearer to "
+        "the middle of the gap felt too loose. A value picked without checking against real data "
+        "caused a live-site incident before (0.5 nm silently merged that same real, different-"
+        "place trip) -- verify any change to this default against a full season's worth of real "
+        "trips, not just a handful of synthetic ones, before changing it again.",
     )
     parser.add_argument(
         "--lock-radius-m",
@@ -376,6 +403,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Cache directory for decoded .ebl samples, one small file per .ebl file "
         "(default .ebl_sample_cache.pkl; a legacy single-file cache at this path from an "
         "older version is migrated automatically)",
+    )
+    parser.add_argument(
+        "--no-trip-cache",
+        action="store_true",
+        help="Always rebuild every trip from scratch, instead of reusing already-'settled' "
+        "trips (everything before the last known trip's own departure) cached from a previous "
+        "run -- see --trip-cache-file",
+    )
+    parser.add_argument(
+        "--trip-cache-file",
+        type=Path,
+        default=Path(".trip_cache.pkl"),
+        help="Cache file for already-settled trips, so a normal run only has to decode and "
+        "rebuild the recent window since the last known trip's departure instead of the whole "
+        "archive every time (default .trip_cache.pkl)",
     )
     parser.add_argument(
         "--cache-file",
@@ -490,11 +532,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-upload",
         action="store_true",
-        help="Force-disable both --upload and --backup-ebl for this run, overriding even the "
-        "config file's own 'enabled' setting and a non-blank 'backup_remote_path' -- use this for "
-        "a local test run so it can never touch the live site by accident (found in practice: a "
-        "local test run with --no-geocode still uploaded, since the config file enables upload by "
-        "default regardless of that flag)",
+        help="Force-disable both --upload and --backup-ebl for this run, overriding even a "
+        "config file whose 'upload'/'backup_remote_path' settings are otherwise complete enough "
+        "to enable them by default -- use this for a local test run so it can never touch the "
+        "live site by accident (found in practice: a local test run with --no-geocode still "
+        "uploaded, since the config file enables upload by default regardless of that flag)",
     )
     parser.add_argument(
         "--upload-host",
@@ -574,6 +616,7 @@ def _apply_config_defaults(parser: argparse.ArgumentParser) -> None:
         ("min_stop_minutes", float),
         ("max_gap_minutes", float),
         ("min_trip_distance_nm", float),
+        ("min_leg_distance_nm", float),
         ("cache_file", Path),
         ("weather_cache_file", Path),
         ("marine_cache_file", Path),
@@ -590,12 +633,15 @@ def _apply_config_defaults(parser: argparse.ArgumentParser) -> None:
         ("lock_radius_m", float),
         ("lock_max_duration_minutes", float),
         ("sample_cache_file", Path),
+        ("trip_cache_file", Path),
         ("log_retention_days", float),
     ):
         if key in section:
             defaults[key] = caster(section[key])
     if "no_geocode" in section:
         defaults["no_geocode"] = _bool(section["no_geocode"])
+    if "no_trip_cache" in section:
+        defaults["no_trip_cache"] = _bool(section["no_trip_cache"])
     if "no_weather" in section:
         defaults["no_weather"] = _bool(section["no_weather"])
     if "no_marine" in section:
@@ -608,8 +654,15 @@ def _apply_config_defaults(parser: argparse.ArgumentParser) -> None:
         defaults["gpx"] = _bool(section["gpx"])
 
     upload_section = load_section("upload")
-    if "enabled" in upload_section:
-        defaults["upload"] = _bool(upload_section["enabled"])
+    # Enabled by the four required settings themselves all being non-blank, not a separate
+    # enabled=true/false to keep in sync with them -- matches the Android app's own settings
+    # (SettingsStore.isSftpConfigComplete: host/user/password/remote_path all filled in, no
+    # separate toggle) and the backup_remote_path pattern just below (asked for explicitly,
+    # "beide moeten hetzelfde werken"). --upload on the command line (with the other --upload-*
+    # flags given directly, no config file involved) still works as its own independent opt-in
+    # either way.
+    if all(upload_section.get(key, "").strip() for key in ("host", "user", "remote_path", "key_file")):
+        defaults["upload"] = True
     # Enabled by the mere presence of a non-blank backup_remote_path, not a separate on/off
     # setting to keep in sync with it -- matches the Android app's own settings (asked for
     # explicitly, "beide moeten hetzelfde werken"). --backup-ebl on the command line (with
@@ -704,13 +757,15 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     # leaves nothing to check afterwards -- particularly for a --backup-ebl run that can take a
     # while and is easy to interrupt by closing the window too early (found in practice).
     set_log_file(args.output.parent / "nmea2log.log", retention_days=args.log_retention_days)
+    if args.verbose:
+        set_log_level("debug")
 
     if args.no_upload:
-        # Overrides even a config-file default of enabled=true or a non-blank backup_remote_path
-        # -- the whole point is a way to run locally that's *guaranteed* not to touch the live
-        # site, regardless of
-        # what's already sitting in nmea2log.ini (found in practice: forgetting that upload is
-        # enabled by default there is exactly what caused a live-site incident twice).
+        # Overrides even a config file whose 'upload'/'backup_remote_path' settings are complete
+        # enough to enable them by default (see _apply_config_defaults) -- the whole point is a
+        # way to run locally that's *guaranteed* not to touch the live site, regardless of what's
+        # already sitting in nmea2log.ini (found in practice: forgetting that upload is enabled
+        # by default there is exactly what caused a live-site incident twice).
         args.upload = False
         args.backup_ebl = False
 
@@ -760,12 +815,76 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
 
     ebl_time_state: Dict[str, object] = {}
     sample_cache = None if args.no_sample_cache else SampleCache(args.sample_cache_file)
+
+    # Computed from every build_trips() parameter below (plus anything else that changes what a
+    # cached trip looks like, e.g. the geocoding language) *before* the trip cache is loaded, so
+    # a cache built under different settings is never silently trusted -- see config_signature()
+    # in trip_cache.py.
+    trip_signature = config_signature(
+        speed_threshold_kn=args.speed_threshold_kn,
+        min_stop_minutes=args.min_stop_minutes,
+        max_gap_minutes=args.max_gap_minutes,
+        min_trip_distance_nm=args.min_trip_distance_nm,
+        min_leg_distance_nm=args.min_leg_distance_nm,
+        lock_radius_m=args.lock_radius_m,
+        lock_max_duration_minutes=args.lock_max_duration_minutes,
+        no_geocode=args.no_geocode,
+        language=args.language,
+        engine_count=args.engine_count,
+    )
+    # Disabled unconditionally for now, regardless of --no-trip-cache -- found in practice, on
+    # real data: build_trips() has several "this is the very first run in the whole dataset"
+    # edge cases (see _merge_negligible_trips()/_reclassify_locks() in tripbuilder.py) that fire
+    # incorrectly on "the first run of this reprocessed *window*" once that window no longer
+    # starts at the true beginning of the season, producing real duplicate/junk trips in the
+    # output (confirmed live: the same short in-harbour manoeuvre reappeared as its own separate
+    # trip on every run). Needs a redesign (e.g. an explicit "this window has cached history
+    # before it" signal into those edge cases) before this is safe to re-enable -- until then,
+    # every run always rebuilds every trip from scratch, same as before this feature existed.
+    trip_cache_store = None
+    settled_trips: list = []
+    resume_index = 0  # first file index this run actually needs to decode -- 0 unless a usable
+    # trip cache says otherwise, i.e. every file is decoded exactly like before trip caching existed
+    if trip_cache_store is not None:
+        cached_trip_data = trip_cache_store.load(trip_signature)
+        if cached_trip_data is not None:
+            cached_settled_trips, resume_from_file, resume_ebl_time_state = cached_trip_data
+            found_index = find_resume_index(args.logfiles, resume_from_file)
+            if found_index is None:
+                log(
+                    "[cache] Trip cache's resume file isn't among the given logfiles anymore -- "
+                    "rebuilding all trips from scratch.",
+                    file=sys.stderr,
+                )
+            else:
+                settled_trips = cached_settled_trips
+                resume_index = found_index
+                ebl_time_state["current"] = resume_ebl_time_state
+                log(
+                    f"[cache] Reusing {len(settled_trips)} already-settled trip(s); skipping "
+                    f"decode of {resume_index}/{len(args.logfiles)} file(s), resuming from "
+                    f"{args.logfiles[resume_index].name}.",
+                    file=sys.stderr,
+                )
+
     cache_hits = 0
     last_progress_log = time.monotonic()
+    # Only populated for file indices actually decoded this run (>= resume_index) -- used purely
+    # to pick where the *next* run should resume from, see choose_resume_index() in trip_cache.py.
+    file_first_time_by_index: Dict[int, Optional[datetime]] = {}
+    ebl_time_state_before_file: Dict[int, object] = {}
     for idx, path in enumerate(args.logfiles, start=1):
+        file_index = idx - 1
+        if file_index < resume_index:
+            # Already fully represented by settled_trips -- never even touched, not even to
+            # check the sample cache, which is exactly the decode-time and decompression cost
+            # this whole trip cache exists to avoid paying every single run.
+            continue
         if not path.exists():
             log(f"[error] Log file not found: {path}", file=sys.stderr)
             return 1
+
+        ebl_time_state_before_file[file_index] = ebl_time_state.get("current")
 
         cached = sample_cache.get(path) if sample_cache is not None else None
         if cached is not None:
@@ -779,6 +898,13 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
             fixes, sogs, engine, trip_fuel, depth, water_temp, battery, rpm, attitude = samples
             if sample_cache is not None:
                 sample_cache.put(path, samples, ebl_time_state.get("current"))
+
+        file_first_time: Optional[datetime] = None
+        for source_fixes in fixes.values():
+            if source_fixes:
+                candidate_time = min(f.time for f in source_fixes)
+                file_first_time = candidate_time if file_first_time is None else min(file_first_time, candidate_time)
+        file_first_time_by_index[file_index] = file_first_time
 
         now = time.monotonic()
         if now - last_progress_log >= _DECODE_PROGRESS_INTERVAL_S and idx < len(args.logfiles):
@@ -803,10 +929,11 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     # rather than the run having silently died one file short.
     log(f"[info] ...decoded {len(args.logfiles)}/{len(args.logfiles)} logfile(s) so far", file=sys.stderr)
 
+    decoded_file_count = len(args.logfiles) - resume_index
     if sample_cache is not None and cache_hits:
         log(
-            f"[cache] reused decoded samples for {cache_hits}/{len(args.logfiles)} file(s), "
-            f"only re-parsed {len(args.logfiles) - cache_hits}",
+            f"[cache] reused decoded samples for {cache_hits}/{decoded_file_count} file(s), "
+            f"only re-parsed {decoded_file_count - cache_hits}",
             file=sys.stderr,
         )
 
@@ -830,7 +957,7 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
 
-    if not all_fixes:
+    if not all_fixes and not settled_trips:
         log("[error] No position data (PGN 129025) found.", file=sys.stderr)
         return 1
 
@@ -841,30 +968,42 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     weather = NoWeather() if args.no_weather else WeatherFetcher(cache_file=args.weather_cache_file)
     marine = NoMarine() if args.no_marine else MarineFetcher(cache_file=args.marine_cache_file)
 
-    # Found in practice: build_trips() (and write_html_logbook() below) can run for a real stretch
-    # of time on a full multi-year archive (millions of merged GPS fixes) with zero log output in
-    # between -- decode's own progress logging (see _DECODE_PROGRESS_INTERVAL_S) stops the moment
-    # the last file is read, leaving nothing on screen to distinguish "still working" from "hung"
-    # or "already crashed silently" for however long this phase takes.
-    log(f"[info] Reizen opbouwen uit {len(all_fixes)} GPS-posities...", file=sys.stderr)
-    trips = build_trips(
-        all_fixes,
-        all_sogs,
-        all_engine,
-        all_trip_fuel,
-        all_depth,
-        all_water_temp,
-        all_battery,
-        all_rpm,
-        all_attitude,
-        geocoder=geocoder,
-        speed_threshold_kn=args.speed_threshold_kn,
-        min_stop_minutes=args.min_stop_minutes,
-        max_gap_minutes=args.max_gap_minutes,
-        min_trip_distance_nm=args.min_trip_distance_nm,
-        lock_radius_m=args.lock_radius_m if args.lock_radius_m >= 0 else None,
-        lock_max_duration_minutes=args.lock_max_duration_minutes,
-    )
+    if all_fixes:
+        # Found in practice: build_trips() (and write_html_logbook() below) can run for a real
+        # stretch of time on a full multi-year archive (millions of merged GPS fixes) with zero
+        # log output in between -- decode's own progress logging (see
+        # _DECODE_PROGRESS_INTERVAL_S) stops the moment the last file is read, leaving nothing on
+        # screen to distinguish "still working" from "hung" or "already crashed silently" for
+        # however long this phase takes.
+        log(f"[info] Reizen opbouwen uit {len(all_fixes)} GPS-posities...", file=sys.stderr)
+        fresh_trips = build_trips(
+            all_fixes,
+            all_sogs,
+            all_engine,
+            all_trip_fuel,
+            all_depth,
+            all_water_temp,
+            all_battery,
+            all_rpm,
+            all_attitude,
+            geocoder=geocoder,
+            speed_threshold_kn=args.speed_threshold_kn,
+            min_stop_minutes=args.min_stop_minutes,
+            max_gap_minutes=args.max_gap_minutes,
+            min_trip_distance_nm=args.min_trip_distance_nm,
+            min_leg_distance_nm=args.min_leg_distance_nm,
+            lock_radius_m=args.lock_radius_m if args.lock_radius_m >= 0 else None,
+            lock_max_duration_minutes=args.lock_max_duration_minutes,
+        )
+    else:
+        # The reprocessed window (from the last known trip's own departure onward, see
+        # resume_index above) happened to contain no position data at all -- e.g. everything
+        # since then is still exactly the one already-fully-decoded file it resumed from, with
+        # nothing new after it yet. Nothing left to (re)build; settled_trips alone, below, is
+        # still a perfectly good result.
+        fresh_trips = []
+
+    trips = settled_trips + fresh_trips
 
     if not trips:
         log(
@@ -872,6 +1011,26 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
+
+    if trip_cache_store is not None and fresh_trips:
+        # Every trip except the newest one is now eligible to freeze -- see the module docstring
+        # in trip_cache.py for why the newest trip specifically is never cached, even here.
+        new_settled_trips = settled_trips + fresh_trips[:-1]
+        # The reference point for where the *next* run can safely resume from is the arrival of
+        # the trip right before the still-open last one -- i.e. the start of the stay that last
+        # trip departs from -- not that last trip's own departure. See choose_resume_index() in
+        # trip_cache.py for why using anything later than this reintroduces an already-settled
+        # trip a second time. Falls back to the last trip's own departure only when there's no
+        # earlier trip at all yet (nothing before it that could be duplicated).
+        resume_reference_time = (
+            new_settled_trips[-1].arrive_time if new_settled_trips else fresh_trips[-1].depart_time
+        )
+        new_resume_index = choose_resume_index(
+            sorted(file_first_time_by_index.items()), resume_reference_time, resume_index
+        )
+        new_resume_file = str(args.logfiles[new_resume_index].resolve())
+        new_resume_state = ebl_time_state_before_file.get(new_resume_index)
+        trip_cache_store.save(new_settled_trips, new_resume_file, new_resume_state, trip_signature)
 
     log(f"[info] {len(trips)} trip(s) found, writing logbook...", file=sys.stderr)
     trip_uids = assign_trip_ids(trips, utc_offset_hours=args.utc_offset)
