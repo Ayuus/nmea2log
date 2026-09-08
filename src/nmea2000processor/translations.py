@@ -389,7 +389,11 @@ LANGUAGES: Dict[str, Dict[str, str]] = {"nl": NL, "en": EN, "fr": FR, "de": DE}
 MONTH_ABBR: Dict[str, Dict[str, str]] = {
     "nl": MONTH_ABBR_NL, "en": MONTH_ABBR_EN, "fr": MONTH_ABBR_FR, "de": MONTH_ABBR_DE,
 }
-# "en" is plain text, not a country flag, unlike the others -- English isn't tied to one country
-# the way Dutch/French/German are here, and a UK flag (the obvious flag choice) reads as "GB" to
-# a lot of people rather than "English" (asked for explicitly to change).
-LANGUAGE_FLAGS: Dict[str, str] = {"nl": "\U0001F1F3\U0001F1F1", "en": "EN", "fr": "\U0001F1EB\U0001F1F7", "de": "\U0001F1E9\U0001F1EA"}
+# Plain text language codes for all four, not flag emoji -- found in practice: a regional-
+# indicator flag emoji (see the "en" one specifically -- English isn't tied to one country the
+# way Dutch/French/German are, so it stood out even as an emoji) renders as literal, unpaired
+# letters (not a flag glyph at all) on at least one real device/browser this site is viewed from.
+# Switching every language to plain text instead of just "en" keeps the four switcher buttons
+# visually consistent with each other (see html_writer.py's .lang-flag-text styling), rather than
+# reintroducing the asymmetry of one text label sitting next to three real flag emoji.
+LANGUAGE_FLAGS: Dict[str, str] = {"nl": "nl", "en": "en", "fr": "fr", "de": "de"}

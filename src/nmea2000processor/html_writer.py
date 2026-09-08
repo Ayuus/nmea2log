@@ -1001,8 +1001,8 @@ def write_html_logbook(
     # applyLanguage() below corrects this to the visitor's saved/browser language once the page's
     # own JS runs.
     lang_switcher_html = '<div class="lang-switcher">' + "".join(
-        f'<button type="button" class="lang-flag{" active" if lang == "nl" else ""}" '
-        f'data-lang="{lang}" aria-label="{lang}">{flag}</button>'
+        f'<button type="button" class="lang-flag{" lang-flag-text" if flag.isascii() else ""}'
+        f'{" active" if lang == "nl" else ""}" data-lang="{lang}" aria-label="{lang}">{flag}</button>'
         for lang, flag in LANGUAGE_FLAGS.items()
     ) + "</div>"
 
@@ -1030,6 +1030,17 @@ def write_html_logbook(
   .lang-flag {{
     cursor: pointer; border: 1px solid #ccc; background: white; border-radius: 4px;
     padding: 0.15em 0.4em; font-size: 1.2em; line-height: 1.3;
+  }}
+  /* Every language switcher button is plain text (nl/en/fr/de), not an emoji flag -- found in
+     practice: a regional-indicator flag emoji renders as literal, unpaired letters (not a flag
+     glyph at all) on at least one real device/browser this site is viewed from, see
+     translations.py's LANGUAGE_FLAGS for the full history. Without this class, plain text sits in
+     the same box as an emoji would but reads as unstyled leftover text rather than a matching
+     button; a fixed min-width plus a subtle background/weight gives it the same visual footprint
+     an emoji flag would have had. */
+  .lang-flag-text {{
+    min-width: 1.6em; text-align: center; font-size: 0.75em; font-weight: 700;
+    background: #eef3fa; letter-spacing: 0.02em;
   }}
   .lang-flag.active {{ border-color: #1a6ecc; box-shadow: 0 0 0 1px #1a6ecc inset; }}
   .last-updated {{ color: #666; font-size: 0.85em; margin-bottom: 1em; }}
