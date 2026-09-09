@@ -5,8 +5,8 @@ files) makes it visible how much time each step actually costs.
 Every message optionally also goes to a persistent log file (see ``set_log_file``) -- console
 output alone disappears the moment the terminal window closes, which for a run launched by
 double-clicking a .bat file (no separate "did it finish?" step) leaves nothing to check
-afterwards, particularly for something like --backup-ebl that can take a while and is easy to
-interrupt by closing the window too early (found in practice).
+afterwards, particularly for a run that can take a while and is easy to interrupt by closing the
+window too early (found in practice).
 """
 
 from __future__ import annotations

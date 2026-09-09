@@ -56,7 +56,7 @@ def test_set_log_file_also_writes_every_subsequent_log_call_to_the_file(tmp_path
 
 def test_set_log_file_appends_across_runs_instead_of_overwriting(tmp_path, monkeypatch):
     """A log file that gets overwritten on every run would only ever show the most recent one --
-    the whole point here is a history to check back on later (e.g. how a --backup-ebl run that
+    the whole point here is a history to check back on later (e.g. how a long download run that
     got interrupted progressed across several separate runs)."""
     monkeypatch.setattr(log_module, "_log_file", None)
     log_path = tmp_path / "nmea2log.log"

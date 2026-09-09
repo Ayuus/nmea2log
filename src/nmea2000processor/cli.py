@@ -55,25 +55,10 @@ from .pgn_decode import (
 )
 from .trip_ids import assign_trip_ids
 from .tripbuilder import TRIP_LOGIC_VERSION, build_trips
-from .upload import (
-    UploadError,
-    list_remote_filenames_multi,
-    upload_file,
-    upload_files_to_dirs,
-    upload_via_rest,
-)
+from .upload import UploadError, upload_file, upload_via_rest
 
 _T = TypeVar("_T")
 _ArrayT = TypeVar("_ArrayT")  # one of fix_array.py's array.array-backed sample collections
-
-# How many logfiles --backup-ebl uploads per SFTP session, rather than all of them (potentially
-# 1000+, several MB each on a first-ever backup run) in one -- found in practice: a shared-hosting
-# server reset the connection partway through a single giant session (12 files/~60 MB in),
-# discarding whatever hadn't already landed. Smaller sessions mean a reset loses less progress at
-# once, and there's nothing to gain from one huge session anyway (list_remote_filenames already
-# makes the whole thing resumable across runs; nothing here depends on one session covering
-# everything).
-_BACKUP_CHUNK_SIZE = 25
 
 # How often (in seconds of wall-clock time, not file count) to log decode progress while working
 # through args.logfiles -- a real archive can be 1000+ files, and decoding the ones not already in
@@ -546,11 +531,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-upload",
         action="store_true",
-        help="Force-disable both --upload and --backup-ebl for this run, overriding even a "
-        "config file whose 'upload'/'backup_remote_path' settings are otherwise complete enough "
-        "to enable them by default -- use this for a local test run so it can never touch the "
-        "live site by accident (found in practice: a local test run with --no-geocode still "
-        "uploaded, since the config file enables upload by default regardless of that flag)",
+        help="Force-disable --upload and --upload-rest for this run, overriding even a config "
+        "file whose 'upload'/'upload_rest' settings are otherwise complete enough to enable them "
+        "by default -- use this for a local test run so it can never touch the live site by "
+        "accident (found in practice: a local test run with --no-geocode still uploaded, since "
+        "the config file enables upload by default regardless of that flag)",
     )
     parser.add_argument(
         "--upload-host",
@@ -613,22 +598,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="WordPress Application Password for the REST upload (only with --upload-rest) -- "
         "generated on the account's own profile page (Users > Profile > Application Passwords), "
         "not the account's real login password",
-    )
-    parser.add_argument(
-        "--backup-ebl",
-        action="store_true",
-        help="Back up this run's own logfiles (e.g. .ebl files) to the SFTP server too, so "
-        "they're not only sitting on whatever device downloaded them (see 'backup-remote-path', "
-        "or the matching [upload] settings in the config file; reuses --upload-host/-user/"
-        "-key-file/-port). Skips files already present on the server, so only ever uploads "
-        "what's new since the last run.",
-    )
-    parser.add_argument(
-        "--backup-remote-path",
-        type=str,
-        default=None,
-        help="Destination directory on the SFTP server for the logfile backup (only with "
-        "--backup-ebl)",
     )
     parser.add_argument(
         "--ebl-dir",
@@ -702,10 +671,9 @@ def _apply_config_defaults(parser: argparse.ArgumentParser) -> None:
     # Enabled by the four required settings themselves all being non-blank, not a separate
     # enabled=true/false to keep in sync with them -- matches the Android app's own settings
     # (SettingsStore.isSftpConfigComplete: host/user/password/remote_path all filled in, no
-    # separate toggle) and the backup_remote_path pattern just below (asked for explicitly,
-    # "beide moeten hetzelfde werken"). --upload on the command line (with the other --upload-*
-    # flags given directly, no config file involved) still works as its own independent opt-in
-    # either way.
+    # separate toggle) -- matches the Android app's own settings. --upload on the command line
+    # (with the other --upload-* flags given directly, no config file involved) still works as
+    # its own independent opt-in either way.
     if all(upload_section.get(key, "").strip() for key in ("host", "user", "remote_path", "key_file")):
         defaults["upload"] = True
     # Same pattern, for the REST-based logbook upload (see upload_via_rest() in upload.py) --
@@ -716,20 +684,12 @@ def _apply_config_defaults(parser: argparse.ArgumentParser) -> None:
     # tied to this being specifically a WordPress Application Password.
     if all(upload_section.get(key, "").strip() for key in ("hostname", "username", "password")):
         defaults["upload_rest"] = True
-    # Enabled by the mere presence of a non-blank backup_remote_path, not a separate on/off
-    # setting to keep in sync with it -- matches the Android app's own settings (asked for
-    # explicitly, "beide moeten hetzelfde werken"). --backup-ebl on the command line (with
-    # --backup-remote-path given directly, no config file involved) still works as its own
-    # independent opt-in either way.
-    if upload_section.get("backup_remote_path", "").strip():
-        defaults["backup_ebl"] = True
     for key, dest, caster in (
         ("host", "upload_host", str),
         ("user", "upload_user", str),
         ("remote_path", "upload_remote_path", str),
         ("key_file", "upload_key_file", Path),
         ("port", "upload_port", int),
-        ("backup_remote_path", "backup_remote_path", str),
         ("hostname", "upload_rest_url", str),
         ("username", "upload_rest_user", str),
         ("password", "upload_rest_app_password", str),
@@ -810,21 +770,19 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     # Next to the output file, not the current directory -- so it's found in the same place
     # regardless of how nmea2log.bat happened to be launched. Console output alone disappears the
     # moment the terminal window closes, which for a run started by double-clicking a .bat file
-    # leaves nothing to check afterwards -- particularly for a --backup-ebl run that can take a
-    # while and is easy to interrupt by closing the window too early (found in practice).
+    # leaves nothing to check afterwards, especially for a long one (found in practice).
     set_log_file(args.output.parent / "nmea2log.log", retention_days=args.log_retention_days)
     if args.verbose:
         set_log_level("debug")
 
     if args.no_upload:
-        # Overrides even a config file whose 'upload'/'upload_rest'/'backup_remote_path' settings
-        # are complete enough to enable them by default (see _apply_config_defaults) -- the whole
-        # point is a way to run locally that's *guaranteed* not to touch the live site, regardless
-        # of what's already sitting in nmea2log.ini (found in practice: forgetting that upload is
-        # enabled by default there is exactly what caused a live-site incident twice).
+        # Overrides even a config file whose 'upload'/'upload_rest' settings are complete enough
+        # to enable them by default (see _apply_config_defaults) -- the whole point is a way to
+        # run locally that's *guaranteed* not to touch the live site, regardless of what's already
+        # sitting in nmea2log.ini (found in practice: forgetting that upload is enabled by default
+        # there is exactly what caused a live-site incident twice).
         args.upload = False
         args.upload_rest = False
-        args.backup_ebl = False
 
     if args.upload and not (args.upload_host and args.upload_user and args.upload_remote_path and args.upload_key_file):
         parser.error(
@@ -836,12 +794,6 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         parser.error(
             "--upload-rest needs --upload-rest-url, --upload-rest-user, and "
             "--upload-rest-app-password (or the matching settings in the [upload] section of the "
-            "config file) to all be set"
-        )
-    if args.backup_ebl and not (args.upload_host and args.upload_user and args.upload_key_file and args.backup_remote_path):
-        parser.error(
-            "--backup-ebl needs --upload-host, --upload-user, --upload-key-file, and "
-            "--backup-remote-path (or the matching settings in the [upload] section of the "
             "config file) to all be set"
         )
 
@@ -1228,83 +1180,6 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
             # awkwardly mid-line right after the prefix (found in practice).
             log(f"[error] upload failed:\n{exc}", file=sys.stderr)
             return 1
-
-    if args.backup_ebl:
-        # A failed (or partial) backup is deliberately never fatal to the run -- it's a bonus
-        # resilience step on top of already having written and uploaded today's logbook, not
-        # something today's run actually depends on, and it's fully resumable: whatever made it
-        # to the server this time is skipped next time (see list_remote_filenames_multi), so an
-        # unfinished backup just continues from there rather than needing to be retried whole.
-        #
-        # Grouped by each file's own parent folder (EBL000000, EBL000001, ...) and uploaded into
-        # a same-named remote subfolder, mirroring the local Actisense/ layout on the server
-        # instead of dumping every run's worth of files into one flat directory -- matches the
-        # Android app's own backup layout (asked for explicitly: thousands of same-shaped
-        # filenames in one flat folder is much harder to browse than the same structure the files
-        # already have locally).
-        #
-        # The "which files already exist" check covers every folder in a *single* SFTP session
-        # (list_remote_filenames_multi), not one session per folder -- found in practice: doing it
-        # per folder meant a run touching several folders opened several fresh connections in a
-        # row, and hit TransIP's occasional connection resets roughly 5x more often than the
-        # single-session HTML upload. The upload step below is chunked the same way, just across
-        # the combined file list from every folder instead of per folder, so it stays similarly
-        # session-frugal without giving up the existing _BACKUP_CHUNK_SIZE protection against one
-        # giant session (see that constant's own comment).
-        by_folder: Dict[str, List[Path]] = {}
-        for path in args.logfiles:
-            by_folder.setdefault(path.parent.name, []).append(path)
-        remote_dir_by_folder = {
-            folder_name: f"{args.backup_remote_path}/{folder_name}" for folder_name in by_folder
-        }
-
-        backed_up_count = 0  # set before the try so the except below can always reference it
-        already_there_count = 0
-        try:
-            already_backed_up = list_remote_filenames_multi(
-                list(remote_dir_by_folder.values()),
-                host=args.upload_host,
-                user=args.upload_user,
-                key_file=args.upload_key_file,
-                port=args.upload_port,
-            )
-            new_files: List[Tuple[str, Path]] = []  # (remote_dir, local_path) pairs still to send
-            for folder_name in sorted(by_folder):
-                folder_files = by_folder[folder_name]
-                folder_new = [p for p in folder_files if p.name not in already_backed_up]
-                already_there_count += len(folder_files) - len(folder_new)
-                new_files.extend((remote_dir_by_folder[folder_name], p) for p in folder_new)
-
-            for start in range(0, len(new_files), _BACKUP_CHUNK_SIZE):
-                chunk = new_files[start : start + _BACKUP_CHUNK_SIZE]
-                chunk_by_dir: Dict[str, List[Path]] = {}
-                for remote_dir, path in chunk:
-                    chunk_by_dir.setdefault(remote_dir, []).append(path)
-                upload_files_to_dirs(
-                    chunk_by_dir,
-                    host=args.upload_host,
-                    user=args.upload_user,
-                    key_file=args.upload_key_file,
-                    port=args.upload_port,
-                )
-                backed_up_count += len(chunk)
-                # A backup of hundreds/thousands of files can genuinely take a while; without
-                # any feedback in between, it can look stuck and invite closing the terminal
-                # early -- which kills the whole (still-blocking) run, backup included (found
-                # in practice).
-                if len(new_files) > _BACKUP_CHUNK_SIZE:
-                    log(f"[info] ...backed up {backed_up_count} new logfile(s) so far")
-            log(
-                f"[ok] Backed up {backed_up_count} new logfile(s) to "
-                f"{args.upload_user}@{args.upload_host}:{args.backup_remote_path} "
-                f"({already_there_count} already there)"
-            )
-        except UploadError as exc:
-            log(
-                f"[warning] logfile backup stopped after {backed_up_count} new file(s) this run "
-                f"(will pick up from there next time):\n{exc}",
-                file=sys.stderr,
-            )
 
     return 0
 
