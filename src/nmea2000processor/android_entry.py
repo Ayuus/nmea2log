@@ -77,7 +77,6 @@ def run_pipeline(
     boat_name: str,
     mmsi: str,
     call_sign: str,
-    fetch_failed: bool = False,
     should_cancel: Optional[Callable[[], bool]] = None,
 ) -> dict:
     """Decodes the given .ebl files, builds trips, and writes an HTML logbook to
@@ -90,11 +89,6 @@ def run_pipeline(
     lookups only really costs cellular data once -- a later run over the same waters mostly hits
     the cache instead of the network. See docs/android-app-plan.md's "Cellular data cost" note if
     that ever needs its own settings toggle instead.
-
-    fetch_failed mirrors --download-failed on the desktop CLI: set it when this run is showing
-    the last-known-good logbook because a download attempt failed, so the page can mark itself as
-    possibly stale (see html_writer.py) -- not used yet by the manual test button, but wired
-    through for the periodic background sync to use later.
 
     should_cancel, if given, is checked periodically during the decode loop -- found in practice:
     closing the app (see MainActivity.closeAppAndCancelSync()) sets SyncState.cancelled, but that
@@ -127,7 +121,7 @@ def run_pipeline(
         min_leg_distance_nm=args.min_leg_distance_nm,
         lock_radius_m=args.lock_radius_m,
         lock_max_duration_minutes=args.lock_max_duration_minutes,
-        language="nl",
+        language=args.language,
         engine_count=args.engine_count,
         trip_logic_version=TRIP_LOGIC_VERSION,
     )
@@ -155,7 +149,7 @@ def run_pipeline(
     # looked up moments ago. Cached to a file next to the logbook itself, same as
     # sync_from_w2k2()'s nmea2log.log placement, so the cache survives between runs instead of
     # re-requesting every already-known place's name on every single sync.
-    geocoder = Geocoder(cache_file=Path(output_html_path).parent / ".geocode_cache.json", language="nl")
+    geocoder = Geocoder(cache_file=Path(output_html_path).parent / ".geocode_cache.json", language=args.language)
 
     # Retried with resume_index widened by one file at a time -- see the check right after
     # build_trips() below -- if a resumed window turns out to have started mid-transit rather
@@ -385,7 +379,6 @@ def run_pipeline(
         trip_uids=trip_uids,
         battery_warning_voltage=args.battery_warning_voltage,
         latest_data_at=latest_data_at,
-        fetch_failed=fetch_failed,
         log_interval_minutes=args.log_interval_minutes,
         remarks_api_url=args.remarks_api_url,
         weather=WeatherFetcher(cache_file=html_path.parent / ".weather_cache.json"),
@@ -405,7 +398,6 @@ def build_from_local_files(
     boat_name: str,
     mmsi: str,
     call_sign: str,
-    fetch_failed: bool = False,
     progress_callback=None,
 ) -> dict:
     """Thin wrapper around run_pipeline() for the "show whatever's already on the phone" path
@@ -427,7 +419,6 @@ def build_from_local_files(
             boat_name=boat_name,
             mmsi=mmsi,
             call_sign=call_sign,
-            fetch_failed=fetch_failed,
             should_cancel=should_cancel,
         )
     finally:

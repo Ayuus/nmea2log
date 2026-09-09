@@ -31,6 +31,43 @@ def test_place_name_prefers_village_over_quarter(monkeypatch, tmp_path):
     assert geocoder.place_name(47.7108, -3.3551) == "Port-Louis"
 
 
+def test_place_name_omits_accept_language_by_default(monkeypatch, tmp_path):
+    """Default language="" means "each place's own native/local name", which for Nominatim means
+    not sending accept-language at all (see Geocoder's own doc comment) -- not sending it as an
+    empty string, which Nominatim could plausibly treat differently than omitting it outright."""
+    captured_urls = []
+
+    def fake_urlopen(request, timeout=10):
+        captured_urls.append(request.full_url)
+        return _FakeResponse({"address": {"village": "Port-Louis"}})
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    geocoder = Geocoder(cache_file=tmp_path / "cache.json")
+
+    geocoder.place_name(47.7108, -3.3551)
+
+    nominatim_calls = [u for u in captured_urls if "nominatim.openstreetmap.org" in u]
+    assert nominatim_calls  # sanity: the reverse lookup actually happened
+    assert "accept-language" not in nominatim_calls[0]
+
+
+def test_place_name_sends_accept_language_when_a_language_is_given(monkeypatch, tmp_path):
+    captured_urls = []
+
+    def fake_urlopen(request, timeout=10):
+        captured_urls.append(request.full_url)
+        return _FakeResponse({"address": {"village": "Port-Louis"}})
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    geocoder = Geocoder(cache_file=tmp_path / "cache.json", language="fr")
+
+    geocoder.place_name(47.7108, -3.3551)
+
+    nominatim_calls = [u for u in captured_urls if "nominatim.openstreetmap.org" in u]
+    assert nominatim_calls
+    assert "accept-language=fr" in nominatim_calls[0]
+
+
 def test_place_name_prefers_a_real_village_over_an_obscure_leisure_match(monkeypatch, tmp_path):
     """Regression test for a real case: Nominatim's own reverse lookup matched a marina it itself
     scores as obscure (importance 0.0000555, four orders of magnitude below a well-known match,

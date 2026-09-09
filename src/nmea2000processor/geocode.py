@@ -195,7 +195,17 @@ class Geocoder:
         *,
         cache_file: Optional[Path] = None,
         user_agent: str = "nmea2000processor/0.1 (personal sailing logbook)",
-        language: str = "nl",
+        # Empty (default) means "don't ask for a specific language at all" -- see _lookup(),
+        # which then omits Nominatim's accept-language parameter entirely rather than sending an
+        # empty value for it. Nominatim's own documented behavior with no accept-language given is
+        # to return each place's plain, untranslated OSM "name" tag -- i.e. already whatever
+        # language that place is actually named in locally (a French harbour comes back in
+        # French, a Dutch one in Dutch), not a fixed language picked ahead of time. Explicitly
+        # requesting a language (e.g. "nl") instead asks Nominatim to prefer that place's
+        # name:<lang> tag when one exists, which for a well-known feature that happens to have a
+        # translated tag (found in practice: some larger bodies of water do) can return a
+        # translated name even for a place whose real, spoken-there name is something else.
+        language: str = "",
         precision: int = 3,
     ) -> None:
         self.cache_file = cache_file
@@ -273,24 +283,26 @@ class Geocoder:
         if wait > 0:
             time.sleep(wait)
 
-        params = urllib.parse.urlencode(
-            {
-                "format": "jsonv2",
-                "lat": f"{lat:.6f}",
-                "lon": f"{lon:.6f}",
-                # Nominatim's "zoom" also limits which feature types are even considered, not
-                # just the search radius -- 16 ("major streets") excludes small islets/hamlets
-                # entirely, so in sparsely-mapped water (e.g. Golfe du Morbihan) it can return a
-                # named feature over a kilometer away in favor of nothing closer being eligible.
-                # 18 ("building" level) considers much smaller/closer features (found in
-                # practice: 1.1 km away -> ~250 m away for the same anchor position), without
-                # regressing the marina lookups this app relies on most (leisure=marina areas are
-                # still the nearest eligible feature at a real harbor either way).
-                "zoom": 18,
-                "addressdetails": 1,
-                "accept-language": self.language,
-            }
-        )
+        request_params = {
+            "format": "jsonv2",
+            "lat": f"{lat:.6f}",
+            "lon": f"{lon:.6f}",
+            # Nominatim's "zoom" also limits which feature types are even considered, not
+            # just the search radius -- 16 ("major streets") excludes small islets/hamlets
+            # entirely, so in sparsely-mapped water (e.g. Golfe du Morbihan) it can return a
+            # named feature over a kilometer away in favor of nothing closer being eligible.
+            # 18 ("building" level) considers much smaller/closer features (found in
+            # practice: 1.1 km away -> ~250 m away for the same anchor position), without
+            # regressing the marina lookups this app relies on most (leisure=marina areas are
+            # still the nearest eligible feature at a real harbor either way).
+            "zoom": 18,
+            "addressdetails": 1,
+        }
+        if self.language:
+            request_params["accept-language"] = self.language
+        # else: deliberately omitted, not sent as an empty string -- see this class's own
+        # ``language`` doc comment for why that gets Nominatim's own local-name default instead.
+        params = urllib.parse.urlencode(request_params)
         request = urllib.request.Request(
             f"{_NOMINATIM_URL}?{params}", headers={"User-Agent": self.user_agent}
         )

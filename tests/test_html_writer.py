@@ -699,23 +699,6 @@ def test_write_html_logbook_latest_data_at_overrides_the_last_trips_arrival(tmp_
     )
 
 
-def test_write_html_logbook_marks_last_updated_red_when_fetch_failed(tmp_path: Path):
-    out_path = tmp_path / "logbook.html"
-
-    write_html_logbook([_trip()], out_path, utc_offset_hours=0, fetch_failed=True)
-
-    html = out_path.read_text(encoding="utf-8")
-    assert 'class="last-updated fetch-failed"' in html
-
-
-def test_write_html_logbook_last_updated_not_red_by_default(tmp_path: Path):
-    out_path = tmp_path / "logbook.html"
-
-    write_html_logbook([_trip()], out_path, utc_offset_hours=0)
-
-    html = out_path.read_text(encoding="utf-8")
-    assert 'class="last-updated"' in html
-    assert 'class="last-updated fetch-failed"' not in html
 
 
 def test_write_html_logbook_shows_the_last_known_position_under_last_updated(tmp_path: Path):

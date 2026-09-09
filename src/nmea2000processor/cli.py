@@ -432,7 +432,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=Path(".geocode_cache.json"),
         help="Cache file for port names (default .geocode_cache.json)",
     )
-    parser.add_argument("--language", type=str, default="nl", help="Language for port names (default nl)")
+    parser.add_argument(
+        "--language",
+        type=str,
+        default="",
+        help="Language for port names, as an Accept-Language code (e.g. 'nl', 'en'). Default: "
+        "empty -- each place's own native/local name (whatever it's actually called there), not "
+        "a fixed language picked ahead of time. See Geocoder's own 'language' doc comment in "
+        "geocode.py for why.",
+    )
     parser.add_argument(
         "--no-weather",
         action="store_true",
@@ -456,14 +464,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path(".marine_cache.json"),
         help="Cache file for historical wave/current data (default .marine_cache.json)",
-    )
-    parser.add_argument(
-        "--download-failed",
-        action="store_true",
-        help="Marks the 'Laatst bijgewerkt' timestamp in the HTML logbook in red -- pass this "
-        "when a preceding download step (e.g. nmea2log-download) failed, so it's visible at a "
-        "glance that this run couldn't fetch any new data and just regenerated the file from "
-        "what was already cached (set automatically by nmea2log.bat)",
     )
     parser.add_argument(
         "--utc-offset",
@@ -1130,7 +1130,6 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         trip_uids=trip_uids,
         battery_warning_voltage=args.battery_warning_voltage,
         latest_data_at=latest_data_at,
-        fetch_failed=args.download_failed,
         log_interval_minutes=args.log_interval_minutes,
         remarks_api_url=args.remarks_api_url,
         weather=weather,

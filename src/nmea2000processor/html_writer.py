@@ -803,7 +803,6 @@ def write_html_logbook(
     trip_uids: Optional[List[str]] = None,
     battery_warning_voltage: Optional[float] = None,
     latest_data_at: Optional[datetime] = None,
-    fetch_failed: bool = False,
     log_interval_minutes: float = _DEFAULT_LOG_INTERVAL_MINUTES,
     remarks_api_url: str = _DEFAULT_REMARKS_API_URL,
     weather=None,
@@ -823,11 +822,6 @@ def write_html_logbook(
     previous run -- found in practice, asked for explicitly). Falls back to the most recent trip's
     own arrival time if not given (e.g. a caller with only trips, no access to cli.py's own
     run-time clock).
-
-    ``fetch_failed``: shows that same timestamp in red, on top of it already reflecting the
-    data's own age -- a second, more visible cue that this run specifically didn't get new data,
-    not just that it happens to have been a while. Not derived from the trip data at all: only
-    the caller (see --download-failed) knows whether the fetch step itself succeeded.
 
     ``remarks_api_url``: URL of the WordPress REST endpoint that stores per-trip remarks (see
     ``wordpress-plugin/``). Empty (default) disables the whole Remarks column.
@@ -872,9 +866,8 @@ def write_html_logbook(
         # have jumped somewhere wildly different since then.
         offset = _trip_utc_offset_hours(trips[-1], utc_offset_hours) if trips else (utc_offset_hours or 0.0)
         latest_local = _to_local(latest_data_at, offset)
-        last_updated_class = "last-updated fetch-failed" if fetch_failed else "last-updated"
         last_updated_html = (
-            f'<div class="{last_updated_class}">{_i18n_span("last_updated")}: {latest_local:%Y-%m-%d %H:%M}</div>'
+            f'<div class="last-updated">{_i18n_span("last_updated")}: {latest_local:%Y-%m-%d %H:%M}</div>'
         )
         if latest_position is not None:
             place = geocoder.place_name(latest_position.lat, latest_position.lon)
@@ -1049,7 +1042,6 @@ def write_html_logbook(
   }}
   .lang-flag.active {{ border-color: #1a6ecc; box-shadow: 0 0 0 1px #1a6ecc inset; }}
   .last-updated {{ color: #666; font-size: 0.85em; margin-bottom: 1em; }}
-  .last-updated.fetch-failed {{ color: #c0392b; font-weight: 600; }}
   h2 {{ margin-top: 2em; border-bottom: 2px solid #1a6ecc; padding-bottom: 0.2em; }}
   /* A grid, not flex-wrap: flex-wrap gives each wrapped *row* its own independent flex-grow
      distribution, so a short last row (fewer cards) stretched those few cards much wider than
