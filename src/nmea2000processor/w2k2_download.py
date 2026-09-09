@@ -147,24 +147,47 @@ def _local_subnet_prefix() -> str:
     Found in practice, on a real Windows PC: connected only to the W2K-2's own isolated access
     point (no internet, no gateway at all) -- exactly the situation this needs to work in -- that
     "reach the internet" trick itself needs a matching route to exist in the first place, and
-    raises a raw OSError ("network unreachable", WinError 10051) when there isn't one. Falls back
-    to asking the OS directly for this machine's own configured IPv4 addresses instead (no
-    route/reachability needed at all), picking whichever one is a private-range address -- not as
-    universally reliable as the UDP-connect trick (can return nothing useful on some Linux setups
-    where the hostname doesn't resolve to a real interface address), but only used as a fallback
-    once the primary approach has already failed, so it costs nothing when there's a real
-    internet route to use instead."""
+    raises a raw OSError ("network unreachable", WinError 10051) when there isn't one.
+
+    First fallback: the same UDP-connect trick, but targeting the broadcast address
+    (255.255.255.255) instead of a specific public one -- broadcast doesn't need an actual route
+    table entry (no gateway required), the OS just picks whichever interface it treats as primary
+    for broadcast traffic, which is correct here since (as this module's own module docstring
+    already assumes) there's only ever one active network on desktop.
+
+    Second fallback, if even that somehow doesn't work: gethostbyname_ex(gethostname()), asking
+    the OS directly for this machine's own configured addresses -- no route/broadcast capability
+    needed at all, but on Windows specifically this can return a stale or unrelated address
+    instead of the currently-active interface's own one (found in practice: came back with
+    nothing usable on the very network this whole fallback chain exists for), so it's kept last,
+    strictly as a last resort behind the more reliable broadcast trick above.
+
+    Every fallback only runs once the one before it has already failed, so this costs nothing on
+    a normal connection with real internet access."""
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.connect(("8.8.8.8", 80))
             return sock.getsockname()[0].rsplit(".", 1)[0] + "."
     except OSError:
-        _, _, addresses = socket.gethostbyname_ex(socket.gethostname())
-        for address in addresses:
-            octets = address.split(".")
-            if len(octets) == 4 and _is_private_ipv4(octets):
-                return ".".join(octets[:3]) + "."
-        raise
+        pass
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            sock.connect(("255.255.255.255", 1))
+            return sock.getsockname()[0].rsplit(".", 1)[0] + "."
+    except OSError:
+        pass
+
+    _, _, addresses = socket.gethostbyname_ex(socket.gethostname())
+    for address in addresses:
+        octets = address.split(".")
+        if len(octets) == 4 and _is_private_ipv4(octets):
+            return ".".join(octets[:3]) + "."
+    raise OSError(
+        "[nmea2log] could not determine this machine's own local IPv4 address by any means "
+        "(no internet route, broadcast, or resolvable private hostname address)"
+    )
 
 
 def _looks_like_w2k2(ip: str) -> bool:

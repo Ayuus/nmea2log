@@ -116,25 +116,54 @@ def test_looks_like_w2k2_false_when_port_open_but_body_doesnt_match(monkeypatch)
     assert _looks_like_w2k2("10.0.0.5") is False
 
 
-def test_local_subnet_prefix_falls_back_when_theres_no_route_to_the_internet(monkeypatch):
+class _ScriptedSocket:
+    """Fakes socket.socket() for _local_subnet_prefix()'s own fallback chain: connect() either
+    raises or succeeds depending on the target address, per a {address: local_ip_or_None} script
+    (None means "raise OSError for this target")."""
+
+    def __init__(self, script: dict):
+        self._script = script
+        self._connected_ip = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def setsockopt(self, *args):
+        pass
+
+    def connect(self, addr):
+        ip = self._script.get(addr[0], "__unscripted__")
+        if ip is None or ip == "__unscripted__":
+            raise OSError("[WinError 10051] network is unreachable")
+        self._connected_ip = ip
+
+    def getsockname(self):
+        return (self._connected_ip, 0)
+
+
+def test_local_subnet_prefix_falls_back_to_broadcast_when_theres_no_route_to_the_internet(
+    monkeypatch,
+):
     """Regression test for a real bug, found in practice on a real Windows PC: connected only to
     the W2K-2's own isolated access point (no internet, no gateway at all) -- the primary
     "ask the OS which address it'd use to reach 8.8.8.8" trick needs a matching route to exist in
     the first place, and raises OSError (WinError 10051, "network unreachable") when there isn't
-    one -- exactly the situation this needs to work in. Falls back to the OS's own configured
-    addresses (gethostbyname_ex) instead, which needs no route/reachability at all."""
+    one -- exactly the situation this needs to work in. Falls back to the same trick targeting the
+    broadcast address instead, which needs no route table entry at all."""
+    script = {"8.8.8.8": None, "255.255.255.255": "10.169.127.101"}
+    monkeypatch.setattr(socket, "socket", lambda *a, **kw: _ScriptedSocket(script))
 
-    class _RaisingSocket:
-        def __enter__(self):
-            return self
+    assert _local_subnet_prefix() == "10.169.127."
 
-        def __exit__(self, *args):
-            return False
 
-        def connect(self, addr):
-            raise OSError("[WinError 10051] network is unreachable")
-
-    monkeypatch.setattr(socket, "socket", lambda *a, **kw: _RaisingSocket())
+def test_local_subnet_prefix_falls_back_to_gethostbyname_ex_when_broadcast_also_fails(
+    monkeypatch,
+):
+    script = {"8.8.8.8": None, "255.255.255.255": None}
+    monkeypatch.setattr(socket, "socket", lambda *a, **kw: _ScriptedSocket(script))
     monkeypatch.setattr(
         socket, "gethostbyname_ex", lambda name: ("host", [], ["127.0.0.1", "10.169.127.101"])
     )
@@ -142,19 +171,10 @@ def test_local_subnet_prefix_falls_back_when_theres_no_route_to_the_internet(mon
     assert _local_subnet_prefix() == "10.169.127."
 
 
-def test_local_subnet_prefix_reraises_when_the_fallback_finds_nothing_private(monkeypatch):
-    class _RaisingSocket:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-        def connect(self, addr):
-            raise OSError("[WinError 10051] network is unreachable")
-
-    monkeypatch.setattr(socket, "socket", lambda *a, **kw: _RaisingSocket())
-    # Only loopback/link-local-ish addresses, nothing private -- the fallback has nothing usable.
+def test_local_subnet_prefix_reraises_when_every_fallback_finds_nothing_usable(monkeypatch):
+    script = {"8.8.8.8": None, "255.255.255.255": None}
+    monkeypatch.setattr(socket, "socket", lambda *a, **kw: _ScriptedSocket(script))
+    # Only loopback, nothing private -- the last fallback has nothing usable either.
     monkeypatch.setattr(socket, "gethostbyname_ex", lambda name: ("host", [], ["127.0.0.1"]))
 
     with pytest.raises(OSError):
