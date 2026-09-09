@@ -344,11 +344,13 @@ class _Session:
         params: Dict[str, str],
         target: Path,
         *,
+        expected_size: Optional[int] = None,
         should_cancel: Optional[Callable[[], bool]] = None,
     ) -> None:
         url = self.base_url + path + "?" + _urlencode(params)
         request = urllib.request.Request(url, headers=self._headers())
         start = time.monotonic()
+        received = 0
         with urllib.request.urlopen(request, timeout=DOWNLOAD_TIMEOUT) as response, target.open("wb") as fh:
             while True:
                 # Checked per chunk, not just once before the request -- otherwise cancelling
@@ -362,15 +364,26 @@ class _Session:
                 # socket timeout -- see _MAX_DOWNLOAD_SECONDS for why the two catch different
                 # failure modes. TimeoutError is a plain OSError subclass, so download_file()'s
                 # existing "except (urllib.error.URLError, OSError)" retry/give-up handling
-                # already covers this without needing its own case.
+                # already covers this without needing its own case. Reports how many bytes had
+                # actually arrived by then -- found in practice, needed to tell apart a fully
+                # stalled connection (0 bytes, in which case this whole timeout is just wasted
+                # waiting and could fail much faster) from a genuinely slow one that was still
+                # making real progress (in which case a longer timeout, or resuming instead of
+                # restarting from scratch, would help more) -- without this, that distinction was
+                # unanswerable after the fact, since only the final attempt's own partial file
+                # even survives long enough to inspect, and this run doesn't log to nmea2log.log
+                # at all (see the module docstring).
                 if time.monotonic() - start > _MAX_DOWNLOAD_SECONDS:
+                    size_note = f"{received} of {expected_size}" if expected_size is not None else str(received)
                     raise TimeoutError(
-                        f"no full file after {_MAX_DOWNLOAD_SECONDS}s -- giving up on this attempt"
+                        f"no full file after {_MAX_DOWNLOAD_SECONDS}s ({size_note} bytes "
+                        "received) -- giving up on this attempt"
                     )
                 chunk = response.read(65536)
                 if not chunk:
                     break
                 fh.write(chunk)
+                received += len(chunk)
 
 
 def _urlencode(params: Dict[str, str]) -> str:
@@ -457,6 +470,7 @@ def download_file(
                 "/api/download",
                 {"file_name": f"{SD_LOG_ROOT}/{folder}/{info['file_name']}"},
                 target,
+                expected_size=info["file_size"],
                 should_cancel=should_cancel,
             )
             actual_size = target.stat().st_size

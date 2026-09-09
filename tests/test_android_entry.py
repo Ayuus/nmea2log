@@ -292,7 +292,7 @@ def test_sync_from_w2k2_returns_a_real_error_when_run_pipeline_itself_raises(tmp
     monkeypatch.setattr(android_entry.w2k2_download, "discover_w2k2", lambda subnet_prefix: "http://10.0.0.5")
 
     class _FakeSession:
-        def download_to(self, path, params, target, should_cancel=None):
+        def download_to(self, path, params, target, expected_size=None, should_cancel=None):
             target.write_bytes(b"x" * 10)
 
     monkeypatch.setattr(android_entry.w2k2_download, "make_session", lambda host, config: _FakeSession())
@@ -376,7 +376,7 @@ def test_sync_from_w2k2_forwards_log_lines_to_the_callback(tmp_path, monkeypatch
     monkeypatch.setattr(android_entry.w2k2_download, "discover_w2k2", lambda subnet_prefix: "http://10.0.0.5")
 
     class _FakeSession:
-        def download_to(self, path, params, target, should_cancel=None):
+        def download_to(self, path, params, target, expected_size=None, should_cancel=None):
             target.write_bytes(b"x" * 10)
 
     monkeypatch.setattr(android_entry.w2k2_download, "make_session", lambda host, config: _FakeSession())
@@ -428,7 +428,7 @@ def test_sync_from_w2k2_calls_on_download_complete_once_before_the_pipeline_runs
     monkeypatch.setattr(android_entry.w2k2_download, "discover_w2k2", lambda subnet_prefix: "http://10.0.0.5")
 
     class _FakeSession:
-        def download_to(self, path, params, target, should_cancel=None):
+        def download_to(self, path, params, target, expected_size=None, should_cancel=None):
             target.write_bytes(b"x" * 10)
 
     monkeypatch.setattr(android_entry.w2k2_download, "make_session", lambda host, config: _FakeSession())
@@ -488,7 +488,7 @@ def test_sync_from_w2k2_downloads_then_runs_the_pipeline(tmp_path, monkeypatch):
         def __init__(self):
             self.downloaded = []
 
-        def download_to(self, path, params, target, should_cancel=None):
+        def download_to(self, path, params, target, expected_size=None, should_cancel=None):
             self.downloaded.append(target)
             # download_file() now verifies the actual downloaded size against info["file_size"]
             # (asked for explicitly, after a real device serving a truncated file got silently
@@ -544,7 +544,7 @@ def test_sync_from_w2k2_reports_progress_only_for_files_it_actually_fetches(tmp_
     (see w2k2_download.build_download_plan()'s to_download), and total must match that same set."""
 
     class _FakeSession:
-        def download_to(self, path, params, target, should_cancel=None):
+        def download_to(self, path, params, target, expected_size=None, should_cancel=None):
             target.write_bytes(b"x" * 10)
 
     monkeypatch.setattr(android_entry.w2k2_download.time, "sleep", lambda s: None)
@@ -601,7 +601,7 @@ def test_sync_from_w2k2_stops_between_files_when_cancelled(tmp_path, monkeypatch
     leaves whatever was already fully downloaded in place and skips the rest, no partial file."""
 
     class _FakeSession:
-        def download_to(self, path, params, target, should_cancel=None):
+        def download_to(self, path, params, target, expected_size=None, should_cancel=None):
             target.write_bytes(b"x" * 10)
 
     monkeypatch.setattr(android_entry.w2k2_download.time, "sleep", lambda s: None)
@@ -697,7 +697,7 @@ def test_sync_from_w2k2_reports_the_final_result_via_onresult_too(tmp_path, monk
     monkeypatch.setattr(android_entry.w2k2_download, "discover_w2k2", lambda subnet_prefix: "http://10.0.0.5")
 
     class _FakeSession:
-        def download_to(self, path, params, target, should_cancel=None):
+        def download_to(self, path, params, target, expected_size=None, should_cancel=None):
             target.write_bytes(b"x" * 10)
 
     monkeypatch.setattr(android_entry.w2k2_download, "make_session", lambda host, config: _FakeSession())

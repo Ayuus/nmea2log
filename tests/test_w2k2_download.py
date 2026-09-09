@@ -410,6 +410,38 @@ def test_main_reports_a_clear_error_on_connection_reset_instead_of_a_raw_traceba
     assert "network" in str(exc_info.value)
 
 
+def test_download_to_reports_bytes_received_so_far_when_it_times_out(tmp_path, monkeypatch):
+    """Regression test: found in practice, a real 120s timeout on one real file gave no way to
+    tell afterwards whether the connection was fully stalled (0 bytes) or genuinely slow but still
+    making real progress -- needed to decide whether a shorter timeout (fail faster) or a longer
+    one (or resuming instead of restarting from scratch) would actually help. The timeout message
+    itself must say how far it actually got, not just that it gave up."""
+    import nmea2000processor.w2k2_download as w2k2_download
+
+    class _FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, n):
+            return b"x" * 1000  # keeps "succeeding" forever -- only the wall-clock check ends this
+
+    # start, first wall-clock check (0s elapsed, proceeds to read one chunk), second check (past
+    # _MAX_DOWNLOAD_SECONDS, raises) -- three calls total, matching download_to()'s own sequence.
+    times = iter([0.0, 0.0, 1000.0])
+    monkeypatch.setattr(w2k2_download.time, "monotonic", lambda: next(times))
+    monkeypatch.setattr(w2k2_download.urllib.request, "urlopen", lambda *a, **kw: _FakeResponse())
+
+    session = w2k2_download._Session("http://10.0.0.1")
+
+    with pytest.raises(TimeoutError) as exc_info:
+        session.download_to("/api/download", {}, tmp_path / "file.ebl", expected_size=5000)
+
+    assert "1000 of 5000 bytes received" in str(exc_info.value)
+
+
 def test_download_file_retries_and_succeeds_after_a_transient_connection_reset(tmp_path, monkeypatch):
     """A single transient connection reset (see the regression test above) must not give up on
     the file immediately -- retrying a couple of times is what actually recovers from a boat wifi
@@ -419,7 +451,7 @@ def test_download_file_retries_and_succeeds_after_a_transient_connection_reset(t
     calls = []
 
     class _FlakySession:
-        def download_to(self, path, params, target, should_cancel=None):
+        def download_to(self, path, params, target, expected_size=None, should_cancel=None):
             calls.append(1)
             if len(calls) == 1:
                 raise ConnectionResetError("connection reset")
@@ -447,7 +479,7 @@ def test_download_file_skips_after_exhausting_retries_on_a_connection_error(tmp_
     calls = []
 
     class _AlwaysFailsSession:
-        def download_to(self, path, params, target, should_cancel=None):
+        def download_to(self, path, params, target, expected_size=None, should_cancel=None):
             calls.append(1)
             raise ConnectionResetError("connection reset")
 
@@ -470,7 +502,7 @@ def test_download_file_skips_after_exhausting_retries_on_a_persistent_timeout(tm
     import nmea2000processor.w2k2_download as w2k2_download
 
     class _AlwaysTimesOutSession:
-        def download_to(self, path, params, target, should_cancel=None):
+        def download_to(self, path, params, target, expected_size=None, should_cancel=None):
             raise TimeoutError("no full file after 120s -- giving up on this attempt")
 
     monkeypatch.setattr(w2k2_download.time, "sleep", lambda s: None)
@@ -494,7 +526,7 @@ def test_download_file_retries_a_404_and_succeeds_if_a_later_attempt_works(tmp_p
     calls = []
 
     class _FlakyServerSession:
-        def download_to(self, path, params, target, should_cancel=None):
+        def download_to(self, path, params, target, expected_size=None, should_cancel=None):
             calls.append(1)
             if len(calls) == 1:
                 raise urllib.error.HTTPError(url="x", code=404, msg="Not Found", hdrs=None, fp=None)
@@ -519,7 +551,7 @@ def test_download_file_skips_after_exhausting_retries_still_404(tmp_path, monkey
     calls = []
 
     class _AlwaysGoneSession:
-        def download_to(self, path, params, target, should_cancel=None):
+        def download_to(self, path, params, target, expected_size=None, should_cancel=None):
             calls.append(1)
             raise urllib.error.HTTPError(url="x", code=404, msg="Not Found", hdrs=None, fp=None)
 
@@ -540,7 +572,7 @@ def test_download_file_raises_after_exhausting_retries_on_a_non_404_http_error(t
     import nmea2000processor.w2k2_download as w2k2_download
 
     class _AlwaysFailsSession:
-        def download_to(self, path, params, target, should_cancel=None):
+        def download_to(self, path, params, target, expected_size=None, should_cancel=None):
             raise urllib.error.HTTPError(url="x", code=503, msg="Service Unavailable", hdrs=None, fp=None)
 
     monkeypatch.setattr(w2k2_download.time, "sleep", lambda s: None)
@@ -564,7 +596,7 @@ def test_download_file_deletes_a_truncated_leftover_before_giving_up_on_repeated
     calls = []
 
     class _TruncatesThen404sSession:
-        def download_to(self, path, params, target, should_cancel=None):
+        def download_to(self, path, params, target, expected_size=None, should_cancel=None):
             calls.append(1)
             if len(calls) == 1:
                 target.write_bytes(b"x" * 3)  # truncated -- expected 10
@@ -593,7 +625,7 @@ def test_download_file_deletes_a_truncated_leftover_before_skipping_on_repeated_
     calls = []
 
     class _TruncatesThenFailsSession:
-        def download_to(self, path, params, target, should_cancel=None):
+        def download_to(self, path, params, target, expected_size=None, should_cancel=None):
             calls.append(1)
             if len(calls) == 1:
                 target.write_bytes(b"x" * 3)  # truncated -- expected 10
@@ -620,7 +652,7 @@ def test_download_file_deletes_a_truncated_leftover_before_raising_on_a_non_404_
     calls = []
 
     class _TruncatesThenFailsSession:
-        def download_to(self, path, params, target, should_cancel=None):
+        def download_to(self, path, params, target, expected_size=None, should_cancel=None):
             calls.append(1)
             if len(calls) == 1:
                 target.write_bytes(b"x" * 3)  # truncated -- expected 10
@@ -651,7 +683,7 @@ def test_download_file_retries_a_truncated_transfer_and_succeeds_if_a_later_atte
     calls = []
 
     class _TruncatesFirstAttemptSession:
-        def download_to(self, path, params, target, should_cancel=None):
+        def download_to(self, path, params, target, expected_size=None, should_cancel=None):
             calls.append(1)
             if len(calls) == 1:
                 target.write_bytes(b"x" * 3)  # truncated -- expected 10
@@ -681,7 +713,7 @@ def test_download_file_accepts_a_transfer_larger_than_the_stale_expected_size(tm
     calls = []
 
     class _GrewSinceListingSession:
-        def download_to(self, path, params, target, should_cancel=None):
+        def download_to(self, path, params, target, expected_size=None, should_cancel=None):
             calls.append(1)
             target.write_bytes(b"x" * 12)  # more than the stale expected 10
 
@@ -706,7 +738,7 @@ def test_download_file_deletes_a_still_truncated_file_after_exhausting_retries(t
     calls = []
 
     class _AlwaysTruncatesSession:
-        def download_to(self, path, params, target, should_cancel=None):
+        def download_to(self, path, params, target, expected_size=None, should_cancel=None):
             calls.append(1)
             target.write_bytes(b"x" * 3)  # never matches the expected 10
 
@@ -733,7 +765,7 @@ def test_download_file_downloads_a_small_still_growing_file(tmp_path, monkeypatc
     calls = []
 
     class _Session:
-        def download_to(self, path, params, target, should_cancel=None):
+        def download_to(self, path, params, target, expected_size=None, should_cancel=None):
             calls.append(1)
             target.write_bytes(b"x" * 1000)
 
