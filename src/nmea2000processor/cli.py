@@ -505,10 +505,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=str,
         default=_DEFAULT_REMARKS_API_URL,
         help="URL of a WordPress REST endpoint (see wordpress-plugin/) that stores per-trip "
-        "remarks, shown as a 'Remarks' button+popup per trip in the HTML logbook. Default: "
-        "disabled (empty). Typically '/wp-json/nmea2log/v1/remarks' -- a relative path resolves "
-        "against whatever site the logbook is opened from, so it works without also configuring "
-        "a host as long as the logbook is uploaded (see --upload) to the same site as the plugin.",
+        f"remarks, shown as a 'Remarks' button+popup per trip in the HTML logbook. Default: "
+        f"'{_DEFAULT_REMARKS_API_URL}' -- a relative path resolves against whatever site the "
+        f"logbook is opened from, so it works without also configuring a host as long as the "
+        f"logbook is uploaded (see --upload) to the same site as the plugin. Set to an empty "
+        f"string to disable.",
     )
     parser.add_argument(
         "--engine-count",
