@@ -529,17 +529,28 @@ def download_file(
             )
         # OSError alongside URLError: a dropped wifi connection to the W2K-2 mid-transfer surfaces
         # as a raw ConnectionResetError, not wrapped in URLError (found in practice, same as the
-        # Overpass geocoding calls -- see geocode.py). DownloadCancelled deliberately isn't caught
+        # Overpass geocoding calls -- see geocode.py); TimeoutError (see download_to()'s own wall-
+        # clock cap) is also a plain OSError subclass. DownloadCancelled deliberately isn't caught
         # here -- it's not a transient failure to retry, it propagates straight up.
         except (urllib.error.URLError, OSError) as exc:
             if attempt == _DOWNLOAD_MAX_RETRIES:
-                # Same cleanup as the 404 give-up path above: target may be a truncated leftover
-                # from an earlier attempt in this same loop, not touched by this attempt (which
-                # failed before ever reaching target.open("wb")) -- delete it rather than leave a
-                # wrong-size file that a size-only presence check (build_download_plan()'s
-                # already-complete-folder skip) can't tell apart from a real one.
+                # Non-fatal, same as a persistent 404 above -- found in practice, a real bug: this
+                # used to re-raise here, which aborted build_download_plan()'s *entire* remaining
+                # queue over one single file's own bad transfer (a real, otherwise-fine wifi link
+                # to the W2K-2 having one slow/dropped transfer among dozens of files is normal,
+                # not a sign every other file would fail too). Same cleanup as the 404 give-up path
+                # above: target may be a truncated leftover from an earlier attempt in this same
+                # loop, not touched by this attempt (which failed before ever reaching
+                # target.open("wb")) -- delete it rather than leave a wrong-size file a size-only
+                # presence check can't tell apart from a real one. Left for _needs_download() to
+                # pick back up next run, same as any other file that didn't get downloaded now.
                 target.unlink(missing_ok=True)
-                raise
+                log(
+                    f"[warning] download of {folder}/{info['file_name']} failed ({exc}) -- giving "
+                    f"up after {_DOWNLOAD_MAX_RETRIES + 1} attempt(s), will retry next run",
+                    file=sys.stderr,
+                )
+                return
             log(
                 f"[warning] download of {folder}/{info['file_name']} failed ({exc}) "
                 f"-- attempt {attempt + 1}/{_DOWNLOAD_MAX_RETRIES + 1}, retrying...",

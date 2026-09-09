@@ -436,20 +436,51 @@ def test_download_file_retries_and_succeeds_after_a_transient_connection_reset(t
     assert (tmp_path / "EBL000001" / "000001_000.ebl").read_bytes() == b"x" * 10
 
 
-def test_download_file_gives_up_after_exhausting_retries(tmp_path, monkeypatch):
+def test_download_file_skips_after_exhausting_retries_on_a_connection_error(tmp_path, monkeypatch):
+    """Regression test for a real bug found in practice: this used to re-raise here, which aborted
+    build_download_plan()'s entire remaining queue over one single file's own bad transfer (a
+    real, otherwise-fine wifi link to the W2K-2 having one slow/dropped transfer among dozens of
+    files is normal, not a sign every other file would fail too) -- now non-fatal, same as a
+    persistent 404, left for _needs_download() to pick back up next run."""
     import nmea2000processor.w2k2_download as w2k2_download
+
+    calls = []
 
     class _AlwaysFailsSession:
         def download_to(self, path, params, target, should_cancel=None):
+            calls.append(1)
             raise ConnectionResetError("connection reset")
 
     monkeypatch.setattr(w2k2_download.time, "sleep", lambda s: None)
 
-    with pytest.raises(ConnectionResetError):
-        download_file(
-            _AlwaysFailsSession(), tmp_path, "EBL000001",
-            {"file_name": "000001_000.ebl", "file_size": 10, "file_time": 0},
-        )
+    download_file(
+        _AlwaysFailsSession(), tmp_path, "EBL000001",
+        {"file_name": "000001_000.ebl", "file_size": 10, "file_time": 0},
+    )
+
+    assert len(calls) == w2k2_download._DOWNLOAD_MAX_RETRIES + 1  # full retry budget used
+    assert not (tmp_path / "EBL000001" / "000001_000.ebl").exists()
+
+
+def test_download_file_skips_after_exhausting_retries_on_a_persistent_timeout(tmp_path, monkeypatch):
+    """Same as the connection-error case above, but specifically for download_to()'s own wall-
+    clock TimeoutError (see _MAX_DOWNLOAD_SECONDS) -- a plain OSError subclass, caught by the same
+    branch, and exactly the real-world failure this regression was found from (a slow wifi link to
+    the W2K-2 timing out on one file among many queued)."""
+    import nmea2000processor.w2k2_download as w2k2_download
+
+    class _AlwaysTimesOutSession:
+        def download_to(self, path, params, target, should_cancel=None):
+            raise TimeoutError("no full file after 120s -- giving up on this attempt")
+
+    monkeypatch.setattr(w2k2_download.time, "sleep", lambda s: None)
+
+    download_file(
+        _AlwaysTimesOutSession(), tmp_path, "EBL000001",
+        {"file_name": "000001_000.ebl", "file_size": 10, "file_time": 0},
+    )
+
+    assert not (tmp_path / "EBL000001" / "000001_000.ebl").exists()
 
 
 def test_download_file_retries_a_404_and_succeeds_if_a_later_attempt_works(tmp_path, monkeypatch):
@@ -548,6 +579,34 @@ def test_download_file_deletes_a_truncated_leftover_before_giving_up_on_repeated
     )
 
     assert len(calls) == w2k2_download._DOWNLOAD_MAX_RETRIES + 1
+    assert not (tmp_path / "EBL000001" / "000001_000.ebl").exists()
+
+
+def test_download_file_deletes_a_truncated_leftover_before_skipping_on_repeated_connection_errors(
+    tmp_path, monkeypatch
+):
+    """Same cleanup as the 404 case above, but for the connection-error path that now skips
+    instead of raising -- a truncated leftover from an earlier attempt must not survive here
+    either, or a size-only presence check would wrongly count it as already complete."""
+    import nmea2000processor.w2k2_download as w2k2_download
+
+    calls = []
+
+    class _TruncatesThenFailsSession:
+        def download_to(self, path, params, target, should_cancel=None):
+            calls.append(1)
+            if len(calls) == 1:
+                target.write_bytes(b"x" * 3)  # truncated -- expected 10
+            else:
+                raise ConnectionResetError("connection reset")
+
+    monkeypatch.setattr(w2k2_download.time, "sleep", lambda s: None)
+
+    download_file(
+        _TruncatesThenFailsSession(), tmp_path, "EBL000001",
+        {"file_name": "000001_000.ebl", "file_size": 10, "file_time": 0},
+    )
+
     assert not (tmp_path / "EBL000001" / "000001_000.ebl").exists()
 
 
