@@ -1159,7 +1159,7 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
                 user=args.upload_rest_user,
                 app_password=args.upload_rest_app_password,
             )
-            log(f"[ok] Uploaded to {args.upload_rest_url}")
+            log(f"[ok] Uploaded via plugin to {args.upload_rest_url}")
         except UploadError as exc:
             log(f"[error] upload failed:\n{exc}", file=sys.stderr)
             return 1
@@ -1173,7 +1173,7 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
                 key_file=args.upload_key_file,
                 port=args.upload_port,
             )
-            log(f"[ok] Uploaded to {args.upload_user}@{args.upload_host}:{args.upload_remote_path}")
+            log(f"[ok] Uploaded via SFTP to {args.upload_user}@{args.upload_host}:{args.upload_remote_path}")
         except UploadError as exc:
             # A newline after "failed:", not a space -- the SFTP client's own error message can
             # itself be multi-line (e.g. the server's login banner), which otherwise starts
