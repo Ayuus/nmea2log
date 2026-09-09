@@ -711,8 +711,10 @@ def _apply_config_defaults(parser: argparse.ArgumentParser) -> None:
     # Same pattern, for the REST-based logbook upload (see upload_via_rest() in upload.py) --
     # preferred over the SFTP settings above once configured (see _run()'s own choice between the
     # two), so publishing doesn't need a private SSH key sitting on every machine that syncs, just
-    # a WordPress Application Password scoped to the logboek_editor role.
-    if all(upload_section.get(key, "").strip() for key in ("rest_url", "rest_user", "rest_app_password")):
+    # a WordPress Application Password scoped to the logboek_editor role. hostname/username/
+    # password rather than rest_url/rest_user/rest_app_password: generic REST-auth naming, not
+    # tied to this being specifically a WordPress Application Password.
+    if all(upload_section.get(key, "").strip() for key in ("hostname", "username", "password")):
         defaults["upload_rest"] = True
     # Enabled by the mere presence of a non-blank backup_remote_path, not a separate on/off
     # setting to keep in sync with it -- matches the Android app's own settings (asked for
@@ -728,9 +730,9 @@ def _apply_config_defaults(parser: argparse.ArgumentParser) -> None:
         ("key_file", "upload_key_file", Path),
         ("port", "upload_port", int),
         ("backup_remote_path", "backup_remote_path", str),
-        ("rest_url", "upload_rest_url", str),
-        ("rest_user", "upload_rest_user", str),
-        ("rest_app_password", "upload_rest_app_password", str),
+        ("hostname", "upload_rest_url", str),
+        ("username", "upload_rest_user", str),
+        ("password", "upload_rest_app_password", str),
     ):
         if key in upload_section:
             defaults[dest] = caster(upload_section[key])
