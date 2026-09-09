@@ -54,7 +54,7 @@ from .pgn_decode import (
     decode_water_depth,
 )
 from .trip_ids import assign_trip_ids
-from .tripbuilder import build_trips
+from .tripbuilder import TRIP_LOGIC_VERSION, build_trips
 from .upload import UploadError, list_remote_filenames_multi, upload_file, upload_files_to_dirs
 
 _T = TypeVar("_T")
@@ -801,9 +801,10 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         parser.error("provide one or more logfiles, or set ebl_dir in the config file")
 
     # Computed from every build_trips() parameter below (plus anything else that changes what a
-    # cached trip looks like, e.g. the geocoding language) *before* the trip cache is loaded, so
-    # a cache built under different settings is never silently trusted -- see config_signature()
-    # in trip_cache.py.
+    # cached trip looks like, e.g. the geocoding language, or the trip-building logic itself --
+    # see TRIP_LOGIC_VERSION in tripbuilder.py) *before* the trip cache is loaded, so a cache
+    # built under different settings -- or different code -- is never silently trusted -- see
+    # config_signature() in trip_cache.py.
     trip_signature = config_signature(
         speed_threshold_kn=args.speed_threshold_kn,
         min_stop_minutes=args.min_stop_minutes,
@@ -815,6 +816,7 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         no_geocode=args.no_geocode,
         language=args.language,
         engine_count=args.engine_count,
+        trip_logic_version=TRIP_LOGIC_VERSION,
     )
     trip_cache_store = None if args.no_trip_cache else TripCache(args.trip_cache_file)
     settled_trips: list = []

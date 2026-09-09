@@ -43,6 +43,17 @@ _ENGINE_IDLE_FUEL_LPH = 0.3  # below this, the engine counts as switched off rat
 _ENGINE_OFF_GAP_S = 60.0  # a gap this long between "on" readings means the engine was actually
 # switched off in between, not just a brief hiccup in PGN reporting
 _RPM_BUCKET = 50  # round RPM to the nearest multiple of this before taking the mode
+
+# Bump this whenever a change to build_trips()'s own logic could change what an already-cached
+# ("settled") trip looks like -- a different track/position computation, a different fold/merge
+# decision, etc. -- even though none of build_trips()'s own *parameters* changed. Found in
+# practice: the trip cache (see trip_cache.py's config_signature()) only compares those explicit
+# parameters, so a pure logic fix (e.g. the arrival/departure track-to-marker splice) silently
+# kept serving already-settled trips built under the old logic, with no visible effect on synced
+# data until the affected trips aged out of the cache on their own -- on a real device, that's
+# potentially never. Included in config_signature() specifically so a bump here always forces a
+# one-time full rebuild instead.
+TRIP_LOGIC_VERSION = 2
 _RPM_STABLE_MINUTES = 2.0  # a run at the typical RPM bucket must last at least this long to
 # count as steady cruising rather than a brief pass-through while accelerating/decelerating
 

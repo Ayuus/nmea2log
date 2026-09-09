@@ -1013,6 +1013,42 @@ def test_main_trip_cache_is_invalidated_by_a_changed_threshold(tmp_path, monkeyp
     assert call_log == ["f0", "f1", "f2", "f3"]  # the changed threshold invalidated the cache entirely
 
 
+def test_main_trip_cache_is_invalidated_by_a_trip_logic_version_bump(tmp_path, monkeypatch, capsys):
+    """A pure change to build_trips()'s own logic (e.g. a different track/position computation)
+    changes none of its explicit parameters, so config_signature() alone can't tell an old cache
+    apart from a fresh one -- see TRIP_LOGIC_VERSION in tripbuilder.py, included in the signature
+    specifically so a bump there still forces a full rebuild, exactly like a changed threshold
+    does above. Found in practice: without this, a real device kept serving already-settled trips
+    built under old track-drawing logic indefinitely after installing a fix, with no visible
+    effect until those trips happened to age out of the cache on their own -- which, for most of
+    a season's worth of trips, is never."""
+    paths, samples_by_name = _make_trip_cache_fixture(tmp_path)
+    call_log: list = []
+    _stub_samples_by_path(monkeypatch, paths, samples_by_name, call_log)
+
+    trip_cache_file = tmp_path / "trips.pkl"
+    run1_files = [paths["f0"], paths["f1"], paths["f2"], paths["f3"]]
+    main(
+        [str(p) for p in run1_files]
+        + ["-o", str(tmp_path / "logbook.csv"), "--no-geocode", "--no-weather", "--no-marine",
+           "--no-sample-cache", "--lock-radius-m", "-1",
+           "--trip-cache-file", str(trip_cache_file)]
+    )
+    call_log.clear()
+    capsys.readouterr()
+
+    monkeypatch.setattr("nmea2000processor.cli.TRIP_LOGIC_VERSION", -1)
+    exit_code = main(
+        [str(p) for p in run1_files]
+        + ["-o", str(tmp_path / "logbook.csv"), "--no-geocode", "--no-weather", "--no-marine",
+           "--no-sample-cache", "--lock-radius-m", "-1",
+           "--trip-cache-file", str(trip_cache_file)]
+    )
+
+    assert exit_code == 0
+    assert call_log == ["f0", "f1", "f2", "f3"]  # the version bump invalidated the cache entirely
+
+
 def test_main_trip_cache_falls_back_when_the_resume_file_is_gone(tmp_path, monkeypatch, capsys):
     """If the file a cached run recorded as its resume point can no longer be found among the
     given logfiles (moved, deleted, or --ebl-dir/logfiles now points somewhere else), the cache

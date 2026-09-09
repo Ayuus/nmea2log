@@ -38,7 +38,7 @@ from .marine import MarineFetcher
 from .sample_cache import SampleCache
 from .trip_cache import TripCache, choose_resume_index, config_signature, find_resume_index
 from .trip_ids import assign_trip_ids
-from .tripbuilder import build_trips
+from .tripbuilder import TRIP_LOGIC_VERSION, build_trips
 from .weather import WeatherFetcher
 
 
@@ -129,6 +129,7 @@ def run_pipeline(
         lock_max_duration_minutes=args.lock_max_duration_minutes,
         language="nl",
         engine_count=args.engine_count,
+        trip_logic_version=TRIP_LOGIC_VERSION,
     )
     trip_cache_store = TripCache(Path(output_html_path).parent / ".trip_cache.pkl")
     settled_trips: list = []
