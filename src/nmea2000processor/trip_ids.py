@@ -34,12 +34,20 @@ def _position_key(trip: TripLeg) -> str:
     geocoding fix returning a different name for the same spot, --language, ...), silently
     orphaning that trip's id -- and with it, any remark already saved against the old one.
     Rounded to ~100 m (3 decimals), which comfortably groups GPS noise around the same port
-    without conflating two actually-different nearby locations. Falls back to the place-name
-    text only if there's no track at all to take a position from."""
-    if not trip.track:
-        return f"{trip.depart_place}|{trip.arrive_place}"
-    depart, arrive = trip.track[0], trip.track[-1]
-    return f"{depart.lat:.3f},{depart.lon:.3f}|{arrive.lat:.3f},{arrive.lon:.3f}"
+    without conflating two actually-different nearby locations.
+
+    Uses ``trip.depart_lat``/``arrive_lat`` (the stay's own averaged, "settled" position -- see
+    TripLeg's own field comments), not ``trip.track[0]``/``track[-1]`` -- found in practice, on a
+    real device: those *used* to be reliably close to the same thing, but a later fix
+    (``_track_reaching_markers`` in tripbuilder.py) started deliberately snapping a trip's own
+    track endpoints onto its marker position whenever they didn't already match, which is exactly
+    what this key's rounding was never meant to be sensitive to. That shifted the id for every
+    affected trip the moment that fix shipped, silently orphaning every remark saved against it --
+    precisely the failure this function's own rounding exists to prevent. depart_lat/arrive_lat is
+    the actually-stable value the id was always meant to track; track[0]/track[-1] was just an
+    approximation of it that happened to work until a later fix legitimately changed how close an
+    approximation it was."""
+    return f"{trip.depart_lat:.3f},{trip.depart_lon:.3f}|{trip.arrive_lat:.3f},{trip.arrive_lon:.3f}"
 
 
 def _match_key(trip: TripLeg, utc_offset_hours: Optional[float], occurrence: int) -> str:

@@ -95,16 +95,46 @@ def test_uid_survives_a_changed_place_name_at_the_same_position():
     geocoding on vs. off, a future geocoding fix returning a different name for the same spot,
     --language -- silently orphaning the trip's uid and, with it, any remark already saved
     against the old one (found in practice: remarks disappearing after every upload, because
-    some uploads used --no-geocode and some didn't). Matching a track's own GPS position instead
-    of the displayed name must survive exactly this."""
-    track = [
-        NavSample(datetime(2026, 7, 15, 9, 0), 52.30000, 4.90000, 0.0),
-        NavSample(datetime(2026, 7, 15, 10, 30), 52.35000, 4.95000, 0.0),
-    ]
-    no_geocode_run = _trip(depart_place="52.3000, 4.9000", arrive_place="52.3500, 4.9500", track=track)
-    geocoded_run = _trip(depart_place="Marina A", arrive_place="Marina B", track=track)
+    some uploads used --no-geocode and some didn't). Matching depart_lat/arrive_lat -- the same
+    underlying GPS position, regardless of how it's displayed -- instead of the displayed name
+    must survive exactly this."""
+    no_geocode_run = _trip(depart_place="52.3000, 4.9000", arrive_place="52.3500, 4.9500")
+    geocoded_run = _trip(depart_place="Marina A", arrive_place="Marina B")
 
     first = assign_trip_ids([no_geocode_run])
     second = assign_trip_ids([geocoded_run])
+
+    assert first == second
+
+
+def test_uid_survives_a_track_drawing_fix_changing_the_tracks_own_endpoints():
+    """Regression test for a real bug found in practice, on a real device: a later fix
+    (_track_reaching_markers in tripbuilder.py) started deliberately snapping a trip's own
+    track[0]/track[-1] onto its depart/arrive marker position whenever they didn't already
+    match exactly -- purely a drawing fix, with depart_lat/arrive_lat themselves untouched. Since
+    an earlier version of this module matched on track[0]/track[-1] instead of depart_lat/
+    arrive_lat directly, that drawing fix silently shifted every affected trip's own uid the
+    moment it shipped -- orphaning every remark already saved against it, exactly the failure
+    this module exists to prevent. The id must depend only on depart_lat/arrive_lat, never on
+    the track's own raw endpoints, so a future drawing-only fix like that one can never repeat
+    this."""
+    before_fix = _trip(
+        track=[
+            NavSample(datetime(2026, 7, 15, 9, 0), 52.30010, 4.90010, 3.0),
+            NavSample(datetime(2026, 7, 15, 10, 30), 52.39991, 4.94988, 0.2),  # raw last fix, a
+            # few metres short of the settled arrive_lat/arrive_lon below
+        ],
+    )
+    after_fix = _trip(
+        track=[
+            NavSample(datetime(2026, 7, 15, 9, 0), 52.3, 4.9, 0.0),  # synthetic, snapped to depart
+            NavSample(datetime(2026, 7, 15, 9, 0), 52.30010, 4.90010, 3.0),
+            NavSample(datetime(2026, 7, 15, 10, 30), 52.39991, 4.94988, 0.2),
+            NavSample(datetime(2026, 7, 15, 10, 30), 52.4, 4.95, 0.0),  # synthetic, snapped to arrive
+        ],
+    )
+
+    first = assign_trip_ids([before_fix])
+    second = assign_trip_ids([after_fix])
 
     assert first == second
