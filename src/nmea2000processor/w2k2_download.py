@@ -347,43 +347,76 @@ class _Session:
         expected_size: Optional[int] = None,
         should_cancel: Optional[Callable[[], bool]] = None,
     ) -> None:
+        """Downloads to ``target``, resuming from wherever a previous, interrupted attempt at the
+        exact same ``target`` left off (via an HTTP Range request) instead of always restarting
+        from byte 0 -- found in practice, on a real, severely bandwidth-limited connection to the
+        W2K-2 (well under 10 KB/s in one real case): a multi-megabyte file could never complete at
+        all if every retry (see download_file()) threw away the previous attempt's own progress
+        and started over, since each attempt's own share of that progress alone was smaller than
+        the whole file. An .ebl file only ever grows on the device, never shrinks or rewrites
+        already-written bytes (see _needs_download()'s own reasoning), so a partial file from any
+        earlier attempt -- this run's own retry, or even a previous run's leftover -- is always a
+        genuine, safe-to-build-on prefix of the final file.
+
+        Falls back to a full restart if the server doesn't actually honor the Range request (some
+        HTTP status other than 206 Partial Content) rather than assuming it did -- appending fresh
+        full-file content after an existing partial would otherwise silently corrupt the file."""
         url = self.base_url + path + "?" + _urlencode(params)
-        request = urllib.request.Request(url, headers=self._headers())
+        resume_from = target.stat().st_size if target.exists() else 0
+        headers = self._headers()
+        if resume_from:
+            headers["Range"] = f"bytes={resume_from}-"
+        request = urllib.request.Request(url, headers=headers)
         start = time.monotonic()
-        received = 0
-        with urllib.request.urlopen(request, timeout=DOWNLOAD_TIMEOUT) as response, target.open("wb") as fh:
-            while True:
-                # Checked per chunk, not just once before the request -- otherwise cancelling
-                # mid-transfer of a single large/slow file (real ones take 30+ seconds, found in
-                # practice) wouldn't take effect until that whole transfer finished anyway. Leaves
-                # a partial file on disk, same as any other interrupted download -- the existing
-                # size-mismatch check in _needs_download() already re-fetches it next time.
-                if should_cancel is not None and should_cancel():
-                    raise DownloadCancelled()
-                # A wall-clock cap on the whole transfer, not just DOWNLOAD_TIMEOUT's per-read
-                # socket timeout -- see _MAX_DOWNLOAD_SECONDS for why the two catch different
-                # failure modes. TimeoutError is a plain OSError subclass, so download_file()'s
-                # existing "except (urllib.error.URLError, OSError)" retry/give-up handling
-                # already covers this without needing its own case. Reports how many bytes had
-                # actually arrived by then -- found in practice, needed to tell apart a fully
-                # stalled connection (0 bytes, in which case this whole timeout is just wasted
-                # waiting and could fail much faster) from a genuinely slow one that was still
-                # making real progress (in which case a longer timeout, or resuming instead of
-                # restarting from scratch, would help more) -- without this, that distinction was
-                # unanswerable after the fact, since only the final attempt's own partial file
-                # even survives long enough to inspect, and this run doesn't log to nmea2log.log
-                # at all (see the module docstring).
-                if time.monotonic() - start > _MAX_DOWNLOAD_SECONDS:
-                    size_note = f"{received} of {expected_size}" if expected_size is not None else str(received)
-                    raise TimeoutError(
-                        f"no full file after {_MAX_DOWNLOAD_SECONDS}s ({size_note} bytes "
-                        "received) -- giving up on this attempt"
-                    )
-                chunk = response.read(65536)
-                if not chunk:
-                    break
-                fh.write(chunk)
-                received += len(chunk)
+        try:
+            response = urllib.request.urlopen(request, timeout=DOWNLOAD_TIMEOUT)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 416 and resume_from:
+                # The existing partial doesn't align with what the server has any more (e.g. it
+                # was replaced/rotated between attempts, or the local leftover is stale/corrupt)
+                # -- discard it and restart this same call from scratch instead of retrying an
+                # identical, permanently-416ing request forever.
+                target.unlink(missing_ok=True)
+                return self.download_to(
+                    path, params, target, expected_size=expected_size, should_cancel=should_cancel
+                )
+            raise
+        with response:
+            resumed = bool(resume_from) and response.status == 206
+            received = resume_from if resumed else 0
+            with target.open("ab" if resumed else "wb") as fh:
+                while True:
+                    # Checked per chunk, not just once before the request -- otherwise cancelling
+                    # mid-transfer of a single large/slow file (real ones take 30+ seconds, found
+                    # in practice) wouldn't take effect until that whole transfer finished anyway.
+                    # Leaves a partial file on disk to resume from next attempt, same as any other
+                    # interrupted download.
+                    if should_cancel is not None and should_cancel():
+                        raise DownloadCancelled()
+                    # A wall-clock cap on the whole transfer, not just DOWNLOAD_TIMEOUT's per-read
+                    # socket timeout -- see _MAX_DOWNLOAD_SECONDS for why the two catch different
+                    # failure modes. TimeoutError is a plain OSError subclass, so download_file()'s
+                    # existing "except (urllib.error.URLError, OSError)" retry/give-up handling
+                    # already covers this without needing its own case. Reports how many bytes had
+                    # actually arrived by then (including anything resumed from before this
+                    # attempt) -- found in practice, needed to tell apart a fully stalled
+                    # connection (0 bytes) from a genuinely slow one still making real progress,
+                    # which is exactly what justified adding this resume support in the first
+                    # place -- without this, that distinction was unanswerable after the fact,
+                    # since only the final attempt's own partial file even survives long enough to
+                    # inspect, and this run doesn't log to nmea2log.log at all (see the module
+                    # docstring).
+                    if time.monotonic() - start > _MAX_DOWNLOAD_SECONDS:
+                        size_note = f"{received} of {expected_size}" if expected_size is not None else str(received)
+                        raise TimeoutError(
+                            f"no full file after {_MAX_DOWNLOAD_SECONDS}s ({size_note} bytes "
+                            "received) -- giving up on this attempt"
+                        )
+                    chunk = response.read(65536)
+                    if not chunk:
+                        break
+                    fh.write(chunk)
+                    received += len(chunk)
 
 
 def _urlencode(params: Dict[str, str]) -> str:

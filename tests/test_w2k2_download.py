@@ -410,6 +410,124 @@ def test_main_reports_a_clear_error_on_connection_reset_instead_of_a_raw_traceba
     assert "network" in str(exc_info.value)
 
 
+def test_download_to_resumes_from_an_existing_partial_file(tmp_path, monkeypatch):
+    """Regression test for a real bug found in practice: on a real, severely bandwidth-limited
+    connection to the W2K-2 (well under 10 KB/s in one real case), every retry restarting from
+    byte 0 meant a multi-megabyte file could never complete at all -- each attempt's own share of
+    progress alone was smaller than the whole file. A partial file left by an earlier attempt must
+    be resumed via an HTTP Range request, not thrown away."""
+    import nmea2000processor.w2k2_download as w2k2_download
+
+    target = tmp_path / "file.ebl"
+    target.write_bytes(b"a" * 40)  # a previous attempt's own partial progress
+
+    class _FakeResponse:
+        status = 206  # Partial Content -- the server honored the Range request
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, n):
+            if not hasattr(self, "_served"):
+                self._served = True
+                return b"b" * 20
+            return b""
+
+    captured_request = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured_request["headers"] = dict(request.header_items())
+        return _FakeResponse()
+
+    monkeypatch.setattr(w2k2_download.urllib.request, "urlopen", fake_urlopen)
+
+    session = w2k2_download._Session("http://10.0.0.1")
+    session.download_to("/api/download", {}, target, expected_size=60)
+
+    assert captured_request["headers"].get("Range") == "bytes=40-"
+    assert target.read_bytes() == b"a" * 40 + b"b" * 20  # appended, not overwritten
+
+
+def test_download_to_restarts_from_scratch_when_the_server_ignores_the_range_request(
+    tmp_path, monkeypatch
+):
+    """A server that doesn't support Range requests at all just returns the whole file again from
+    the top (HTTP 200, not 206) -- must be detected and treated as a fresh download, not appended
+    after the stale partial (which would silently corrupt the file)."""
+    import nmea2000processor.w2k2_download as w2k2_download
+
+    target = tmp_path / "file.ebl"
+    target.write_bytes(b"a" * 40)
+
+    class _FakeResponse:
+        status = 200  # full content, Range header was ignored
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, n):
+            if not hasattr(self, "_served"):
+                self._served = True
+                return b"c" * 60  # the whole file, from the top
+            return b""
+
+    monkeypatch.setattr(w2k2_download.urllib.request, "urlopen", lambda *a, **kw: _FakeResponse())
+
+    session = w2k2_download._Session("http://10.0.0.1")
+    session.download_to("/api/download", {}, target, expected_size=60)
+
+    assert target.read_bytes() == b"c" * 60  # not b"a"*40 + b"c"*60 -- the stale partial is gone
+
+
+def test_download_to_restarts_from_scratch_on_a_416_response(tmp_path, monkeypatch):
+    """A partial that no longer aligns with what the server has (e.g. replaced/rotated between
+    attempts, or a stale/corrupt local leftover) gets a 416 for its Range request -- discarded and
+    retried fresh instead of repeating an identical, permanently-416ing request forever."""
+    import nmea2000processor.w2k2_download as w2k2_download
+
+    target = tmp_path / "file.ebl"
+    target.write_bytes(b"a" * 40)
+
+    calls = []
+
+    class _FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, n):
+            if not hasattr(self, "_served"):
+                self._served = True
+                return b"c" * 60
+            return b""
+
+    def fake_urlopen(request, timeout=None):
+        calls.append(dict(request.header_items()))
+        if len(calls) == 1:
+            raise urllib.error.HTTPError(url="x", code=416, msg="Range Not Satisfiable", hdrs=None, fp=None)
+        return _FakeResponse()
+
+    monkeypatch.setattr(w2k2_download.urllib.request, "urlopen", fake_urlopen)
+
+    session = w2k2_download._Session("http://10.0.0.1")
+    session.download_to("/api/download", {}, target, expected_size=60)
+
+    assert len(calls) == 2
+    assert "Range" in calls[0]  # first attempt tried to resume
+    assert "Range" not in calls[1]  # retry, after discarding the stale partial, starts fresh
+    assert target.read_bytes() == b"c" * 60
+
+
 def test_download_to_reports_bytes_received_so_far_when_it_times_out(tmp_path, monkeypatch):
     """Regression test: found in practice, a real 120s timeout on one real file gave no way to
     tell afterwards whether the connection was fully stalled (0 bytes) or genuinely slow but still
