@@ -44,6 +44,7 @@ import getpass
 import json
 import os
 import socket
+import subprocess
 import sys
 import time
 import urllib.error
@@ -138,6 +139,71 @@ def _is_private_ipv4(octets: List[str]) -> bool:
     return first == 10 or (first == 172 and 16 <= second <= 31) or (first == 192 and second == 168)
 
 
+# Adapter description/alias substrings (case-insensitive) that mean "not a real wifi/ethernet
+# link to an actual physical network" -- deprioritized, not excluded outright, in
+# _windows_private_subnet_prefixes() below: still tried if nothing else works, just last.
+_VIRTUAL_ADAPTER_HINTS = (
+    "virtual", "hyper-v", "vmware", "virtualbox", "loopback", "tap-", "tunnel", "vpn",
+)
+
+
+def _windows_private_subnet_prefixes() -> List[str]:
+    """Every /24 this machine currently has a private IPv4 address on, via Windows'
+    Get-NetIPConfiguration (PowerShell) -- real adapters (wifi/ethernet) ordered before
+    virtual-looking ones (Hyper-V, VMware, VPN, ...), so those get tried first, but nothing is
+    ever silently excluded.
+
+    Found in practice, on a real dev machine: this whole discovery mechanism assumed "there's
+    only ever one active network" (see this module's own docstring), which broke the moment a
+    Hyper-V virtual switch was also up -- both the internet-route trick and its own broadcast
+    fallback (see _local_subnet_prefix()) can each independently end up picking whichever
+    interface Windows treats as "primary" when there's no real default route to disambiguate by
+    (nothing connected to the W2K-2's own isolated hotspot ever has one), with no guarantee that's
+    the same interface actually joined to the W2K-2's own network. Enumerating every candidate
+    and trying each one (see discover_w2k2()) sidesteps the guessing entirely -- costs at most a
+    few extra seconds (each /24 scan takes about one, see _DISCOVERY_MAX_WORKERS), and is
+    reliable regardless of which adapter Windows happens to prefer internally.
+
+    Returns an empty list (never raises) on anything going wrong -- no PowerShell on PATH, not
+    running on Windows at all, unexpected/unparseable output -- so callers can always fall back to
+    the single-best-guess chain in _local_subnet_prefix() instead."""
+    try:
+        result = subprocess.run(
+            [
+                "powershell", "-NoProfile", "-NonInteractive", "-Command",
+                "Get-NetIPConfiguration | Where-Object { $_.IPv4Address } | ForEach-Object { "
+                "[PSCustomObject]@{ Alias = $_.InterfaceAlias; "
+                "Description = $_.InterfaceDescription; IPv4 = $_.IPv4Address.IPAddress } } "
+                "| ConvertTo-Json -Compress",
+            ],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            return []
+        parsed = json.loads(result.stdout)
+        entries = parsed if isinstance(parsed, list) else [parsed]  # a single match isn't a list
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return []
+
+    real: List[str] = []
+    virtual: List[str] = []
+    seen: set = set()
+    for entry in entries:
+        ip = entry.get("IPv4")
+        if not isinstance(ip, str):
+            continue
+        octets = ip.split(".")
+        if len(octets) != 4 or not _is_private_ipv4(octets):
+            continue  # also excludes link-local (169.254.x.x) and loopback
+        prefix = ".".join(octets[:3]) + "."
+        if prefix in seen:
+            continue
+        seen.add(prefix)
+        haystack = f"{entry.get('Alias', '')} {entry.get('Description', '')}".lower()
+        (virtual if any(hint in haystack for hint in _VIRTUAL_ADAPTER_HINTS) else real).append(prefix)
+    return real + virtual
+
+
 def _local_subnet_prefix() -> str:
     """The first three octets of this machine's own local IPv4 address (e.g. "10.169.127."),
     found by asking the OS which local address it would use to reach the internet -- no packet is
@@ -207,24 +273,37 @@ def _looks_like_w2k2(ip: str) -> bool:
     return "actisense" in body.lower() or "w2k" in body.lower()
 
 
+def _candidate_subnet_prefixes() -> List[str]:
+    """Every /24 worth scanning, in order -- the structured, multi-adapter-aware enumeration
+    first (see _windows_private_subnet_prefixes()), falling back to the single best guess (see
+    _local_subnet_prefix()) only when that returned nothing at all (not on Windows, no
+    PowerShell on PATH, unparseable output, ...)."""
+    prefixes = _windows_private_subnet_prefixes()
+    return prefixes if prefixes else [_local_subnet_prefix()]
+
+
 def discover_w2k2(subnet_prefix: Optional[str] = None) -> Optional[str]:
     """Finds the W2K-2 on the local network by scanning a /24 subnet for a host whose web
     interface identifies itself as Actisense/W2K-2. Returns a base URL (e.g.
-    "http://10.169.127.101"), or None if nothing matched.
+    "http://10.169.127.101"), or None if nothing matched anywhere.
 
-    By default (subnet_prefix=None) the subnet is this machine's own, self-detected via
-    _local_subnet_prefix() -- fine on desktop, where there's only ever one active network. On
-    Android, where the hotspot and the cellular uplink are both active at once, self-detection
-    would find the cellular subnet instead of the hotspot's -- callers there pass the hotspot's
-    own subnet explicitly (from NetworkInterface enumeration) to skip that self-detection.
+    By default (subnet_prefix=None) every subnet this machine currently has a private IPv4
+    address on gets tried in turn (see _candidate_subnet_prefixes()) -- found in practice, a real
+    dev machine with a Hyper-V virtual switch also up: guessing just one "the" local subnet isn't
+    reliable once more than one adapter is active at once, which desktop can no longer assume
+    never happens. On Android, where the hotspot and the cellular uplink are both active at once
+    but self-detection has no equivalent way to enumerate adapters, callers pass the hotspot's
+    own subnet explicitly (from NetworkInterface enumeration) to skip this entirely -- an explicit
+    subnet_prefix is always scanned alone, never combined with anything else.
     """
-    prefix = subnet_prefix if subnet_prefix is not None else _local_subnet_prefix()
-    log(f"[info] Scanning {prefix}0/24 for a W2K-2...", file=sys.stderr)
-    hosts = [f"{prefix}{i}" for i in range(1, 255)]
-    with concurrent.futures.ThreadPoolExecutor(max_workers=_DISCOVERY_MAX_WORKERS) as executor:
-        for ip, found in zip(hosts, executor.map(_looks_like_w2k2, hosts)):
-            if found:
-                return f"http://{ip}"
+    prefixes = [subnet_prefix] if subnet_prefix is not None else _candidate_subnet_prefixes()
+    for prefix in prefixes:
+        log(f"[info] Scanning {prefix}0/24 for a W2K-2...", file=sys.stderr)
+        hosts = [f"{prefix}{i}" for i in range(1, 255)]
+        with concurrent.futures.ThreadPoolExecutor(max_workers=_DISCOVERY_MAX_WORKERS) as executor:
+            for ip, found in zip(hosts, executor.map(_looks_like_w2k2, hosts)):
+                if found:
+                    return f"http://{ip}"
     return None
 
 

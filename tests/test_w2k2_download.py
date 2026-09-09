@@ -1,3 +1,4 @@
+import json
 import socket
 import urllib.request
 from pathlib import Path
@@ -5,10 +6,12 @@ from pathlib import Path
 import pytest
 
 from nmea2000processor.w2k2_download import (
+    _candidate_subnet_prefixes,
     _local_subnet_prefix,
     _looks_like_w2k2,
     _needs_download,
     _will_download,
+    _windows_private_subnet_prefixes,
     build_download_plan,
     discover_w2k2,
     download_file,
@@ -116,6 +119,80 @@ def test_looks_like_w2k2_false_when_port_open_but_body_doesnt_match(monkeypatch)
     assert _looks_like_w2k2("10.0.0.5") is False
 
 
+class _FakeCompletedProcess:
+    def __init__(self, stdout: str, returncode: int = 0):
+        self.stdout = stdout
+        self.returncode = returncode
+
+
+def test_windows_private_subnet_prefixes_orders_real_adapters_before_virtual_ones(monkeypatch):
+    """Regression test for a real bug found in practice, on a real dev machine: a Hyper-V virtual
+    switch adapter (172.23.192.1) was up alongside the real wifi (172.16.121.93) -- the real
+    adapter must be tried first, but the virtual one still included as a fallback candidate, not
+    dropped outright (asked for nothing to be silently excluded)."""
+    import nmea2000processor.w2k2_download as w2k2_download
+
+    payload = json.dumps(
+        [
+            {"Alias": "vEthernet (Default Switch)", "Description": "Hyper-V Virtual Ethernet Adapter",
+             "IPv4": "172.23.192.1"},
+            {"Alias": "Wi-Fi", "Description": "Intel(R) Wi-Fi 6E AX211 160MHz", "IPv4": "172.16.121.93"},
+            {"Alias": "Bluetooth-netwerkverbinding", "Description": "Bluetooth Device (PAN)",
+             "IPv4": "169.254.244.219"},
+        ]
+    )
+    monkeypatch.setattr(
+        w2k2_download.subprocess, "run", lambda *a, **kw: _FakeCompletedProcess(payload)
+    )
+
+    assert _windows_private_subnet_prefixes() == ["172.16.121.", "172.23.192."]
+
+
+def test_windows_private_subnet_prefixes_handles_a_single_adapter_not_wrapped_in_a_list(monkeypatch):
+    """ConvertTo-Json emits a bare object, not a one-element array, when there's only one match --
+    a real PowerShell quirk, not something to special-case away only in a test fixture."""
+    import nmea2000processor.w2k2_download as w2k2_download
+
+    payload = json.dumps({"Alias": "Wi-Fi", "Description": "Intel Wi-Fi", "IPv4": "10.0.0.5"})
+    monkeypatch.setattr(
+        w2k2_download.subprocess, "run", lambda *a, **kw: _FakeCompletedProcess(payload)
+    )
+
+    assert _windows_private_subnet_prefixes() == ["10.0.0."]
+
+
+def test_windows_private_subnet_prefixes_returns_empty_when_powershell_is_unavailable(monkeypatch):
+    import nmea2000processor.w2k2_download as w2k2_download
+
+    def _raise(*a, **kw):
+        raise FileNotFoundError("powershell not found")
+
+    monkeypatch.setattr(w2k2_download.subprocess, "run", _raise)
+
+    assert _windows_private_subnet_prefixes() == []
+
+
+def test_windows_private_subnet_prefixes_returns_empty_on_malformed_output(monkeypatch):
+    import nmea2000processor.w2k2_download as w2k2_download
+
+    monkeypatch.setattr(
+        w2k2_download.subprocess, "run", lambda *a, **kw: _FakeCompletedProcess("not json")
+    )
+
+    assert _windows_private_subnet_prefixes() == []
+
+
+def test_candidate_subnet_prefixes_falls_back_to_the_single_guess_when_enumeration_finds_nothing(
+    monkeypatch,
+):
+    import nmea2000processor.w2k2_download as w2k2_download
+
+    monkeypatch.setattr(w2k2_download, "_windows_private_subnet_prefixes", lambda: [])
+    monkeypatch.setattr(w2k2_download, "_local_subnet_prefix", lambda: "10.169.127.")
+
+    assert _candidate_subnet_prefixes() == ["10.169.127."]
+
+
 class _ScriptedSocket:
     """Fakes socket.socket() for _local_subnet_prefix()'s own fallback chain: connect() either
     raises or succeeds depending on the target address, per a {address: local_ip_or_None} script
@@ -184,19 +261,49 @@ def test_local_subnet_prefix_reraises_when_every_fallback_finds_nothing_usable(m
 def test_discover_w2k2_returns_the_matching_host(monkeypatch):
     import nmea2000processor.w2k2_download as w2k2_download
 
-    monkeypatch.setattr(w2k2_download, "_local_subnet_prefix", lambda: "10.0.0.")
+    monkeypatch.setattr(w2k2_download, "_candidate_subnet_prefixes", lambda: ["10.0.0."])
     monkeypatch.setattr(w2k2_download, "_looks_like_w2k2", lambda ip: ip == "10.0.0.42")
 
     assert discover_w2k2() == "http://10.0.0.42"
 
 
-def test_discover_w2k2_returns_none_when_nothing_on_the_subnet_matches(monkeypatch):
+def test_discover_w2k2_returns_none_when_nothing_on_any_subnet_matches(monkeypatch):
     import nmea2000processor.w2k2_download as w2k2_download
 
-    monkeypatch.setattr(w2k2_download, "_local_subnet_prefix", lambda: "10.0.0.")
+    monkeypatch.setattr(w2k2_download, "_candidate_subnet_prefixes", lambda: ["10.0.0."])
     monkeypatch.setattr(w2k2_download, "_looks_like_w2k2", lambda ip: False)
 
     assert discover_w2k2() is None
+
+
+def test_discover_w2k2_tries_the_next_candidate_subnet_when_the_first_has_nothing(monkeypatch):
+    """Regression test for a real bug found in practice, on a real dev machine: a Hyper-V virtual
+    switch being up alongside the real wifi meant guessing just one "the" local subnet (see
+    _local_subnet_prefix()) wasn't reliable -- discover_w2k2() must keep trying every candidate,
+    not give up after the first subnet comes up empty."""
+    import nmea2000processor.w2k2_download as w2k2_download
+
+    monkeypatch.setattr(
+        w2k2_download, "_candidate_subnet_prefixes", lambda: ["172.23.192.", "172.16.121."]
+    )
+    monkeypatch.setattr(w2k2_download, "_looks_like_w2k2", lambda ip: ip == "172.16.121.101")
+
+    assert discover_w2k2() == "http://172.16.121.101"
+
+
+def test_discover_w2k2_with_an_explicit_subnet_prefix_never_tries_others(monkeypatch):
+    """An explicitly given subnet_prefix (used on Android, see this function's own doc comment)
+    must be scanned alone -- never combined with _candidate_subnet_prefixes()'s own enumeration,
+    which doesn't apply there at all (cellular's own subnet would just be noise)."""
+    import nmea2000processor.w2k2_download as w2k2_download
+
+    def _fail_if_called():
+        raise AssertionError("_candidate_subnet_prefixes() must not be called with an explicit prefix")
+
+    monkeypatch.setattr(w2k2_download, "_candidate_subnet_prefixes", _fail_if_called)
+    monkeypatch.setattr(w2k2_download, "_looks_like_w2k2", lambda ip: ip == "10.0.0.42")
+
+    assert discover_w2k2(subnet_prefix="10.0.0.") == "http://10.0.0.42"
 
 
 def test_discover_w2k2_with_explicit_subnet_prefix_skips_self_detection(monkeypatch):
