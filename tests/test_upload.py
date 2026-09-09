@@ -1,4 +1,8 @@
+import base64
+import io
 import subprocess
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -11,6 +15,7 @@ from nmea2000processor.upload import (
     upload_file,
     upload_files,
     upload_files_to_dirs,
+    upload_via_rest,
 )
 
 
@@ -492,3 +497,67 @@ def test_upload_files_to_dirs_raises_with_the_sftp_error_message(tmp_path: Path,
         upload_files_to_dirs(
             {"private/ebl-backup/EBL000000": [a]}, host="example.com", user="me", key_file=key_file,
         )
+
+
+class _FakeHttpResponse:
+    def __init__(self, body: bytes = b'{"ok":true}'):
+        self._body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def read(self):
+        return self._body
+
+
+def test_upload_via_rest_sends_basic_auth_and_the_raw_body(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["url"] = request.full_url
+        captured["method"] = request.get_method()
+        captured["headers"] = dict(request.header_items())
+        captured["data"] = request.data
+        return _FakeHttpResponse()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    upload_via_rest(
+        b"<html>logbook</html>",
+        url="https://ayuus.com/wp-json/nmea2log/v1/logbook",
+        user="ronald",
+        app_password="abcd efgh ijkl mnop",
+    )
+
+    assert captured["url"] == "https://ayuus.com/wp-json/nmea2log/v1/logbook"
+    assert captured["method"] == "POST"
+    assert captured["data"] == b"<html>logbook</html>"
+    expected = base64.b64encode(b"ronald:abcd efgh ijkl mnop").decode("ascii")
+    assert captured["headers"]["Authorization"] == f"Basic {expected}"
+    assert captured["headers"]["Content-type"] == "text/html; charset=utf-8"
+
+
+def test_upload_via_rest_raises_with_the_servers_own_error_message(monkeypatch):
+    def fake_urlopen(request, timeout=None):
+        raise urllib.error.HTTPError(
+            url=request.full_url, code=400, msg="Bad Request", hdrs=None,
+            fp=io.BytesIO(b'{"code":"logbook_too_small","message":"Uploaded content looks incomplete"}'),
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(UploadError, match="logbook_too_small"):
+        upload_via_rest(b"x", url="https://ayuus.com/wp-json/nmea2log/v1/logbook", user="ronald", app_password="pw")
+
+
+def test_upload_via_rest_raises_on_a_network_error(monkeypatch):
+    def fake_urlopen(request, timeout=None):
+        raise urllib.error.URLError("Connection refused")
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(UploadError, match="Connection refused"):
+        upload_via_rest(b"x", url="https://ayuus.com/wp-json/nmea2log/v1/logbook", user="ronald", app_password="pw")

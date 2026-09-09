@@ -1,20 +1,30 @@
-"""Uploads the generated HTML logbook to a website over SFTP, so it's viewable from anywhere
-without running a server of your own (e.g. exposing a Raspberry Pi to the internet, with all the
-port-forwarding/dynamic-DNS hassle that involves).
+"""Uploads the generated HTML logbook to a website, so it's viewable from anywhere without
+running a server of your own (e.g. exposing a Raspberry Pi to the internet, with all the port-
+forwarding/dynamic-DNS hassle that involves).
 
-Uses the system's own ``sftp`` client (OpenSSH -- already installed on Windows 10/11 and Debian)
-in batch mode with key-based authentication, instead of adding an SFTP library dependency. Key-
-based auth is what makes this usable unpatched: the alternative, a login password, can't be
-scripted through the ``sftp`` CLI without prompting interactively, which defeats the point of
-running this automatically after every log conversion.
+Two transports:
+
+- ``upload_via_rest`` (preferred): posts the HTML straight to a WordPress REST endpoint (see
+  wordpress-plugin/nmea2log-remarks.php's ``/logbook`` route), authenticated with a WordPress
+  Application Password. No SSH key needed on this machine -- just reuses the same
+  logboek_editor-role account this project already needs for remarks.
+- ``upload_file``/``upload_files``/etc. (SFTP, still used for the .ebl archive backup): the
+  system's own ``sftp`` client (OpenSSH -- already installed on Windows 10/11 and Debian) in
+  batch mode with key-based authentication, instead of adding an SFTP library dependency. Key-
+  based auth is what makes this usable unpatched: the alternative, a login password, can't be
+  scripted through the ``sftp`` CLI without prompting interactively, which defeats the point of
+  running this automatically after every log conversion.
 """
 
 from __future__ import annotations
 
+import base64
 import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
@@ -31,6 +41,42 @@ _BACKUP_RETRY_DELAY_S = 5.0
 
 class UploadError(Exception):
     pass
+
+
+def upload_via_rest(html_content: bytes, url: str, user: str, app_password: str) -> None:
+    """Posts the built HTML logbook to a WordPress REST endpoint (see wordpress-plugin/
+    nmea2log-remarks.php's ``nmea2log_logbook_upload()``) instead of over SFTP -- no SSH key
+    needed on this machine, just a WordPress Application Password (Users > Profile > Application
+    Passwords on the account's own profile page, not the account's real login password) for a
+    user with the logboek_editor role (or Administrator).
+
+    The raw HTML bytes are the request body, not wrapped in a JSON envelope: at several hundred
+    KB, that would only add escaping overhead for no benefit, and the server side reads the raw
+    body the same way. Raises ``UploadError`` with the server's own message on anything but a
+    success response, same contract as ``upload_file``."""
+    credentials = base64.b64encode(f"{user}:{app_password}".encode("utf-8")).decode("ascii")
+    request = urllib.request.Request(
+        url,
+        data=html_content,
+        method="POST",
+        headers={
+            "Authorization": f"Basic {credentials}",
+            "Content-Type": "text/html; charset=utf-8",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            response.read()
+    # HTTPError first: it's a URLError subclass, so the broader except below would otherwise
+    # catch it too, but without the response body the server actually sent (e.g. this plugin's
+    # own WP_Error message, like "Uploaded content looks incomplete") -- exactly the detail
+    # worth surfacing here, same reasoning as _sftp_error_message() stripping noise so the real
+    # error is what the caller actually sees.
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace").strip()
+        raise UploadError(f"HTTP {exc.code}: {body or exc.reason}") from exc
+    except (urllib.error.URLError, OSError) as exc:
+        raise UploadError(str(exc)) from exc
 
 
 def _sftp_error_message(result: subprocess.CompletedProcess) -> str:

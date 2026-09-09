@@ -320,25 +320,40 @@ def test_main_reports_a_clear_error_when_backup_ebl_is_missing_settings(tmp_path
     assert "--backup-ebl needs" in capsys.readouterr().err
 
 
-def test_main_no_upload_flag_overrides_upload_and_backup_ebl(tmp_path, monkeypatch, capsys):
-    """Regression test for a real incident: a local test run still uploaded to the live site
-    because nmea2log.ini enables upload by default -- --no-upload must force both --upload and
-    --backup-ebl off regardless of what --upload/--backup-ebl (or the config file) request, so a
-    local test run can never touch the live site by accident."""
+def test_main_reports_a_clear_error_when_upload_rest_is_missing_settings(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
 
     exit_code = None
     try:
-        main(["--upload", "--backup-ebl", "--no-upload", "--ebl-dir", str(tmp_path)])
+        main(["--upload-rest", "--ebl-dir", str(tmp_path)])
     except SystemExit as exc:
         exit_code = exc.code
 
-    # Got past the "--upload needs ..."/"--backup-ebl needs ..." validation (which would fire if
-    # either were still enabled, since none of the required upload settings are supplied here) --
-    # reaching the unrelated "no .ebl files" error instead proves both were switched off.
+    assert exit_code == 2
+    assert "--upload-rest needs" in capsys.readouterr().err
+
+
+def test_main_no_upload_flag_overrides_upload_and_backup_ebl(tmp_path, monkeypatch, capsys):
+    """Regression test for a real incident: a local test run still uploaded to the live site
+    because nmea2log.ini enables upload by default -- --no-upload must force --upload,
+    --upload-rest, and --backup-ebl all off regardless of what those flags (or the config file)
+    request, so a local test run can never touch the live site by accident."""
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = None
+    try:
+        main(["--upload", "--upload-rest", "--backup-ebl", "--no-upload", "--ebl-dir", str(tmp_path)])
+    except SystemExit as exc:
+        exit_code = exc.code
+
+    # Got past the "--upload needs ..."/"--upload-rest needs ..."/"--backup-ebl needs ..."
+    # validation (which would fire if any were still enabled, since none of the required upload
+    # settings are supplied here) -- reaching the unrelated "no .ebl files" error instead proves
+    # all three were switched off.
     assert exit_code == 2
     err = capsys.readouterr().err
     assert "--upload needs" not in err
+    assert "--upload-rest needs" not in err
     assert "--backup-ebl needs" not in err
     assert "no .ebl files found" in err
 
@@ -547,6 +562,40 @@ def test_main_does_not_fail_the_run_when_the_backup_upload_breaks_partway(tmp_pa
     assert exit_code == 0  # not fatal to the run
     assert call_count == 2  # stopped after the failing chunk, didn't retry or skip ahead
     assert "stopped after 25 new file(s)" in capsys.readouterr().err
+
+
+def test_main_prefers_rest_upload_over_sftp_when_both_are_configured(tmp_path, monkeypatch):
+    """--upload-rest needs no SSH key on this machine (see its own help text), so it's preferred
+    over SFTP whenever both happen to be configured at once -- proven here by giving main() both
+    complete sets of settings and checking only the REST path actually ran."""
+    ebl_path = tmp_path / "000000_000.ebl"
+    ebl_path.write_bytes(b"x" * 100)
+    _stub_one_trip_samples(monkeypatch)
+
+    rest_calls = []
+    sftp_calls = []
+    monkeypatch.setattr(
+        "nmea2000processor.cli.upload_via_rest",
+        lambda html_content, **kw: rest_calls.append((html_content, kw)),
+    )
+    monkeypatch.setattr(
+        "nmea2000processor.cli.upload_file", lambda local_path, **kw: sftp_calls.append((local_path, kw))
+    )
+
+    exit_code = main(
+        [
+            str(ebl_path), "-o", str(tmp_path / "logbook.csv"), "--no-geocode",
+            "--upload-rest", "--upload-rest-url", "https://ayuus.com/wp-json/nmea2log/v1/logbook",
+            "--upload-rest-user", "ronald", "--upload-rest-app-password", "abcd efgh",
+            "--upload", "--upload-host", "example.com", "--upload-user", "me",
+            "--upload-remote-path", "logbook.html", "--upload-key-file", str(tmp_path / "key"),
+        ]
+    )
+
+    assert exit_code == 0
+    assert len(rest_calls) == 1
+    assert rest_calls[0][1]["url"] == "https://ayuus.com/wp-json/nmea2log/v1/logbook"
+    assert sftp_calls == []
 
 
 def test_main_reuses_cached_samples_on_a_second_run(tmp_path, monkeypatch, capsys):

@@ -55,7 +55,13 @@ from .pgn_decode import (
 )
 from .trip_ids import assign_trip_ids
 from .tripbuilder import TRIP_LOGIC_VERSION, build_trips
-from .upload import UploadError, list_remote_filenames_multi, upload_file, upload_files_to_dirs
+from .upload import (
+    UploadError,
+    list_remote_filenames_multi,
+    upload_file,
+    upload_files_to_dirs,
+    upload_via_rest,
+)
 
 _T = TypeVar("_T")
 _ArrayT = TypeVar("_ArrayT")  # one of fix_array.py's array.array-backed sample collections
@@ -578,6 +584,37 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="SFTP port (default 22, only with --upload)",
     )
     parser.add_argument(
+        "--upload-rest",
+        action="store_true",
+        help="Upload the HTML logbook to a WordPress REST endpoint after writing it, instead of "
+        "over SFTP (see 'upload-rest-url'/'upload-rest-user'/'upload-rest-app-password', or the "
+        "matching [upload] settings in the config file) -- takes priority over --upload when "
+        "both are configured, since it needs no SSH key on this machine, just a WordPress "
+        "Application Password. --no-upload disables this too.",
+    )
+    parser.add_argument(
+        "--upload-rest-url",
+        type=str,
+        default=None,
+        help="URL of the WordPress REST endpoint that receives the HTML logbook (see "
+        "wordpress-plugin/nmea2log-remarks.php's /logbook route; only with --upload-rest)",
+    )
+    parser.add_argument(
+        "--upload-rest-user",
+        type=str,
+        default=None,
+        help="WordPress username for the REST upload (only with --upload-rest) -- needs the "
+        "logboek_editor role (or Administrator) on the target site",
+    )
+    parser.add_argument(
+        "--upload-rest-app-password",
+        type=str,
+        default=None,
+        help="WordPress Application Password for the REST upload (only with --upload-rest) -- "
+        "generated on the account's own profile page (Users > Profile > Application Passwords), "
+        "not the account's real login password",
+    )
+    parser.add_argument(
         "--backup-ebl",
         action="store_true",
         help="Back up this run's own logfiles (e.g. .ebl files) to the SFTP server too, so "
@@ -671,6 +708,12 @@ def _apply_config_defaults(parser: argparse.ArgumentParser) -> None:
     # either way.
     if all(upload_section.get(key, "").strip() for key in ("host", "user", "remote_path", "key_file")):
         defaults["upload"] = True
+    # Same pattern, for the REST-based logbook upload (see upload_via_rest() in upload.py) --
+    # preferred over the SFTP settings above once configured (see _run()'s own choice between the
+    # two), so publishing doesn't need a private SSH key sitting on every machine that syncs, just
+    # a WordPress Application Password scoped to the logboek_editor role.
+    if all(upload_section.get(key, "").strip() for key in ("rest_url", "rest_user", "rest_app_password")):
+        defaults["upload_rest"] = True
     # Enabled by the mere presence of a non-blank backup_remote_path, not a separate on/off
     # setting to keep in sync with it -- matches the Android app's own settings (asked for
     # explicitly, "beide moeten hetzelfde werken"). --backup-ebl on the command line (with
@@ -685,6 +728,9 @@ def _apply_config_defaults(parser: argparse.ArgumentParser) -> None:
         ("key_file", "upload_key_file", Path),
         ("port", "upload_port", int),
         ("backup_remote_path", "backup_remote_path", str),
+        ("rest_url", "upload_rest_url", str),
+        ("rest_user", "upload_rest_user", str),
+        ("rest_app_password", "upload_rest_app_password", str),
     ):
         if key in upload_section:
             defaults[dest] = caster(upload_section[key])
@@ -769,12 +815,13 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         set_log_level("debug")
 
     if args.no_upload:
-        # Overrides even a config file whose 'upload'/'backup_remote_path' settings are complete
-        # enough to enable them by default (see _apply_config_defaults) -- the whole point is a
-        # way to run locally that's *guaranteed* not to touch the live site, regardless of what's
-        # already sitting in nmea2log.ini (found in practice: forgetting that upload is enabled
-        # by default there is exactly what caused a live-site incident twice).
+        # Overrides even a config file whose 'upload'/'upload_rest'/'backup_remote_path' settings
+        # are complete enough to enable them by default (see _apply_config_defaults) -- the whole
+        # point is a way to run locally that's *guaranteed* not to touch the live site, regardless
+        # of what's already sitting in nmea2log.ini (found in practice: forgetting that upload is
+        # enabled by default there is exactly what caused a live-site incident twice).
         args.upload = False
+        args.upload_rest = False
         args.backup_ebl = False
 
     if args.upload and not (args.upload_host and args.upload_user and args.upload_remote_path and args.upload_key_file):
@@ -782,6 +829,12 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
             "--upload needs --upload-host, --upload-user, --upload-remote-path, and "
             "--upload-key-file (or the matching settings in the [upload] section of the config "
             "file) to all be set"
+        )
+    if args.upload_rest and not (args.upload_rest_url and args.upload_rest_user and args.upload_rest_app_password):
+        parser.error(
+            "--upload-rest needs --upload-rest-url, --upload-rest-user, and "
+            "--upload-rest-app-password (or the matching settings in the [upload] section of the "
+            "config file) to all be set"
         )
     if args.backup_ebl and not (args.upload_host and args.upload_user and args.upload_key_file and args.backup_remote_path):
         parser.error(
@@ -1139,7 +1192,24 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     )
     log(f"[ok] HTML logbook written: {html_path} ({len(trips)} trip(s))")
 
-    if args.upload:
+    # REST takes priority over SFTP when both happen to be configured -- see --upload-rest's own
+    # help text for why (no SSH key needed on this machine). Not "REST, or SFTP as a fallback if
+    # REST fails" within the same run: a failed upload should surface as a failed upload, not
+    # silently retry a completely different transport the operator may not have intended to lean
+    # on at all.
+    if args.upload_rest:
+        try:
+            upload_via_rest(
+                html_path.read_bytes(),
+                url=args.upload_rest_url,
+                user=args.upload_rest_user,
+                app_password=args.upload_rest_app_password,
+            )
+            log(f"[ok] Uploaded to {args.upload_rest_url}")
+        except UploadError as exc:
+            log(f"[error] upload failed:\n{exc}", file=sys.stderr)
+            return 1
+    elif args.upload:
         try:
             upload_file(
                 html_path,
