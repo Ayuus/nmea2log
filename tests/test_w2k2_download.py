@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from nmea2000processor.w2k2_download import (
+    _local_subnet_prefix,
     _looks_like_w2k2,
     _needs_download,
     _will_download,
@@ -113,6 +114,51 @@ def test_looks_like_w2k2_false_when_port_open_but_body_doesnt_match(monkeypatch)
     monkeypatch.setattr(urllib.request, "urlopen", lambda request, timeout=None: _FakeResponse())
 
     assert _looks_like_w2k2("10.0.0.5") is False
+
+
+def test_local_subnet_prefix_falls_back_when_theres_no_route_to_the_internet(monkeypatch):
+    """Regression test for a real bug, found in practice on a real Windows PC: connected only to
+    the W2K-2's own isolated access point (no internet, no gateway at all) -- the primary
+    "ask the OS which address it'd use to reach 8.8.8.8" trick needs a matching route to exist in
+    the first place, and raises OSError (WinError 10051, "network unreachable") when there isn't
+    one -- exactly the situation this needs to work in. Falls back to the OS's own configured
+    addresses (gethostbyname_ex) instead, which needs no route/reachability at all."""
+
+    class _RaisingSocket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def connect(self, addr):
+            raise OSError("[WinError 10051] network is unreachable")
+
+    monkeypatch.setattr(socket, "socket", lambda *a, **kw: _RaisingSocket())
+    monkeypatch.setattr(
+        socket, "gethostbyname_ex", lambda name: ("host", [], ["127.0.0.1", "10.169.127.101"])
+    )
+
+    assert _local_subnet_prefix() == "10.169.127."
+
+
+def test_local_subnet_prefix_reraises_when_the_fallback_finds_nothing_private(monkeypatch):
+    class _RaisingSocket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def connect(self, addr):
+            raise OSError("[WinError 10051] network is unreachable")
+
+    monkeypatch.setattr(socket, "socket", lambda *a, **kw: _RaisingSocket())
+    # Only loopback/link-local-ish addresses, nothing private -- the fallback has nothing usable.
+    monkeypatch.setattr(socket, "gethostbyname_ex", lambda name: ("host", [], ["127.0.0.1"]))
+
+    with pytest.raises(OSError):
+        _local_subnet_prefix()
 
 
 def test_discover_w2k2_returns_the_matching_host(monkeypatch):
