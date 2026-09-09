@@ -392,4 +392,4 @@ MONTH_ABBR: Dict[str, Dict[str, str]] = {
 # Switching every language to plain text instead of just "en" keeps the four switcher buttons
 # visually consistent with each other (see html_writer.py's .lang-flag-text styling), rather than
 # reintroducing the asymmetry of one text label sitting next to three real flag emoji.
-LANGUAGE_FLAGS: Dict[str, str] = {"nl": "nl", "en": "en", "fr": "fr", "de": "de"}
+LANGUAGE_FLAGS: Dict[str, str] = {"nl": "NL", "en": "EN", "fr": "FR", "de": "DE"}
