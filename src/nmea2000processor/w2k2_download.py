@@ -219,6 +219,7 @@ def discover_w2k2(subnet_prefix: Optional[str] = None) -> Optional[str]:
     own subnet explicitly (from NetworkInterface enumeration) to skip that self-detection.
     """
     prefix = subnet_prefix if subnet_prefix is not None else _local_subnet_prefix()
+    log(f"[info] Scanning {prefix}0/24 for a W2K-2...", file=sys.stderr)
     hosts = [f"{prefix}{i}" for i in range(1, 255)]
     with concurrent.futures.ThreadPoolExecutor(max_workers=_DISCOVERY_MAX_WORKERS) as executor:
         for ip, found in zip(hosts, executor.map(_looks_like_w2k2, hosts)):
