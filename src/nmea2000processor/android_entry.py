@@ -78,6 +78,7 @@ def run_pipeline(
     mmsi: str,
     call_sign: str,
     should_cancel: Optional[Callable[[], bool]] = None,
+    min_stop_minutes: Optional[float] = None,
 ) -> dict:
     """Decodes the given .ebl files, builds trips, and writes an HTML logbook to
     output_html_path -- geocoding, weather, and marine (wave/current) lookups are all enabled by
@@ -90,6 +91,11 @@ def run_pipeline(
     the cache instead of the network. See docs/android-app-plan.md's "Cellular data cost" note if
     that ever needs its own settings toggle instead.
 
+    min_stop_minutes overrides build_arg_parser()'s own default (see --min-stop-minutes on the
+    desktop CLI) when given -- SettingsStore's own user-editable setting on Android, since there's
+    no nmea2log.ini here for it to come from otherwise. None (the default) keeps the built-in
+    default, same as not passing --min-stop-minutes at all.
+
     should_cancel, if given, is checked periodically during the decode loop -- found in practice:
     closing the app (see MainActivity.closeAppAndCancelSync()) sets SyncState.cancelled, but that
     had no effect at all once decoding had started, since only the earlier download loop (see
@@ -101,6 +107,8 @@ def run_pipeline(
     partway through, or {"ok": False, "error": "..."} for the same failure conditions cli.py's
     _run() already checks for (missing file, no position data, no trips)."""
     args = build_arg_parser().parse_args([])
+    if min_stop_minutes is not None:
+        args.min_stop_minutes = min_stop_minutes
 
     logfiles = [Path(p) for p in ebl_paths]
     if not logfiles:
@@ -399,6 +407,7 @@ def build_from_local_files(
     mmsi: str,
     call_sign: str,
     progress_callback=None,
+    min_stop_minutes: Optional[float] = None,
 ) -> dict:
     """Thin wrapper around run_pipeline() for the "show whatever's already on the phone" path
     (no W2K-2 discovery/download, see MainActivity.runOfflineBuild()) -- sets up the same log
@@ -406,7 +415,9 @@ def build_from_local_files(
     this, a real (not cache-hit) decode here left the on-screen status stuck on a single static
     "Logboek opbouwen..." message for however long it took, instead of the same "...decoded X/Y
     logfile(s) so far" progress a normal sync already shows -- run_pipeline() was always logging
-    those lines, there was just nothing on this call path listening for them."""
+    those lines, there was just nothing on this call path listening for them.
+
+    min_stop_minutes: see run_pipeline()'s own doc comment."""
     set_log_file(Path(output_html_path).parent / "nmea2log.log")
     if progress_callback is not None:
         set_log_sink(progress_callback.onLogLine)
@@ -420,6 +431,7 @@ def build_from_local_files(
             mmsi=mmsi,
             call_sign=call_sign,
             should_cancel=should_cancel,
+            min_stop_minutes=min_stop_minutes,
         )
     finally:
         set_log_sink(None)
@@ -438,6 +450,7 @@ def sync_from_w2k2(
     mmsi: str,
     call_sign: str,
     progress_callback=None,
+    min_stop_minutes: Optional[float] = None,
 ) -> dict:
     """Full sync for Android in one Chaquopy call: discover the W2K-2 on the given subnet,
     download any new/changed .ebl files, then run the decode/build/write pipeline. Reuses
@@ -474,7 +487,9 @@ def sync_from_w2k2(
     Returns a dict: {"ok": False, "error": ...} if discovery/login/download failed, or was
     cancelled (with "cancelled": True), before any pipeline run was possible; otherwise
     run_pipeline()'s own result dict with an added "downloaded_count" key (how many of the W2K-2's
-    files were actually fetched this run, as opposed to already being complete locally)."""
+    files were actually fetched this run, as opposed to already being complete locally).
+
+    min_stop_minutes: see run_pipeline()'s own doc comment."""
     # Persisted next to the logbook (filesDir on Android) so a run's full log survives after the
     # app closes and can be pulled off the device afterward (`adb pull`), the same way
     # nmea2log.log already works on desktop (see cli.py) -- console/logcat output alone is easy
@@ -486,7 +501,7 @@ def sync_from_w2k2(
     try:
         result = _sync_from_w2k2(
             user, password, subnet_prefix, download_dir, output_html_path, sample_cache_path,
-            boat_name, mmsi, call_sign, progress_callback,
+            boat_name, mmsi, call_sign, progress_callback, min_stop_minutes,
         )
     finally:
         set_log_sink(None)
@@ -505,6 +520,7 @@ def _sync_from_w2k2(
     mmsi: str,
     call_sign: str,
     progress_callback,
+    min_stop_minutes: Optional[float] = None,
 ) -> dict:
     should_cancel = progress_callback.isCancelled if progress_callback is not None else None
 
@@ -596,6 +612,7 @@ def _sync_from_w2k2(
             mmsi=mmsi,
             call_sign=call_sign,
             should_cancel=should_cancel,
+            min_stop_minutes=min_stop_minutes,
         )
     except Exception as exc:
         return {"ok": False, "error": f"Unexpected error while building the logbook: {exc}"}

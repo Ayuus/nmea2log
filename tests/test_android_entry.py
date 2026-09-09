@@ -150,6 +150,35 @@ def test_run_pipeline_writes_html_and_reports_trip_count(tmp_path, monkeypatch):
     assert html_path.exists()
 
 
+def test_run_pipeline_honors_a_min_stop_minutes_override(tmp_path, monkeypatch):
+    """min_stop_minutes lets SettingsStore's own app setting override the built-in default (see
+    run_pipeline()'s own doc comment) -- Android has no nmea2log.ini for it to come from
+    otherwise. The stub scenario's two stationary stretches are 12 minutes each, real stays under
+    the default 10-minute threshold; raising it to 15 (above both) means neither counts as a stay
+    any more, so both get folded into the trip itself instead -- depart/arrive fall back to
+    "Unknown (start/end outside log file)" (no stay left to name), a clear, observable sign the
+    override actually reached build_trips() (with the default threshold, both stationary
+    stretches are real stays with a known NoGeocoder-stubbed place name instead)."""
+    ebl_path = _write_fake_ebl(tmp_path)
+    _stub_one_trip_samples(monkeypatch)
+    html_path = tmp_path / "logbook.html"
+
+    result = android_entry.run_pipeline(
+        ebl_paths=[str(ebl_path)],
+        output_html_path=str(html_path),
+        sample_cache_path=str(tmp_path / "cache.pkl"),
+        boat_name="Test Boat",
+        mmsi="244123456",
+        call_sign="PA1234",
+        min_stop_minutes=15.0,
+    )
+
+    assert result["ok"] is True
+    html = html_path.read_text(encoding="utf-8")
+    assert "Unknown (start outside log file)" in html
+    assert "Unknown (end outside log file)" in html
+
+
 def test_run_pipeline_enables_the_remarks_column(tmp_path, monkeypatch):
     """Regression test for a real bug found in practice: run_pipeline() built its args with
     build_arg_parser().parse_args([]), which -- unlike the desktop CLI -- never reads
