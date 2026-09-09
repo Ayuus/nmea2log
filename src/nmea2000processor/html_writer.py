@@ -684,6 +684,15 @@ def _trip_row_html(
         if trip.track
         else ""
     )
+    # Warnings shown in parentheses right after the engine hours they belong to, not their own
+    # column -- found in practice, asked for explicitly: a whole column that's empty for the
+    # overwhelming majority of trips wasn't worth the width, and this reads just as clearly right
+    # next to the hours themselves.
+    engine_hours_cell = escape(_engine_hours_text(trip))
+    warnings_html = _warnings_html(trip, battery_warning_voltage, offset)
+    if warnings_html:
+        engine_hours_cell += f" ({warnings_html})"
+
     cells = [
         str(seq) if seq is not None else "",
         depart_local.strftime("%Y-%m-%d"),
@@ -697,9 +706,8 @@ def _trip_row_html(
         _max_speed_html(trip, offset),
         _nl_num(trip.fuel_liters) + " L",
         f"{_nl_num(avg_consumption_nm, 2)} L/nm" if avg_consumption_nm is not None else "",
-        escape(_engine_hours_text(trip)),
+        engine_hours_cell,
         _typical_rpm_html(trip),
-        _warnings_html(trip, battery_warning_voltage, offset),
         map_cell,
         _details_cell_html(trip, idx, log_interval_minutes, offset, weather, marine),
     ]
@@ -778,7 +786,6 @@ _HEADER_KEYS = [
     "header_l_per_nm",
     "header_engine_hours",
     "header_rpm",
-    "header_warnings",
     "header_route",
     "header_details",
 ]

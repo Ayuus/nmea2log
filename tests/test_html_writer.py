@@ -944,6 +944,25 @@ def test_write_html_logbook_no_warnings_cell_without_warnings(tmp_path: Path):
     assert 'class="temp-hover warning-count"' not in html
 
 
+def test_write_html_logbook_warnings_shown_in_parentheses_after_engine_hours(tmp_path: Path):
+    """Warnings live in the engine-hours cell now, not their own column -- asked for explicitly:
+    a whole column empty for almost every trip wasn't worth the width, and this reads just as
+    clearly right next to the hours it belongs to."""
+    trip = _trip(
+        engine_hours={0: 1.5},
+        engine_health={
+            0: EngineHealth(None, None, None, None, None, warnings=frozenset({"overheat"}))
+        },
+    )
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([trip], out_path)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert "data-i18n=\"header_warnings\"" not in html  # no separate Alarm column
+    assert '1,5 h (<span class="temp-hover warning-count">1' in html
+
+
 def test_write_html_logbook_details_popup_shows_water_temperature(tmp_path: Path):
     """Water temperature moved from its own always-visible column into the shared Details popup
     (alongside motion and the periodic log) to keep the trips table narrow (found in practice:
