@@ -544,10 +544,7 @@ def test_download_to_reports_bytes_received_so_far_when_it_times_out(tmp_path, m
             return False
 
         def read(self, n):
-            # 1 MB per chunk -- realistic .ebl file scale, so the message's own MB formatting
-            # (see _format_mb()) is meaningfully exercised rather than rounding tiny byte counts
-            # down to "0.0 MB" either side.
-            return b"x" * 1_000_000
+            return b"x" * 1000  # keeps "succeeding" forever -- only the wall-clock check ends this
 
     # start, first wall-clock check (0s elapsed, proceeds to read one chunk), second check (past
     # _MAX_DOWNLOAD_SECONDS, raises) -- three calls total, matching download_to()'s own sequence.
@@ -558,9 +555,9 @@ def test_download_to_reports_bytes_received_so_far_when_it_times_out(tmp_path, m
     session = w2k2_download._Session("http://10.0.0.1")
 
     with pytest.raises(TimeoutError) as exc_info:
-        session.download_to("/api/download", {}, tmp_path / "file.ebl", expected_size=5_000_000)
+        session.download_to("/api/download", {}, tmp_path / "file.ebl", expected_size=5000)
 
-    assert "1.0 MB of 5.0 MB received" in str(exc_info.value)
+    assert "1000 of 5000 bytes received" in str(exc_info.value)
 
 
 def test_download_file_retries_and_succeeds_after_a_transient_connection_reset(tmp_path, monkeypatch):

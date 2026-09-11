@@ -134,16 +134,6 @@ def load_config(path: Optional[Path] = None) -> W2K2Config:
     return W2K2Config(download_dir=download_dir, token=token, user=user, password=password)
 
 
-def _format_mb(num_bytes: int) -> str:
-    """"2.7 MB" instead of a raw byte count -- found in practice, asked for explicitly: a log
-    line reporting "2818048 of 5000791 bytes received" reads as a wall of digits nobody can size
-    up at a glance, on a screen (a real device's own progress log) where that number is exactly
-    the thing being watched to judge how a slow transfer is doing. Always MB, no KB/GB scaling:
-    every file here is a multi-MB .ebl log, so a fixed unit is simpler to compare across lines
-    than one that changes based on magnitude."""
-    return f"{num_bytes / 1_000_000:.1f} MB"
-
-
 def _is_private_ipv4(octets: List[str]) -> bool:
     first, second = int(octets[0]), int(octets[1])
     return first == 10 or (first == 172 and 16 <= second <= 31) or (first == 192 and second == 168)
@@ -417,13 +407,10 @@ class _Session:
                     # inspect, and this run doesn't log to nmea2log.log at all (see the module
                     # docstring).
                     if time.monotonic() - start > _MAX_DOWNLOAD_SECONDS:
-                        size_note = (
-                            f"{_format_mb(received)} of {_format_mb(expected_size)}"
-                            if expected_size is not None else _format_mb(received)
-                        )
+                        size_note = f"{received} of {expected_size}" if expected_size is not None else str(received)
                         raise TimeoutError(
-                            f"no full file after {_MAX_DOWNLOAD_SECONDS}s ({size_note} received) "
-                            "-- giving up on this attempt"
+                            f"no full file after {_MAX_DOWNLOAD_SECONDS}s ({size_note} bytes "
+                            "received) -- giving up on this attempt"
                         )
                     chunk = response.read(65536)
                     if not chunk:
@@ -543,16 +530,16 @@ def download_file(
             if attempt == _DOWNLOAD_MAX_RETRIES:
                 target.unlink(missing_ok=True)
                 log(
-                    f"[warning] {folder}/{info['file_name']} downloaded {_format_mb(actual_size)}, "
-                    f"expected at least {_format_mb(info['file_size'])} -- giving up after "
+                    f"[warning] {folder}/{info['file_name']} downloaded {actual_size} bytes, "
+                    f"expected at least {info['file_size']} -- giving up after "
                     f"{_DOWNLOAD_MAX_RETRIES + 1} attempt(s), will retry next run",
                     file=sys.stderr,
                 )
                 return
             log(
-                f"[warning] {folder}/{info['file_name']} downloaded {_format_mb(actual_size)}, "
-                f"expected at least {_format_mb(info['file_size'])} -- attempt "
-                f"{attempt + 1}/{_DOWNLOAD_MAX_RETRIES + 1}, retrying...",
+                f"[warning] {folder}/{info['file_name']} downloaded {actual_size} bytes, expected "
+                f"at least {info['file_size']} -- attempt {attempt + 1}/{_DOWNLOAD_MAX_RETRIES + 1}, "
+                "retrying...",
                 file=sys.stderr,
             )
             continue
@@ -628,7 +615,7 @@ def download_file(
     # an actual download (only the totals logged once up front), which for a real multi-file
     # download (easily minutes long) reads exactly like a hang. "[skip]" is pure noise (every
     # already-local file, every run); a genuinely new download is the actual work happening.
-    log(f"[ok] {folder}/{info['file_name']} ({_format_mb(info['file_size'])}, {stamp})")
+    log(f"[ok] {folder}/{info['file_name']} ({info['file_size']} bytes, {stamp})")
 
 
 def build_download_plan(
