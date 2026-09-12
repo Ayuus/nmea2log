@@ -69,6 +69,15 @@ def _distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 _LANDMARK_MAX_RETRIES = 2
 
+# Same reasoning as _LANDMARK_MAX_RETRIES below, applied to the main Nominatim reverse-geocode
+# request itself -- found in practice, a real, reproducible-in-isolation flake: the exact same
+# coordinate that failed with a dropped connection mid-run resolved correctly on every one of 4
+# immediate, separate retries moments later. A single failure here used to be final (no retry at
+# all, unlike the Overpass islet check just below), so one bad moment on Nominatim's end
+# permanently shows "geocoding failed" for that place in this run's own output, even though a
+# request a second later would have worked fine.
+_NOMINATIM_MAX_RETRIES = 2
+
 # Address levels that count as "a village name" -- used by _pick_place_name (a real village/
 # town/city beats an obscure leisure match, see there) and shared here so anything else that
 # needs the same definition of "a real village/town/city" can reuse it.
@@ -306,16 +315,35 @@ class Geocoder:
         request = urllib.request.Request(
             f"{_NOMINATIM_URL}?{params}", headers={"User-Agent": self.user_agent}
         )
-        try:
-            with urlopen_ipv4_first(request, timeout=10) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        # OSError alongside URLError: some connection failures (e.g. the server dropping the
-        # connection mid-response) surface as a raw ConnectionResetError/http.client exception,
-        # not wrapped in URLError (found in practice: http.client.RemoteDisconnected crashed the
-        # whole run instead of being treated as a normal, non-cacheable lookup failure).
-        except (urllib.error.URLError, OSError, ValueError) as exc:
-            self._last_request = time.monotonic()
-            return f"Unknown ({lat:.4f}, {lon:.4f}) [geocoding failed: {exc}]", False
+        payload = None
+        last_exc: Optional[Exception] = None
+        for attempt in range(_NOMINATIM_MAX_RETRIES + 1):
+            if attempt:
+                time.sleep(2.0)
+            try:
+                with urlopen_ipv4_first(request, timeout=10) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                break
+            # OSError alongside URLError: some connection failures (e.g. the server dropping the
+            # connection mid-response) surface as a raw ConnectionResetError/http.client
+            # exception, not wrapped in URLError (found in practice: http.client.RemoteDisconnected
+            # crashed the whole run instead of being treated as a normal, non-cacheable lookup
+            # failure).
+            except (urllib.error.URLError, OSError, ValueError) as exc:
+                self._last_request = time.monotonic()
+                last_exc = exc
+                log(
+                    f"[geocode] Nominatim lookup failed ({exc}) -- attempt "
+                    f"{attempt + 1}/{_NOMINATIM_MAX_RETRIES + 1}",
+                    file=sys.stderr,
+                )
+        if payload is None:
+            # Just "Onbekend (lat, lon)", not the full exception text -- asked for explicitly:
+            # the raw urllib error (a whole "<urlopen error [WinError 10054] ...>" sentence) read
+            # as noise in the logbook itself, which isn't the place for that level of technical
+            # detail -- the retried attempts above (and this failure) are still visible in
+            # nmea2log.log for anyone who wants it.
+            return f"Onbekend ({lat:.4f}, {lon:.4f})", False
 
         self._last_request = time.monotonic()
         # A nearby islet's own name always beats whatever Nominatim's plain reverse lookup
@@ -384,7 +412,7 @@ def _pick_place_name(payload: dict, lat: float, lon: float) -> str:
     if display_name:
         return display_name.split(",")[0]
 
-    return f"Unknown ({lat:.4f}, {lon:.4f})"
+    return f"Onbekend ({lat:.4f}, {lon:.4f})"
 
 
 def _describe_place(payload: dict, lat: float, lon: float) -> str:

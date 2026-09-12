@@ -201,8 +201,8 @@ def test_place_name_keeps_leisure_matchs_own_name_when_importance_is_missing(mon
 def test_failed_lookup_is_not_cached(monkeypatch, tmp_path):
     """Regression test for a real bug found in practice: a transient network failure (no
     internet on the boat, DNS lookup failing) got permanently written to the cache file, so even
-    a later run with a working connection kept returning the same stale "geocoding failed"
-    message forever instead of retrying."""
+    a later run with a working connection kept returning the same stale "Onbekend" placeholder
+    forever instead of retrying."""
     call_count = 0
 
     def fake_urlopen(request, timeout=10):
@@ -217,13 +217,15 @@ def test_failed_lookup_is_not_cached(monkeypatch, tmp_path):
 
     name = geocoder.place_name(47.4889, -3.1012)
 
-    assert "geocoding failed" in name
+    assert "Onbekend" in name
     assert not cache_file.exists()  # nothing was ever written -- there's nothing to cache
     assert geocoder._cache == {}
+    assert call_count == 3  # the first attempt plus 2 retries (see _NOMINATIM_MAX_RETRIES)
 
-    # a later lookup (e.g. once back online) must retry, not just keep returning the failure
+    # a later lookup (e.g. once back online) must retry from scratch, not just keep returning
+    # the failure -- another 3 attempts, not reusing/counting against the first lookup's own.
     geocoder.place_name(47.4889, -3.1012)
-    assert call_count == 2
+    assert call_count == 6
 
 
 def test_remote_disconnected_is_treated_as_a_failed_lookup_not_a_crash(monkeypatch, tmp_path):
@@ -241,7 +243,32 @@ def test_remote_disconnected_is_treated_as_a_failed_lookup_not_a_crash(monkeypat
 
     name = geocoder.place_name(47.4889, -3.1012)
 
-    assert "geocoding failed" in name
+    assert "Onbekend" in name
+
+
+def test_place_name_retries_the_nominatim_lookup_after_a_transient_failure(monkeypatch, tmp_path):
+    """Regression test for a real case found in practice: the exact same coordinate that failed
+    with a dropped connection mid-run resolved correctly on every one of 4 immediate, separate
+    retries moments later -- a single failure on the main Nominatim request must not give up
+    outright the way it used to (unlike the Overpass islet check just below, which already
+    retried)."""
+    nominatim_call_count = 0
+
+    def fake_urlopen(request, timeout=10):
+        nonlocal nominatim_call_count
+        if "overpass-api.de" in request.full_url:
+            return _FakeResponse({"elements": []})  # no islet nearby -- not the thing under test
+        nominatim_call_count += 1
+        if nominatim_call_count == 1:
+            raise urllib.error.URLError("Connection reset by peer")
+        return _FakeResponse({"address": {"village": "Arzal"}})
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr("nmea2000processor.geocode.time.sleep", lambda s: None)
+    geocoder = Geocoder(cache_file=tmp_path / "cache.json")
+
+    assert geocoder.place_name(47.5027, -2.3857) == "Arzal"
+    assert nominatim_call_count == 2
 
 
 def test_successful_lookup_is_cached_and_not_looked_up_again(monkeypatch, tmp_path):
