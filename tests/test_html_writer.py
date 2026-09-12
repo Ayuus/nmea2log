@@ -611,7 +611,7 @@ def test_write_html_logbook_shows_weather_columns_in_the_log_when_a_weather_fetc
 
     log_table = _log_table_html(out_path.read_text(encoding="utf-8"))
     assert "Wind" in log_table and "Neerslag" in log_table and "Bewolking" in log_table
-    assert "8,3 kn WNW" in log_table  # 292 deg rounds to the WNW compass point
+    assert "8,3 kn WNW (Bft 3)" in log_table  # 292 deg rounds to WNW; 8.3 kn is Beaufort force 3
     assert "0,1 mm" in log_table
     assert "7%" in log_table
 

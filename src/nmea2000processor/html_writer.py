@@ -466,6 +466,18 @@ def _compass_abbr(deg: float) -> str:
     return _COMPASS_POINTS[round(deg / 22.5) % 16]
 
 
+# Upper bound (knots, exclusive) of Beaufort forces 0-11 -- the standard WMO scale. A speed at or
+# above the last threshold (64 kn) is force 12, the scale's own open-ended top end.
+_BEAUFORT_THRESHOLDS_KN = (1, 4, 7, 11, 17, 22, 28, 34, 41, 48, 56, 64)
+
+
+def _beaufort(kn: float) -> int:
+    for force, threshold in enumerate(_BEAUFORT_THRESHOLDS_KN):
+        if kn < threshold:
+            return force
+    return 12
+
+
 def _details_cell_html(
     trip: TripLeg, idx: int, interval_minutes: float, offset_hours: float, weather, marine
 ) -> str:
@@ -504,7 +516,10 @@ def _details_cell_html(
             # practice: 1.8 to 9.7 kn across a single ~4.5 hour trip).
             hourly = weather.hour(entry.lat, entry.lon, entry.time)
             if hourly is not None and hourly.wind_kn is not None and hourly.wind_deg is not None:
-                wind_text = f"{_nl_num(hourly.wind_kn)} kn {_compass_abbr(hourly.wind_deg)}"
+                wind_text = (
+                    f"{_nl_num(hourly.wind_kn)} kn {_compass_abbr(hourly.wind_deg)} "
+                    f"(Bft {_beaufort(hourly.wind_kn)})"
+                )
             else:
                 wind_text = ""
             precip_text = f"{_nl_num(hourly.precip_mm, 1)} mm" if hourly and hourly.precip_mm is not None else ""
