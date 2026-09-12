@@ -1068,6 +1068,20 @@ def write_html_logbook(
      can end up narrower than its widest content. table-scroll adds a horizontal scrollbar
      instead of ever squeezing/wrapping a column when the table doesn't fit the viewport. */
   .table-scroll {{ overflow-x: auto; margin-bottom: 1em; }}
+  /* A horizontal scrollbar that lives at the bottom of .table-scroll itself sits below every row
+     of a long table -- reaching it means scrolling all the way down past the table first, asked
+     to fix explicitly. #h-scroll-bar (see the <script> below) is a second, empty-looking strip
+     pinned to the bottom of the *viewport* instead, kept in sync with whichever year's table is
+     currently scrolled into view, so the horizontal scrollbar is always within reach regardless
+     of where in a long table the page itself is scrolled to. Hidden by default (display: none)
+     -- JS only shows it once a table that actually overflows horizontally is in view; nothing to
+     scroll otherwise. */
+  #h-scroll-bar {{
+    position: fixed; left: 0; right: 0; bottom: 0; height: 14px;
+    overflow-x: auto; overflow-y: hidden;
+    background: #f0f0f0; border-top: 1px solid #ddd; z-index: 50; display: none;
+  }}
+  #h-scroll-spacer {{ height: 1px; }}
   table.trips {{ border-collapse: collapse; width: 100%; background: white; }}
   table.trips th, table.trips td {{
     padding: 0.4em 0.6em; border-bottom: 1px solid #eee; text-align: left; font-size: 0.9em;
@@ -1183,6 +1197,7 @@ def write_html_logbook(
 </style>
 </head>
 <body>
+<div id="h-scroll-bar"><div id="h-scroll-spacer"></div></div>
 <noscript>
   <div class="noscript-warning">
     {escape(T["noscript_warning"])}
@@ -1524,6 +1539,69 @@ if (REMARKS_API_URL) {{
       }});
     }});
 }}
+// #h-scroll-bar (see its own CSS comment above): a horizontal scrollbar pinned to the bottom of
+// the viewport, kept in sync with whichever year's .table-scroll is currently in view, instead of
+// each table's own scrollbar living below all of its rows. syncing guards against the two sides
+// (this bar, and whichever .table-scroll is "current") each reacting to a scroll event the other
+// side itself just caused, which would otherwise fight/jitter.
+(function() {{
+  var bar = document.getElementById('h-scroll-bar');
+  var spacer = document.getElementById('h-scroll-spacer');
+  var tableScrolls = Array.prototype.slice.call(document.querySelectorAll('.table-scroll'));
+  if (!bar || !spacer || !tableScrolls.length) return;
+  var current = null;
+  var syncing = false;
+
+  // The .table-scroll whose own vertical midpoint is closest to the viewport's -- a simple,
+  // cheap-to-recompute-on-scroll stand-in for "which table is the owner mostly looking at right
+  // now", good enough since year sections don't interleave (each one's rows are contiguous).
+  function pickCurrent() {{
+    var viewportMid = window.innerHeight / 2;
+    var best = null, bestDist = Infinity;
+    tableScrolls.forEach(function(ts) {{
+      var rect = ts.getBoundingClientRect();
+      if (rect.bottom < 0 || rect.top > window.innerHeight) return;  // fully off-screen
+      var dist = Math.abs((rect.top + rect.bottom) / 2 - viewportMid);
+      if (dist < bestDist) {{ bestDist = dist; best = ts; }}
+    }});
+    return best;
+  }}
+
+  function updateBar() {{
+    var picked = pickCurrent();
+    if (!picked || picked.scrollWidth <= picked.clientWidth + 1) {{
+      bar.style.display = 'none';
+      current = null;
+      return;
+    }}
+    if (picked !== current) {{
+      current = picked;
+      spacer.style.width = current.scrollWidth + 'px';
+      syncing = true;
+      bar.scrollLeft = current.scrollLeft;
+      syncing = false;
+    }}
+    bar.style.display = 'block';
+  }}
+
+  bar.addEventListener('scroll', function() {{
+    if (syncing || !current) return;
+    syncing = true;
+    current.scrollLeft = bar.scrollLeft;
+    syncing = false;
+  }});
+  tableScrolls.forEach(function(ts) {{
+    ts.addEventListener('scroll', function() {{
+      if (syncing || ts !== current) return;
+      syncing = true;
+      bar.scrollLeft = ts.scrollLeft;
+      syncing = false;
+    }});
+  }});
+  window.addEventListener('scroll', updateBar);
+  window.addEventListener('resize', updateBar);
+  updateBar();
+}})();
 </script>
 </body>
 </html>
