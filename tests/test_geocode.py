@@ -287,7 +287,7 @@ def test_successful_lookup_is_cached_and_not_looked_up_again(monkeypatch, tmp_pa
     assert geocoder.place_name(47.8387, -4.1759) == "Loctudy"
     assert geocoder.place_name(47.8387, -4.1759) == "Loctudy"
 
-    assert call_count == 2  # Nominatim + the nearby-islet check (see _nearby_islet_name), once
+    assert call_count == 2  # Nominatim + the nearby-landmark check (see _nearby_landmark_name), once
     saved = json.loads(cache_file.read_text(encoding="utf-8"))
     assert saved == {"47.839,-4.176": "Loctudy"}
 
@@ -322,7 +322,7 @@ def test_place_name_prefers_a_nearby_islet_over_nominatims_own_match(monkeypatch
     Nominatim's plain reverse lookup matched an unrelated nearby pier (and used *its* address
     hierarchy, a real but different nearby hamlet) instead of the islet itself. An islet always
     wins here, even though it isn't necessarily the closer of the two (see
-    _nearby_islet_name's own docstring for why marinas no longer get this same treatment)."""
+    _nearby_landmark_name's own docstring for why marinas/bridges don't get this same treatment)."""
     def fake_urlopen(request, timeout=10):
         if "overpass-api.de" in request.full_url:
             return _FakeResponse(
@@ -343,6 +343,37 @@ def test_place_name_prefers_a_nearby_islet_over_nominatims_own_match(monkeypatch
     geocoder = Geocoder(cache_file=tmp_path / "cache.json")
 
     assert geocoder.place_name(47.5706676, -2.8852789) == "Île de la Jument"
+
+
+def test_place_name_prefers_a_nearby_lock_over_nominatims_own_match(monkeypatch, tmp_path):
+    """Regression test for a real case: a lock complex (Arzal, on the Vilaine) came back from
+    Nominatim's plain reverse lookup as just the containing village, with the lock itself --
+    tagged lock=yes/lock_name in OSM -- entirely ignored, even though French waterway locks are
+    commonly given their own lock_name Nominatim's address has no equivalent field for at all.
+    Mapped as a way (the lock chamber), so its own "center" is used, unlike an islet's coastline
+    way (see test_place_name_ignores_the_islets_coastline_way_even_when_only_it_is_found)."""
+    def fake_urlopen(request, timeout=10):
+        if "overpass-api.de" in request.full_url:
+            return _FakeResponse(
+                {
+                    "elements": [
+                        {
+                            "type": "way",
+                            "tags": {
+                                "waterway": "canal", "lock": "yes",
+                                "lock_name": "Écluse du barrage d'Arzal",
+                            },
+                            "center": {"lat": 47.500091, "lon": -2.381719},
+                        }
+                    ]
+                }
+            )
+        return _FakeResponse({"address": {"hamlet": "Le Barrage", "village": "Arzal"}})
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    geocoder = Geocoder(cache_file=tmp_path / "cache.json")
+
+    assert geocoder.place_name(47.5002, -2.381898) == "Écluse du barrage d'Arzal"
 
 
 def test_place_name_ignores_the_islets_coastline_way_even_when_only_it_is_found(monkeypatch, tmp_path):
@@ -557,7 +588,7 @@ def test_landmark_check_logs_each_failed_attempt(monkeypatch, tmp_path, capsys):
     geocoder.place_name(47.5707, -2.8853)
 
     err = capsys.readouterr().err
-    assert err.count("Overpass islet check failed") == 3
+    assert err.count("Overpass landmark check failed") == 3
 
 
 def test_result_is_not_cached_when_the_landmark_check_fails_entirely(monkeypatch, tmp_path):

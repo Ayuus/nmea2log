@@ -91,29 +91,36 @@ _VILLAGE_LEVEL_ADDRESS_KEYS = ("town", "village", "city", "municipality", "subur
 _OBSCURE_IMPORTANCE_THRESHOLD = 0.001
 
 
-def _nearby_islet_name(lat: float, lon: float, user_agent: str) -> Tuple[Optional[str], bool]:
-    """Looks for the nearest named islet within _LANDMARK_SEARCH_RADIUS_M via Overpass, since
-    Nominatim's own reverse geocode doesn't recognize islets at all -- it matches whatever
-    unrelated feature happens to be nearest by its own metric instead (found in practice:
-    anchored a couple hundred meters off a named islet, Nominatim matched an unrelated pier
-    instead, using a real but different nearby hamlet). A separate service (not Nominatim) since
-    Nominatim's own search endpoint can't filter by OSM tag, only match free-text against a name
-    we'd have to already know.
+def _nearby_landmark_name(lat: float, lon: float, user_agent: str) -> Tuple[Optional[str], bool]:
+    """Looks for the nearest named islet or lock within _LANDMARK_SEARCH_RADIUS_M via Overpass,
+    since Nominatim's own reverse geocode doesn't reliably recognize either -- it matches
+    whatever unrelated feature happens to be nearest by its own metric instead (found in
+    practice: anchored a couple hundred meters off a named islet, Nominatim matched an unrelated
+    pier instead, using a real but different nearby hamlet; a lock complex came back as a plain
+    village name, with the actual lock -- tagged lock=yes/lock_name -- entirely ignored).
+    A separate service (not Nominatim) since Nominatim's own search endpoint can't filter by OSM
+    tag, only match free-text against a name we'd have to already know.
 
-    This used to also look for nearby marinas (to override a wrong or missing plain Nominatim
-    match), but that's been dropped: it duplicated work Nominatim's own address usually already
-    does today, and the remaining gap -- a marina genuinely missing from Nominatim's own address
-    entirely -- is meant to be fixed by improving OpenStreetMap's own data for that spot, not
-    worked around here.
+    Marinas and bridges were both tried here and dropped again (asked for explicitly, checked
+    against every distinct point in a real, full-season logbook before deciding): marinas just
+    duplicate work Nominatim's own address usually already does, and a marina genuinely missing
+    from it is meant to be fixed by improving OpenStreetMap's own data for that spot, not worked
+    around here; bridges matched real but unhelpful small pedestrian/pontoon footbridges within
+    an already-well-named harbour (e.g. "Port-Louis" -> "Epices", a bridge inside that harbour)
+    more often than they matched anything worth surfacing. Locks alone, checked the same way,
+    changed exactly one point in that same real logbook -- the one it was meant to fix -- with no
+    unwanted side effects anywhere else: French waterway locks in particular are commonly tagged
+    with their own lock_name (e.g. "Écluse du barrage d'Arzal") that Nominatim's plain address
+    lookup has no equivalent field for at all, regardless of how well-mapped the lock itself is.
 
-    Only a plain name *node* is used, never the coastline *way* that usually also exists for the
-    same islet -- found in practice: anchored well within a pier's own address match (38 m away,
-    genuinely at that harbour), yet a large islet's coastline way still had *some* point of its
-    shape within the search radius, so its own "center" (the way's geometric centroid, not the
-    nearest point of its actual coastline) ended up nearly 680 m away and wrongly won outright
-    over the harbour the boat was actually moored at. A node's coordinates are exact and single,
-    so it doesn't have this problem -- a way's reported distance can be arbitrarily misleading
-    for a large/elongated shape, so it's not trusted for this at all, even as a fallback.
+    Only a plain name *node* is used for islets, never the coastline *way* that usually also
+    exists for the same islet -- found in practice: anchored well within a pier's own address
+    match (38 m away, genuinely at that harbour), yet a large islet's coastline way still had
+    *some* point of its shape within the search radius, so its own "center" (the way's geometric
+    centroid, not the nearest point of its actual coastline) ended up nearly 680 m away and
+    wrongly won outright over the harbour the boat was actually moored at. A lock is the opposite
+    case -- it's near-always mapped as a way (the lock chamber itself), so its own "center" is
+    used for that, just not for islets.
 
     Returns ``(name, ok)`` -- ``ok`` is False only if the check itself never completed (every
     retry failed), as opposed to completing and simply finding nothing nearby, so the caller can
@@ -123,18 +130,22 @@ def _nearby_islet_name(lat: float, lon: float, user_agent: str) -> Tuple[Optiona
     # [out:json] is required -- without it Overpass answers with its own default format (XML,
     # HTTP 200) instead of an error, so a missing/dropped [out:json] fails json.loads on every
     # single request instead of just occasionally under load (found in practice: silently
-    # reintroduced while simplifying this query, turned every real run's islet check into a
+    # reintroduced while simplifying this query, turned every real run's landmark check into a
     # guaranteed failure until the retries gave up).
     #
-    # "out tags;" alone omits geometry entirely for a node -- no lat/lon at all, not even its own
-    # position -- so it looked like the node was found but every match got silently dropped for
-    # "missing" coordinates (found live: a real, correctly-matched "Île de la Jument" node came
-    # back with only its id and tags, nothing else, so _nearby_islet_name treated it as if no
-    # islet existed here at all and cached that as the confirmed answer). "center" adds it back.
+    # "out tags;" alone omits geometry entirely -- for a node, no lat/lon at all, not even its
+    # own position (found live: a real, correctly-matched "Île de la Jument" node came back with
+    # only its id and tags, nothing else, so this treated it as if no islet existed here at all
+    # and cached that as the confirmed answer); for a way, there's no single position at all
+    # without it. "center" adds both back -- a node's own coordinates unchanged, a way's own
+    # computed centroid.
+    around = f"around:{_LANDMARK_SEARCH_RADIUS_M:.0f},{lat:.6f},{lon:.6f}"
     query = (
-        f'[out:json][timeout:10];'
-        f'node(around:{_LANDMARK_SEARCH_RADIUS_M:.0f},{lat:.6f},{lon:.6f})'
-        '["place"="islet"]["name"];'
+        f"[out:json][timeout:10];"
+        f'(node({around})["place"="islet"]["name"];'
+        f'way({around})["lock"="yes"]["lock_name"];'
+        f'node({around})["lock"="yes"]["lock_name"];'
+        f");"
         "out tags center;"
     )
     data = urllib.parse.urlencode({"data": query}).encode()
@@ -156,7 +167,7 @@ def _nearby_islet_name(lat: float, lon: float, user_agent: str) -> Tuple[Optiona
                 # Overpass answers HTTP 200 with valid, parseable JSON even when the query
                 # itself timed out server-side and only partially ran -- a "remark" key is how
                 # it signals that (found in practice: under load, an empty "elements" list from
-                # a timed-out query looked exactly like a confirmed "no islet here", and got
+                # a timed-out query looked exactly like a confirmed "nothing here", and got
                 # cached as that permanently instead of being retried).
                 remark = payload["remark"]
                 payload = None
@@ -173,28 +184,41 @@ def _nearby_islet_name(lat: float, lon: float, user_agent: str) -> Tuple[Optiona
         except (urllib.error.URLError, OSError, ValueError) as exc:
             status = getattr(exc, "code", status)
             log(
-                f"[geocode] Overpass islet check failed ({exc}) [http {status}] "
+                f"[geocode] Overpass landmark check failed ({exc}) [http {status}] "
                 f"-- attempt {attempt + 1}/{_LANDMARK_MAX_RETRIES + 1}",
                 file=sys.stderr,
             )
     if payload is None:
         return None, False  # best-effort: caller falls back to the plain Nominatim result
 
-    best_node: Optional[Tuple[str, float]] = None
+    best: Optional[Tuple[str, float]] = None
     for element in payload.get("elements", []):
         tags = element.get("tags", {})
-        if tags.get("place") != "islet":
+        if tags.get("place") == "islet":
+            # A node's own lat/lon only, never a way's "center" -- see this function's own doc
+            # comment on why a coastline way's centroid can't be trusted as "how close is this
+            # islet really" the way a lock's own centroid can.
+            name = tags.get("name")
+            node_lat, node_lon = element.get("lat"), element.get("lon")
+        elif tags.get("lock") == "yes":
+            # A node's own lat/lon directly; a way's own computed centroid instead (locks are
+            # near-always mapped as ways, the lock chamber itself).
+            name = tags.get("lock_name")
+            node_lat = element.get("lat")
+            node_lon = element.get("lon")
+            if node_lat is None:
+                center = element.get("center") or {}
+                node_lat, node_lon = center.get("lat"), center.get("lon")
+        else:
             continue
-        name = tags.get("name")
-        node_lat, node_lon = element.get("lat"), element.get("lon")
         if not name or node_lat is None or node_lon is None:
             continue
         distance = _distance_m(lat, lon, node_lat, node_lon)
-        if best_node is None or distance < best_node[1]:
-            best_node = (name, distance)
+        if best is None or distance < best[1]:
+            best = (name, distance)
 
-    if best_node is not None:
-        return best_node[0], True
+    if best is not None:
+        return best[0], True
     return None, True
 
 
@@ -346,18 +370,18 @@ class Geocoder:
             return f"Onbekend ({lat:.4f}, {lon:.4f})", False
 
         self._last_request = time.monotonic()
-        # A nearby islet's own name always beats whatever Nominatim's plain reverse lookup
-        # happened to match instead -- see _nearby_islet_name.
-        islet_name, islet_check_ok = _nearby_islet_name(lat, lon, self.user_agent)
+        # A nearby islet/lock/bridge's own name always beats whatever Nominatim's plain reverse
+        # lookup happened to match instead -- see _nearby_landmark_name.
+        landmark_name, landmark_check_ok = _nearby_landmark_name(lat, lon, self.user_agent)
         self._last_request = time.monotonic()
-        if islet_name:
-            return islet_name, True
+        if landmark_name:
+            return landmark_name, True
         place = _describe_place(payload, lat, lon)
-        # Not cacheable if the islet check itself failed (as opposed to completing and simply
+        # Not cacheable if the landmark check itself failed (as opposed to completing and simply
         # finding nothing nearby): otherwise this run's plain Nominatim fallback -- possibly the
         # wrong name, that's the whole reason the check exists -- would get permanently stuck in
         # the cache even once Overpass is reachable again on a later run.
-        return place, islet_check_ok
+        return place, landmark_check_ok
 
     def _save_cache(self) -> None:
         if self.cache_file is None:
