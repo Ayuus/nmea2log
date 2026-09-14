@@ -1,7 +1,8 @@
 <?php
 /**
  * Admin-only viewer for views.log (see logboek-index.php, which appends one line per
- * successful logbook view). Deploy as www/logboek/views.php, next to index.php.
+ * successful logbook view). Deploy as www/<slug>/views.php, next to index.php (see
+ * logboek-index.php's own doc comment on <slug>/NMEA2LOG_SLUG).
  *
  * Gated on manage_options (Administrator) specifically, not nmea2log_can_view() -- this is who
  * viewed the logbook and when, not the logbook itself, so a Logbook Reader/Writer account (which
@@ -23,7 +24,7 @@ if (!current_user_can('manage_options')) {
     exit;
 }
 
-$views_log_path = __DIR__ . '/../../private/logboek/views.log';
+$views_log_path = dirname(NMEA2LOG_LOGBOOK_PATH) . '/views.log';
 $lines = [];
 if (file_exists($views_log_path)) {
     $raw = file_get_contents($views_log_path);

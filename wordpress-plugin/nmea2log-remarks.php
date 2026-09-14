@@ -21,10 +21,19 @@ if (!defined('ABSPATH')) {
 define('NMEA2LOG_REMARKS_OPTION', 'nmea2log_remarks');
 define('NMEA2LOG_VIEW_CAP', 'read_logboek');
 define('NMEA2LOG_EDIT_CAP', 'edit_logboek_remarks');
+// The directory name under private/ (and, by convention, under www/ for the gatekeeper script --
+// see logboek-index.php) is deliberately NOT hardcoded here: define NMEA2LOG_SLUG yourself in
+// wp-config.php (e.g. define('NMEA2LOG_SLUG', 'my-boat');) -- wp-config.php is already
+// site-specific and never committed, unlike this plugin file, so the real value never has to
+// appear in a public repo. Falls back to the generic 'logboek' when it isn't set, so a fresh
+// install still works out of the box.
+if (!defined('NMEA2LOG_SLUG')) {
+    define('NMEA2LOG_SLUG', 'logboek');
+}
 // One level above ABSPATH (the www/ webroot), outside it entirely -- same path upload.py's own
-// SFTP upload has always targeted (private/logboek/logbook.html), still served only via
-// logboek-index.php's own login-gated read, never directly reachable by URL.
-define('NMEA2LOG_LOGBOOK_PATH', dirname(ABSPATH) . '/private/logboek/logbook.html');
+// SFTP upload has always targeted, still served only via logboek-index.php's own login-gated
+// read, never directly reachable by URL.
+define('NMEA2LOG_LOGBOOK_PATH', dirname(ABSPATH) . '/private/' . NMEA2LOG_SLUG . '/logbook.html');
 
 // Neither role reuses a built-in WordPress role (Contributor, Editor, Subscriber, ...): this
 // site has pre-existing accounts using those for unrelated things (ordinary WooCommerce customer

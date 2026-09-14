@@ -309,19 +309,23 @@ webshop customer) otherwise.
 
 One-time setup on the WordPress site:
 
-1. Upload `wordpress-plugin/nmea2log-remarks.php` to `wp-content/plugins/nmea2log-remarks/` and
+1. Optional: add `define('NMEA2LOG_SLUG', 'your-boat');` to `wp-config.php` (not the plugin file
+   itself, which stays generic/committable) -- picks the `private/<slug>/` and `www/<slug>/`
+   directory name used below. Defaults to `logboek` if you skip this.
+2. Upload `wordpress-plugin/nmea2log-remarks.php` to `wp-content/plugins/nmea2log-remarks/` and
    activate it in wp-admin → Plugins. It registers two purpose-built roles -- deliberately not
    reusing any built-in WordPress role, since those can already be in use for unrelated things on
    an existing site (webshop customers, existing contributors, ...): "Logbook Writer" (can view
    and save remarks) and "Logbook Reader" (can only view). A site Administrator can always do
    both, without needing either role.
-2. Create the accounts that should have access, in wp-admin → Users, with one of those two roles.
-3. Upload `wordpress-plugin/logboek-index.php` as `index.php` into the same web directory
-   your uploaded logbook lives under (adjust the two relative paths inside it -- to `wp-load.php`
-   and to the `private/...` file -- if your directory layout differs).
-4. Point `--upload-remote-path` at a location *outside* the public web root (e.g. `private/` on
-   TransIP webhosting, which already isn't served over HTTP), not under `www/` directly -- a file
-   under `www/` is reachable by its URL alone, login or not.
+3. Create the accounts that should have access, in wp-admin → Users, with one of those two roles.
+4. Upload `wordpress-plugin/logboek-index.php` as `index.php` and `wordpress-plugin/logboek-
+   views.php` as `views.php` into `www/<slug>/` (the same `<slug>` as step 1) -- both now read
+   the upload path from the plugin's own `NMEA2LOG_LOGBOOK_PATH` constant, so there's nothing
+   inside either file itself to adjust for your own layout.
+5. Point `--upload-remote-path` at `private/<slug>/logbook.html` -- *outside* the public web root
+   (e.g. `private/` on TransIP webhosting, which already isn't served over HTTP), not under
+   `www/` directly -- a file under `www/` is reachable by its URL alone, login or not.
 
 ```bash
 nmea2log --upload --remarks-api-url /wp-json/nmea2log/v1/remarks -o logbook.csv

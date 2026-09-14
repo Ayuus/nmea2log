@@ -1,11 +1,13 @@
 <?php
 /**
- * Gatekeeper for the nmea2log HTML logbook. Deploy as www/logboek/index.php.
+ * Gatekeeper for the nmea2log HTML logbook. Deploy as www/<slug>/index.php, where <slug> matches
+ * NMEA2LOG_SLUG (see nmea2log-remarks.php's own wp-config.php-driven default) -- purely a
+ * deployment/URL choice, this script itself never hardcodes it.
  *
  * The generated logbook.html itself is uploaded (via the nmea2000processor --upload feature) to
- * private/logboek/logbook.html -- outside the web-served www/ directory, so its URL alone
- * is never enough to read it. This script bootstraps WordPress just far enough to check the
- * visitor's login state and view permission (nmea2log_can_view(), defined by the nmea2log-
+ * NMEA2LOG_LOGBOOK_PATH (see nmea2log-remarks.php) -- outside the web-served www/ directory, so
+ * its URL alone is never enough to read it. This script bootstraps WordPress just far enough to
+ * check the visitor's login state and view permission (nmea2log_can_view(), defined by the nmea2log-
  * remarks plugin -- reused here rather than re-checking the capability directly, so this always
  * agrees with what the REST API itself considers "may view", including its Administrator
  * fallback), and only then reads and serves the real file from that private location.
@@ -44,14 +46,14 @@ if (!function_exists('nmea2log_can_view') || !nmea2log_can_view()) {
     exit;
 }
 
-$logbook_path = __DIR__ . '/../../private/logboek/logbook.html';
+$logbook_path = NMEA2LOG_LOGBOOK_PATH;
 if (!file_exists($logbook_path)) {
     http_response_code(404);
     echo 'Logboek nog niet geüpload.';
     exit;
 }
 
-$views_log_path = __DIR__ . '/../../private/logboek/views.log';
+$views_log_path = dirname($logbook_path) . '/views.log';
 $line = date('Y-m-d H:i:s') . ' ' . wp_get_current_user()->user_login . "\n";
 @file_put_contents($views_log_path, $line, FILE_APPEND | LOCK_EX);
 
