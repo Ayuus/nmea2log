@@ -83,16 +83,16 @@ def test_upload_file_uploads_to_a_temp_name_then_renames_into_place(tmp_path: Pa
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     upload_file(
-        local, host="example.com", user="me", remote_path="private/little_endian/logbook.html",
+        local, host="example.com", user="me", remote_path="private/logboek/logbook.html",
         key_file=key_file,
     )
 
     lines = captured["batch_contents"].splitlines()
     assert lines[0] == (
-        f'put "{_local_to_sftp_path(local)}" "private/little_endian/logbook.html.tmp-upload"'
+        f'put "{_local_to_sftp_path(local)}" "private/logboek/logbook.html.tmp-upload"'
     )
     assert lines[1] == (
-        'rename "private/little_endian/logbook.html.tmp-upload" "private/little_endian/logbook.html"'
+        'rename "private/logboek/logbook.html.tmp-upload" "private/logboek/logbook.html"'
     )
 
 

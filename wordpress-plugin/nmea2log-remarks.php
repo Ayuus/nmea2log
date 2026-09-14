@@ -8,7 +8,7 @@
  * separate SSH key living on every machine that syncs. This plugin still supplies no page/
  * template of its own -- the logbook stays a static HTML file, just written here now rather than
  * over SFTP. Also defines the "read_logboek" capability that the page's own login gate (see
- * little_endian-index.php) checks -- this site has ordinary customer accounts too (WooCommerce),
+ * logboek-index.php) checks -- this site has ordinary customer accounts too (WooCommerce),
  * so "logged in at all" is not a safe stand-in for "may view the logbook": every one of those
  * customer accounts is logged in just as much as an actual crew member would be.
  * Version: 1.4.0
@@ -22,9 +22,9 @@ define('NMEA2LOG_REMARKS_OPTION', 'nmea2log_remarks');
 define('NMEA2LOG_VIEW_CAP', 'read_logboek');
 define('NMEA2LOG_EDIT_CAP', 'edit_logboek_remarks');
 // One level above ABSPATH (the www/ webroot), outside it entirely -- same path upload.py's own
-// SFTP upload has always targeted (private/little_endian/logbook.html), still served only via
-// little_endian-index.php's own login-gated read, never directly reachable by URL.
-define('NMEA2LOG_LOGBOOK_PATH', dirname(ABSPATH) . '/private/little_endian/logbook.html');
+// SFTP upload has always targeted (private/logboek/logbook.html), still served only via
+// logboek-index.php's own login-gated read, never directly reachable by URL.
+define('NMEA2LOG_LOGBOOK_PATH', dirname(ABSPATH) . '/private/logboek/logbook.html');
 
 // Neither role reuses a built-in WordPress role (Contributor, Editor, Subscriber, ...): this
 // site has pre-existing accounts using those for unrelated things (ordinary WooCommerce customer
@@ -166,7 +166,7 @@ function nmea2log_remarks_set(WP_REST_Request $request) {
  * named param.
  *
  * Same atomic write-then-rename as upload_file()'s own SFTP put+rename: a plain in-place write
- * isn't atomic, and little_endian-index.php (the page's own login-gated read) reads this file
+ * isn't atomic, and logboek-index.php (the page's own login-gated read) reads this file
  * fresh on every single request -- a visitor loading the page mid-write could otherwise see a
  * truncated file. PHP's rename() is atomic on the same filesystem, so a concurrent read always
  * gets either the complete old file or the complete new one. */

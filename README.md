@@ -301,8 +301,8 @@ nmea2log --upload --upload-host ssh.example.transip.nl --upload-user my-user \
 Pass `--remarks-api-url` to add a "Remarks" button+popup (save/cancel) to each trip, backed by a
 small WordPress plugin (`wordpress-plugin/nmea2log-remarks.php`) instead of a database or server
 of this tool's own. This also login-gates the whole logbook, not just remarks: the uploaded file
-goes to a `private/` directory outside the public web root, and `wordpress-plugin/little_endian-
-index.php` (deployed as e.g. `www/little_endian/index.php`) checks the visitor is both logged in
+goes to a `private/` directory outside the public web root, and `wordpress-plugin/logboek-
+index.php` (deployed as e.g. `www/logboek/index.php`) checks the visitor is both logged in
 and specifically allowed to view the logbook, redirecting to the WordPress login page (not logged
 in) or showing a plain access-denied message (logged in as some unrelated account, e.g. a
 webshop customer) otherwise.
@@ -316,7 +316,7 @@ One-time setup on the WordPress site:
    and save remarks) and "Logbook Reader" (can only view). A site Administrator can always do
    both, without needing either role.
 2. Create the accounts that should have access, in wp-admin → Users, with one of those two roles.
-3. Upload `wordpress-plugin/little_endian-index.php` as `index.php` into the same web directory
+3. Upload `wordpress-plugin/logboek-index.php` as `index.php` into the same web directory
    your uploaded logbook lives under (adjust the two relative paths inside it -- to `wp-load.php`
    and to the `private/...` file -- if your directory layout differs).
 4. Point `--upload-remote-path` at a location *outside* the public web root (e.g. `private/` on

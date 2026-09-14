@@ -103,7 +103,7 @@ NL: Dict[str, str] = {
     "log_header_current": "Stroming",
     # Remarks button + popup. Auth for both reading and saving rides on the WordPress login
     # session that got you to the (login-gated) logbook page in the first place -- no separate
-    # username/password step here, see wordpress-plugin/little_endian-index.php.
+    # username/password step here, see wordpress-plugin/logboek-index.php.
     "remarks_button_placeholder": "Opmerking",
     "remarks_save_button": "Opslaan",
     "remarks_cancel_button": "Annuleren",

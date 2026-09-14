@@ -596,7 +596,7 @@ def _remarks_cell_html(trip_uid: Optional[str], idx: int, remarks_api_url: str) 
     (see trip_ids.py) -- without one there's nothing to attach a saved remark to, so no button.
 
     No login form here: reading and saving both ride on the WordPress session that got you past
-    the login-gated logbook page in the first place (see little_endian-index.php), not a
+    the login-gated logbook page in the first place (see logboek-index.php), not a
     separate credential entered in this dialog."""
     if not remarks_api_url or not trip_uid:
         return ""
@@ -1235,7 +1235,7 @@ def write_html_logbook(
 <script>
 const TRIPS = {trips_json};
 const REMARKS_API_URL = {json.dumps(remarks_api_url)};
-// Filled in by the server (see wordpress-plugin/little_endian-index.php) when this file is
+// Filled in by the server (see wordpress-plugin/logboek-index.php) when this file is
 // served through the login gate, which -- unlike this Python-generated static file -- can call
 // WordPress's own wp_create_nonce('wp_rest'). A POST to the REST API needs this even though the
 // browser already sends the WordPress login cookie automatically (same-origin): the nonce is

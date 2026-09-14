@@ -1,9 +1,9 @@
 <?php
 /**
- * Gatekeeper for the nmea2log HTML logbook. Deploy as www/little_endian/index.php.
+ * Gatekeeper for the nmea2log HTML logbook. Deploy as www/logboek/index.php.
  *
  * The generated logbook.html itself is uploaded (via the nmea2000processor --upload feature) to
- * private/little_endian/logbook.html -- outside the web-served www/ directory, so its URL alone
+ * private/logboek/logbook.html -- outside the web-served www/ directory, so its URL alone
  * is never enough to read it. This script bootstraps WordPress just far enough to check the
  * visitor's login state and view permission (nmea2log_can_view(), defined by the nmea2log-
  * remarks plugin -- reused here rather than re-checking the capability directly, so this always
@@ -44,14 +44,14 @@ if (!function_exists('nmea2log_can_view') || !nmea2log_can_view()) {
     exit;
 }
 
-$logbook_path = __DIR__ . '/../../private/little_endian/logbook.html';
+$logbook_path = __DIR__ . '/../../private/logboek/logbook.html';
 if (!file_exists($logbook_path)) {
     http_response_code(404);
     echo 'Logboek nog niet geüpload.';
     exit;
 }
 
-$views_log_path = __DIR__ . '/../../private/little_endian/views.log';
+$views_log_path = __DIR__ . '/../../private/logboek/views.log';
 $line = date('Y-m-d H:i:s') . ' ' . wp_get_current_user()->user_login . "\n";
 @file_put_contents($views_log_path, $line, FILE_APPEND | LOCK_EX);
 

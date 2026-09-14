@@ -1,7 +1,7 @@
 <?php
 /**
- * Admin-only viewer for views.log (see little_endian-index.php, which appends one line per
- * successful logbook view). Deploy as www/little_endian/views.php, next to index.php.
+ * Admin-only viewer for views.log (see logboek-index.php, which appends one line per
+ * successful logbook view). Deploy as www/logboek/views.php, next to index.php.
  *
  * Gated on manage_options (Administrator) specifically, not nmea2log_can_view() -- this is who
  * viewed the logbook and when, not the logbook itself, so a Logbook Reader/Writer account (which
@@ -23,7 +23,7 @@ if (!current_user_can('manage_options')) {
     exit;
 }
 
-$views_log_path = __DIR__ . '/../../private/little_endian/views.log';
+$views_log_path = __DIR__ . '/../../private/logboek/views.log';
 $lines = [];
 if (file_exists($views_log_path)) {
     $raw = file_get_contents($views_log_path);
@@ -41,7 +41,7 @@ header('Content-Type: text/html; charset=utf-8');
 <html lang="nl">
 <head>
 <meta charset="utf-8">
-<title>Little Endian - Weergaven</title>
+<title>Logboek - Weergaven</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -67,7 +67,7 @@ header('Content-Type: text/html; charset=utf-8');
 <tbody>
 <?php foreach ($lines as $line): ?>
 <?php
-    // Each line is "YYYY-MM-DD HH:MM:SS username" (see little_endian-index.php) -- split on the
+    // Each line is "YYYY-MM-DD HH:MM:SS username" (see logboek-index.php) -- split on the
     // first run of whitespace after the fixed-width timestamp, so a username containing a space
     // still comes through whole instead of getting truncated at its own first space.
     $timestamp = substr($line, 0, 19);
