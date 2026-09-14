@@ -322,7 +322,11 @@ def test_place_name_prefers_a_nearby_islet_over_nominatims_own_match(monkeypatch
     Nominatim's plain reverse lookup matched an unrelated nearby pier (and used *its* address
     hierarchy, a real but different nearby hamlet) instead of the islet itself. An islet always
     wins here, even though it isn't necessarily the closer of the two (see
-    _nearby_landmark_name's own docstring for why marinas/bridges don't get this same treatment)."""
+    _nearby_landmark_name's own docstring for why marinas/bridges don't get this same treatment).
+    268 m away -- beyond _NEARBY_THRESHOLD_M -- so also covers the "op het water, bij" prefix a
+    landmark match gets same as a plain Nominatim one (see
+    test_place_name_prefers_a_nearby_lock_over_nominatims_own_match for the un-prefixed,
+    within-threshold case -- that lock is only ~18 m from the query position)."""
     def fake_urlopen(request, timeout=10):
         if "overpass-api.de" in request.full_url:
             return _FakeResponse(
@@ -342,7 +346,7 @@ def test_place_name_prefers_a_nearby_islet_over_nominatims_own_match(monkeypatch
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     geocoder = Geocoder(cache_file=tmp_path / "cache.json")
 
-    assert geocoder.place_name(47.5706676, -2.8852789) == "Île de la Jument"
+    assert geocoder.place_name(47.5706676, -2.8852789) == "op het water, bij Île de la Jument"
 
 
 def test_place_name_prefers_a_nearby_lock_over_nominatims_own_match(monkeypatch, tmp_path):
@@ -440,7 +444,7 @@ def test_place_name_retries_when_overpass_times_out_server_side(monkeypatch, tmp
     monkeypatch.setattr("nmea2000processor.geocode.time.sleep", lambda s: None)
     geocoder = Geocoder(cache_file=tmp_path / "cache.json")
 
-    assert geocoder.place_name(47.5706676, -2.8852789) == "Île de la Jument"
+    assert geocoder.place_name(47.5706676, -2.8852789) == "op het water, bij Île de la Jument"
     assert overpass_call_count == 2
 
 
@@ -552,7 +556,7 @@ def test_place_name_retries_the_landmark_check_after_a_transient_failure(monkeyp
     monkeypatch.setattr("nmea2000processor.geocode.time.sleep", lambda s: None)
     geocoder = Geocoder(cache_file=tmp_path / "cache.json")
 
-    assert geocoder.place_name(47.5706676, -2.8852789) == "Île de la Jument"
+    assert geocoder.place_name(47.5706676, -2.8852789) == "op het water, bij Île de la Jument"
     assert overpass_call_count == 2
 
 

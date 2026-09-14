@@ -191,7 +191,11 @@ def _nearby_landmark_name(lat: float, lon: float, user_agent: str) -> Tuple[Opti
     if payload is None:
         return None, False  # best-effort: caller falls back to the plain Nominatim result
 
-    best: Optional[Tuple[str, float]] = None
+    # is_mooring picks which of _describe_place()'s two "you're not quite there" prefixes a
+    # far-enough-away match gets, same idea as _MOORING_TYPES below: a lock is somewhere a boat
+    # actually ties up alongside while waiting (like a marina/quay), an islet is not (you anchor
+    # off it, not on it) -- see _with_distance_prefix()'s own doc comment.
+    best: Optional[Tuple[str, float, bool]] = None
     for element in payload.get("elements", []):
         tags = element.get("tags", {})
         if tags.get("place") == "islet":
@@ -200,6 +204,7 @@ def _nearby_landmark_name(lat: float, lon: float, user_agent: str) -> Tuple[Opti
             # islet really" the way a lock's own centroid can.
             name = tags.get("name")
             node_lat, node_lon = element.get("lat"), element.get("lon")
+            is_mooring = False
         elif tags.get("lock") == "yes":
             # A node's own lat/lon directly; a way's own computed centroid instead (locks are
             # near-always mapped as ways, the lock chamber itself).
@@ -209,16 +214,24 @@ def _nearby_landmark_name(lat: float, lon: float, user_agent: str) -> Tuple[Opti
             if node_lat is None:
                 center = element.get("center") or {}
                 node_lat, node_lon = center.get("lat"), center.get("lon")
+            is_mooring = True
         else:
             continue
         if not name or node_lat is None or node_lon is None:
             continue
         distance = _distance_m(lat, lon, node_lat, node_lon)
         if best is None or distance < best[1]:
-            best = (name, distance)
+            best = (name, distance, is_mooring)
 
     if best is not None:
-        return best[0], True
+        name, distance, is_mooring = best
+        # Found in practice, the reason _LANDMARK_SEARCH_RADIUS_M (300 m) is deliberately wider
+        # than _NEARBY_THRESHOLD_M (250 m) used here: anchored 268 m off Île de la Jument, close
+        # enough to be the obvious match and still worth surfacing, but far enough that showing
+        # its bare name implied being right there -- same "aan de kant, bij"/"op het water, bij"
+        # treatment a plain Nominatim match already gets (see _describe_place()), previously
+        # missing here entirely since a landmark match used to always return its bare name.
+        return _with_distance_prefix(name, distance, is_mooring), True
     return None, True
 
 
@@ -439,20 +452,25 @@ def _pick_place_name(payload: dict, lat: float, lon: float) -> str:
     return f"Onbekend ({lat:.4f}, {lon:.4f})"
 
 
+def _with_distance_prefix(name: str, distance_m: float, is_mooring_type: bool) -> str:
+    """Prefixes name with "aan de kant, bij" (alongside, near) or "op het water, bij" (on the
+    water, near) when distance_m is more than ``_NEARBY_THRESHOLD_M`` -- otherwise the name reads
+    as if we were right there, e.g. showing a village name for a position that was really
+    anchored ~250 m offshore of it. is_mooring_type picks which of the two prefixes: alongside
+    for somewhere a boat actually ties up (a marina, a lock waiting alongside it, ...), on the
+    water for everything else (open water, an islet you'd anchor off rather than on, ...)."""
+    if distance_m <= _NEARBY_THRESHOLD_M:
+        return name
+    prefix = "aan de kant, bij" if is_mooring_type else "op het water, bij"
+    return f"{prefix} {name}"
+
+
 def _describe_place(payload: dict, lat: float, lon: float) -> str:
-    """Prefixes the picked name with "aan de kant, bij" (alongside, near) or "op het water, bij"
-    (on the water, near) when the matched feature is more than ``_NEARBY_THRESHOLD_M`` away from
-    the actual position -- otherwise the name reads as if we were right there, e.g. showing a
-    village name for a position that was really anchored ~250 m offshore of it."""
     name = _pick_place_name(payload, lat, lon)
     try:
         feature_lat = float(payload["lat"])
         feature_lon = float(payload["lon"])
     except (KeyError, TypeError, ValueError):
         return name
-
-    if _distance_m(lat, lon, feature_lat, feature_lon) <= _NEARBY_THRESHOLD_M:
-        return name
-
-    prefix = "aan de kant, bij" if payload.get("type") in _MOORING_TYPES else "op het water, bij"
-    return f"{prefix} {name}"
+    distance = _distance_m(lat, lon, feature_lat, feature_lon)
+    return _with_distance_prefix(name, distance, payload.get("type") in _MOORING_TYPES)
