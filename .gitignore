@@ -23,6 +23,11 @@ nmea2log.ini
 Actisense/
 downloads/
 
+# optionele lokale overrides voor nmea2log.bat/nmea2log-no-download.bat (bv. VIEW_URL) -- zie de
+# rem-comment in die bestanden zelf; hetzelfde idee als nmea2log.ini, alleen dan voor .bat-only
+# instellingen die geen ConfigParser-sectie hebben.
+nmea2log-local.bat
+
 # alleen lokaal bewaren, niet in git en niet op de live site
 docs/autopilot-analysis.html
 docs/autopilot-analysis.pdf

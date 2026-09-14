@@ -10,8 +10,10 @@
  * over SFTP. Also defines the "read_logboek" capability that the page's own login gate (see
  * logboek-index.php) checks -- this site has ordinary customer accounts too (WooCommerce),
  * so "logged in at all" is not a safe stand-in for "may view the logbook": every one of those
- * customer accounts is logged in just as much as an actual crew member would be.
- * Version: 1.4.0
+ * customer accounts is logged in just as much as an actual crew member would be. Since 1.5.0
+ * also has an Instellingen > nmea2log settings page for the private/URL slug (nmea2log_slug()),
+ * so that value doesn't have to be a wp-config.php edit.
+ * Version: 1.5.0
  */
 
 if (!defined('ABSPATH')) {
@@ -19,21 +21,91 @@ if (!defined('ABSPATH')) {
 }
 
 define('NMEA2LOG_REMARKS_OPTION', 'nmea2log_remarks');
+define('NMEA2LOG_SLUG_OPTION', 'nmea2log_slug');
 define('NMEA2LOG_VIEW_CAP', 'read_logboek');
 define('NMEA2LOG_EDIT_CAP', 'edit_logboek_remarks');
 // The directory name under private/ (and, by convention, under www/ for the gatekeeper script --
-// see logboek-index.php) is deliberately NOT hardcoded here: define NMEA2LOG_SLUG yourself in
-// wp-config.php (e.g. define('NMEA2LOG_SLUG', 'my-boat');) -- wp-config.php is already
-// site-specific and never committed, unlike this plugin file, so the real value never has to
-// appear in a public repo. Falls back to the generic 'logboek' when it isn't set, so a fresh
-// install still works out of the box.
-if (!defined('NMEA2LOG_SLUG')) {
-    define('NMEA2LOG_SLUG', 'logboek');
+// see logboek-index.php) is deliberately not hardcoded here, so the real value never has to
+// appear in this (public) plugin file. Two ways to set it, in priority order: a NMEA2LOG_SLUG
+// constant in wp-config.php (for whoever prefers not to touch the database at all -- wp-config.php
+// is already site-specific and never committed either), or the Instellingen > nmea2log settings
+// page below (nmea2log_settings_render(), stored as a plain option). Falls back to the generic
+// 'logboek' when neither is set, so a fresh install still works out of the box.
+function nmea2log_slug(): string {
+    if (defined('NMEA2LOG_SLUG')) {
+        return NMEA2LOG_SLUG;
+    }
+    $configured = get_option(NMEA2LOG_SLUG_OPTION, '');
+    // sanitize_title() again here, not just on save (see nmea2log_sanitize_slug()): defensive
+    // against a value that predates this validation, or was written directly to the database by
+    // something other than the settings form below.
+    return $configured !== '' ? sanitize_title($configured) : 'logboek';
 }
 // One level above ABSPATH (the www/ webroot), outside it entirely -- same path upload.py's own
 // SFTP upload has always targeted, still served only via logboek-index.php's own login-gated
 // read, never directly reachable by URL.
-define('NMEA2LOG_LOGBOOK_PATH', dirname(ABSPATH) . '/private/' . NMEA2LOG_SLUG . '/logbook.html');
+define('NMEA2LOG_LOGBOOK_PATH', dirname(ABSPATH) . '/private/' . nmea2log_slug() . '/logbook.html');
+
+// A single text field, Instellingen > nmea2log -- the friendlier alternative to the wp-config.php
+// constant above for whoever doesn't want to edit a PHP file by hand. sanitize_title() (the same
+// sanitizer WordPress uses for post slugs) rather than sanitize_text_field(): this value becomes
+// both a URL path segment and a filesystem directory name, so it's restricted to lowercase
+// letters/digits/hyphens rather than accepting arbitrary text that could contain a "/" or "..".
+add_action('admin_menu', function () {
+    add_options_page(
+        'nmea2log', 'nmea2log', 'manage_options', 'nmea2log-settings', 'nmea2log_settings_render'
+    );
+});
+
+add_action('admin_init', function () {
+    register_setting('nmea2log_settings', NMEA2LOG_SLUG_OPTION, [
+        'sanitize_callback' => 'nmea2log_sanitize_slug',
+        'default' => '',
+    ]);
+});
+
+function nmea2log_sanitize_slug($value): string {
+    return sanitize_title((string) $value);
+}
+
+function nmea2log_settings_render(): void {
+    if (!current_user_can('manage_options')) {
+        return;
+    }
+    $overridden_by_constant = defined('NMEA2LOG_SLUG');
+    ?>
+    <div class="wrap">
+        <h1>nmea2log</h1>
+        <form method="post" action="options.php">
+            <?php settings_fields('nmea2log_settings'); ?>
+            <table class="form-table">
+                <tr>
+                    <th scope="row"><label for="nmea2log_slug">Pad</label></th>
+                    <td>
+                        <input
+                            type="text" id="nmea2log_slug" name="<?= esc_attr(NMEA2LOG_SLUG_OPTION) ?>"
+                            value="<?= esc_attr(get_option(NMEA2LOG_SLUG_OPTION, '')) ?>"
+                            class="regular-text" placeholder="logboek"
+                            <?= $overridden_by_constant ? 'disabled' : '' ?>
+                        >
+                        <p class="description">
+                            Bepaalt zowel de URL (<code>jouwsite.nl/<em>pad</em>/</code>) als de
+                            privé-opslagmap van het logboek. Alleen kleine letters, cijfers en
+                            koppeltekens; leeg = <code>logboek</code>.
+                            <?php if ($overridden_by_constant): ?>
+                                <br><strong>Overschreven door <code>NMEA2LOG_SLUG</code> in
+                                wp-config.php</strong> (<code><?= esc_html(NMEA2LOG_SLUG) ?></code>) --
+                                verwijder die regel daar om dit veld weer te kunnen gebruiken.
+                            <?php endif; ?>
+                        </p>
+                    </td>
+                </tr>
+            </table>
+            <?php submit_button(); ?>
+        </form>
+    </div>
+    <?php
+}
 
 // Neither role reuses a built-in WordPress role (Contributor, Editor, Subscriber, ...): this
 // site has pre-existing accounts using those for unrelated things (ordinary WooCommerce customer
@@ -92,6 +164,7 @@ function nmea2log_remarks_uninstall() {
     remove_role(NMEA2LOG_READER_ROLE);
     remove_role(NMEA2LOG_EDITOR_ROLE);
     delete_option(NMEA2LOG_REMARKS_OPTION);
+    delete_option(NMEA2LOG_SLUG_OPTION);
 }
 
 function nmea2log_can_view(): bool {

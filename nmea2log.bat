@@ -7,8 +7,10 @@ rem was launched from -- not necessarily this folder, depending on how it was st
 rem (double-click vs. a shortcut with a different "Start in" folder vs. drag-and-drop).
 cd /d "%~dp0"
 
-rem Comment out this line to stop opening a browser after each run.
-set "VIEW_URL=https://ayuus.com/little_endian/"
+rem Optional local override, e.g. "set VIEW_URL=https://your-site/your-slug/" to open a browser
+rem there after each run -- see nmea2log-local.bat.example. Not in git (.gitignore): unlike the
+rem rest of this script, a real logbook URL is specific to your own site, not something to commit.
+if exist "%~dp0nmea2log-local.bat" call "%~dp0nmea2log-local.bat"
 
 if "%~1"=="" (
     set "OUTPUT=%~dp0logbook.csv"
