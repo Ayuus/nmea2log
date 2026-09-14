@@ -216,15 +216,15 @@ def test_upload_via_rest_sends_basic_auth_and_the_raw_body(monkeypatch):
 
     upload_via_rest(
         b"<html>logbook</html>",
-        url="https://ayuus.com/wp-json/nmea2log/v1/logbook",
-        user="ronald",
+        url="https://example.org/wp-json/nmea2log/v1/logbook",
+        user="alice",
         app_password="abcd efgh ijkl mnop",
     )
 
-    assert captured["url"] == "https://ayuus.com/wp-json/nmea2log/v1/logbook"
+    assert captured["url"] == "https://example.org/wp-json/nmea2log/v1/logbook"
     assert captured["method"] == "POST"
     assert captured["data"] == b"<html>logbook</html>"
-    expected = base64.b64encode(b"ronald:abcd efgh ijkl mnop").decode("ascii")
+    expected = base64.b64encode(b"alice:abcd efgh ijkl mnop").decode("ascii")
     assert captured["headers"]["Authorization"] == f"Basic {expected}"
     assert captured["headers"]["Content-type"] == "text/html; charset=utf-8"
 
@@ -239,7 +239,7 @@ def test_upload_via_rest_raises_with_the_servers_own_error_message(monkeypatch):
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
 
     with pytest.raises(UploadError, match="logbook_too_small"):
-        upload_via_rest(b"x", url="https://ayuus.com/wp-json/nmea2log/v1/logbook", user="ronald", app_password="pw")
+        upload_via_rest(b"x", url="https://example.org/wp-json/nmea2log/v1/logbook", user="alice", app_password="pw")
 
 
 def test_upload_via_rest_raises_on_a_network_error(monkeypatch):
@@ -249,4 +249,4 @@ def test_upload_via_rest_raises_on_a_network_error(monkeypatch):
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
 
     with pytest.raises(UploadError, match="Connection refused"):
-        upload_via_rest(b"x", url="https://ayuus.com/wp-json/nmea2log/v1/logbook", user="ronald", app_password="pw")
+        upload_via_rest(b"x", url="https://example.org/wp-json/nmea2log/v1/logbook", user="alice", app_password="pw")

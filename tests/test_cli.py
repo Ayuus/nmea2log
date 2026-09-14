@@ -360,8 +360,8 @@ def test_main_prefers_rest_upload_over_sftp_when_both_are_configured(tmp_path, m
     exit_code = main(
         [
             str(ebl_path), "-o", str(tmp_path / "logbook.csv"), "--no-geocode",
-            "--upload-rest", "--upload-rest-url", "https://ayuus.com/wp-json/nmea2log/v1/logbook",
-            "--upload-rest-user", "ronald", "--upload-rest-app-password", "abcd efgh",
+            "--upload-rest", "--upload-rest-url", "https://example.org/wp-json/nmea2log/v1/logbook",
+            "--upload-rest-user", "alice", "--upload-rest-app-password", "abcd efgh",
             "--upload", "--upload-host", "example.com", "--upload-user", "me",
             "--upload-remote-path", "logbook.html", "--upload-key-file", str(tmp_path / "key"),
         ]
@@ -369,7 +369,7 @@ def test_main_prefers_rest_upload_over_sftp_when_both_are_configured(tmp_path, m
 
     assert exit_code == 0
     assert len(rest_calls) == 1
-    assert rest_calls[0][1]["url"] == "https://ayuus.com/wp-json/nmea2log/v1/logbook"
+    assert rest_calls[0][1]["url"] == "https://example.org/wp-json/nmea2log/v1/logbook"
     assert sftp_calls == []
 
 
