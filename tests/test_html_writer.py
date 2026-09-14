@@ -723,7 +723,7 @@ def test_write_html_logbook_shows_the_last_known_position_under_last_updated(tmp
     html = out_path.read_text(encoding="utf-8")
     assert 'data-i18n="last_position">Laatste positie</span>: ' in html
     assert "47.1388, -2.3630" in html  # NoGeocoder's own plain "{lat:.4f}, {lon:.4f}" format
-    assert "(11:37)" in html
+    assert "(2026-09-04 11:37)" in html
     assert 'href="https://www.google.com/maps?q=47.13877,-2.36295"' in html
 
 

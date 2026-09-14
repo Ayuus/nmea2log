@@ -898,7 +898,7 @@ def write_html_logbook(
             last_position_html = (
                 f'<div class="last-updated">{_i18n_span("last_position")}: '
                 f'<a href="{escape(maps_url)}" target="_blank" rel="noopener">{escape(place)}</a>'
-                f" ({position_time_local:%H:%M})</div>"
+                f" ({position_time_local:%Y-%m-%d %H:%M})</div>"
             )
 
     # Keyed by (calendar_year, iso_year, iso_week) -- calendar_year decides which year *section*
@@ -1083,6 +1083,15 @@ def write_html_logbook(
      can end up narrower than its widest content. table-scroll adds a horizontal scrollbar
      instead of ever squeezing/wrapping a column when the table doesn't fit the viewport. */
   .table-scroll {{ overflow-x: auto; margin-bottom: 1em; }}
+  /* #h-scroll-bar below is the only horizontal scrollbar meant to be visible -- overflow-x: auto
+     above still makes .table-scroll itself scrollable (by touch, trackpad, or #h-scroll-bar's own
+     JS-driven scrollLeft), but without this its *own* native scrollbar would also show at the
+     bottom of every table on a platform that draws always-visible (non-overlay) scrollbars, e.g.
+     Windows Chrome/Edge -- found in practice: exactly the "scrollbar's back inside the table"
+     regression #h-scroll-bar was added to fix in the first place, just via a second, forgotten
+     scrollbar rather than the original one ever having moved. */
+  .table-scroll {{ scrollbar-width: none; }}
+  .table-scroll::-webkit-scrollbar {{ display: none; }}
   /* A horizontal scrollbar that lives at the bottom of .table-scroll itself sits below every row
      of a long table -- reaching it means scrolling all the way down past the table first, asked
      to fix explicitly. #h-scroll-bar (see the <script> below) is a second, empty-looking strip
