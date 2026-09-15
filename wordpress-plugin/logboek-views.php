@@ -1,8 +1,9 @@
 <?php
 /**
  * Admin-only viewer for views.log (see logboek-index.php, which appends one line per
- * successful logbook view). Deploy as www/<slug>/views.php, next to index.php (see
- * logboek-index.php's own doc comment on <slug>/NMEA2LOG_SLUG).
+ * successful logbook view). Deploy once, next to index.php (see its own doc comment on why this
+ * no longer needs a per-boat URL since 1.6.0). Add ?boot=<slug> to view a specific boat's log --
+ * defaults to nmea2log_effective_slug(), same as index.php.
  *
  * Gated on manage_options (Administrator) specifically, not nmea2log_can_view() -- this is who
  * viewed the logbook and when, not the logbook itself, so a Logbook Reader/Writer account (which
@@ -24,7 +25,8 @@ if (!current_user_can('manage_options')) {
     exit;
 }
 
-$views_log_path = dirname(NMEA2LOG_LOGBOOK_PATH) . '/views.log';
+$slug = nmea2log_effective_slug();
+$views_log_path = dirname(nmea2log_logbook_path($slug)) . '/views.log';
 $lines = [];
 if (file_exists($views_log_path)) {
     $raw = file_get_contents($views_log_path);
@@ -58,7 +60,7 @@ header('Content-Type: text/html; charset=utf-8');
 </style>
 </head>
 <body>
-<h1>Weergaven van het logboek</h1>
+<h1>Weergaven van het logboek (<?= esc_html($slug) ?>)</h1>
 <p class="count"><?= count($lines) ?> weergave(n) geregistreerd.</p>
 <?php if (empty($lines)): ?>
 <p class="empty">Nog geen weergaven geregistreerd.</p>

@@ -307,26 +307,38 @@ and specifically allowed to view the logbook, redirecting to the WordPress login
 in) or showing a plain access-denied message (logged in as some unrelated account, e.g. a
 webshop customer) otherwise.
 
+Multiple boats can share one WordPress site: which logbook a person sees (or a Logbook Writer
+edits/uploads) is resolved from *who's logged in*, via a "boat" field on their own user profile --
+not from the URL, so the gatekeeper page below is deployed exactly once no matter how many boats
+use the site.
+
 One-time setup on the WordPress site:
 
 1. Upload `wordpress-plugin/nmea2log-remarks.php` to `wp-content/plugins/nmea2log-remarks/` and
    activate it in wp-admin → Plugins. It registers two purpose-built roles -- deliberately not
    reusing any built-in WordPress role, since those can already be in use for unrelated things on
-   an existing site (webshop customers, existing contributors, ...): "Logbook Writer" (can view
-   and save remarks) and "Logbook Reader" (can only view). A site Administrator can always do
-   both, without needing either role.
-2. Pick a `<slug>` for the private/URL directory used below, in wp-admin → Instellingen →
-   nmea2log. Defaults to `logboek` if left blank. (Or, if you'd rather not store it in the
-   database at all, add `define('NMEA2LOG_SLUG', 'your-boat');` to `wp-config.php` instead --
-   that takes priority over the settings page and disables the field there.)
-3. Create the accounts that should have access, in wp-admin → Users, with one of those two roles.
+   an existing site (webshop customers, existing contributors, ...): "Logbook Writer" (can view,
+   save remarks, and upload/publish) and "Logbook Reader" (can only view). A site Administrator
+   can always do both, without needing either role.
+2. Optional: pick a site-wide default `<slug>` in wp-admin → Instellingen → nmea2log, used for
+   anyone with no boat of their own (mainly an Administrator). Defaults to `logboek` if left
+   blank. (Or, if you'd rather not store it in the database at all, add
+   `define('NMEA2LOG_SLUG', 'your-boat');` to `wp-config.php` instead -- that takes priority and
+   disables the field there.)
+3. Create each boat owner's account, in wp-admin → Users, with the "Logbook Writer" role, and set
+   their own `<slug>` (a per-boat identifier -- letters/digits/hyphens) in the "nmea2log" section
+   on their Edit User profile screen. A Writer can then invite/remove their *own* boat's readers
+   themselves, from "Mijn lezers" in the wp-admin sidebar -- no further Administrator involvement
+   needed per reader.
 4. Upload `wordpress-plugin/logboek-index.php` as `index.php` and `wordpress-plugin/logboek-
-   views.php` as `views.php` into `www/<slug>/` (the same `<slug>` as step 2) -- both now read
-   the upload path from the plugin's own `NMEA2LOG_LOGBOOK_PATH` constant, so there's nothing
-   inside either file itself to adjust for your own layout.
-5. Point `--upload-remote-path` at `private/<slug>/logbook.html` -- *outside* the public web root
-   (e.g. `private/` on TransIP webhosting, which already isn't served over HTTP), not under
-   `www/` directly -- a file under `www/` is reachable by its URL alone, login or not.
+   views.php` as `views.php` into one shared location under `www/` (e.g. `www/logboek/`) -- both
+   resolve the right boat per visitor at request time, so there's nothing inside either file
+   itself to adjust for your own layout, and nothing to repeat per boat.
+5. Point each boat's own `--upload-rest-user`/`--upload-rest-app-password` at that boat's own
+   WordPress account (step 3) -- the REST endpoint writes to `private/<that account's own
+   slug>/logbook.html`, *outside* the public web root (e.g. `private/` on TransIP webhosting,
+   which already isn't served over HTTP), automatically; nothing to configure client-side for the
+   path itself.
 
 ```bash
 nmea2log --upload --remarks-api-url /wp-json/nmea2log/v1/remarks -o logbook.csv

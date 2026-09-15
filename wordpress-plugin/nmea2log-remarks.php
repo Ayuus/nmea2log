@@ -10,10 +10,16 @@
  * over SFTP. Also defines the "read_logboek" capability that the page's own login gate (see
  * logboek-index.php) checks -- this site has ordinary customer accounts too (WooCommerce),
  * so "logged in at all" is not a safe stand-in for "may view the logbook": every one of those
- * customer accounts is logged in just as much as an actual crew member would be. Since 1.5.0
- * also has an Instellingen > nmea2log settings page for the private/URL slug (nmea2log_slug()),
- * so that value doesn't have to be a wp-config.php edit.
- * Version: 1.5.0
+ * customer accounts is logged in just as much as an actual crew member would be.
+ *
+ * Since 1.6.0, multiple boats can share one WordPress site: which logbook a person sees (or, for
+ * a Writer, edits/uploads) is resolved from *who they are* (nmea2log_slug_for_user(), a per-user
+ * "boat" field on their profile, see nmea2log_render_boat_field()), not from the URL -- so
+ * logboek-index.php/logboek-views.php only ever need to be deployed once, at one shared URL, for
+ * every boat on the site. Every Writer also gets their own "Mijn lezers" screen
+ * (nmea2log_readers_render()) to invite/remove readers for their own boat specifically, without
+ * needing the site Administrator to create every account by hand.
+ * Version: 1.6.0
  */
 
 if (!defined('ABSPATH')) {
@@ -22,35 +28,74 @@ if (!defined('ABSPATH')) {
 
 define('NMEA2LOG_REMARKS_OPTION', 'nmea2log_remarks');
 define('NMEA2LOG_SLUG_OPTION', 'nmea2log_slug');
+define('NMEA2LOG_BOAT_META_KEY', 'nmea2log_boat_slug');
 define('NMEA2LOG_VIEW_CAP', 'read_logboek');
 define('NMEA2LOG_EDIT_CAP', 'edit_logboek_remarks');
-// The directory name under private/ (and, by convention, under www/ for the gatekeeper script --
-// see logboek-index.php) is deliberately not hardcoded here, so the real value never has to
-// appear in this (public) plugin file. Two ways to set it, in priority order: a NMEA2LOG_SLUG
-// constant in wp-config.php (for whoever prefers not to touch the database at all -- wp-config.php
-// is already site-specific and never committed either), or the Instellingen > nmea2log settings
-// page below (nmea2log_settings_render(), stored as a plain option). Falls back to the generic
-// 'logboek' when neither is set, so a fresh install still works out of the box.
-function nmea2log_slug(): string {
+define('NMEA2LOG_READERS_PAGE_SLUG', 'nmea2log-readers');
+
+// The site-wide fallback boat -- used for anyone with no personal boat assignment (see
+// nmea2log_slug_for_user() below), e.g. a single-boat site where nobody bothers assigning it per
+// user, or an Administrator browsing without a ?boot= override. Deliberately not hardcoded here,
+// so a real boat name never has to appear in this (public) plugin file: a NMEA2LOG_SLUG constant
+// in wp-config.php (never committed either) if set, else the Instellingen > nmea2log option
+// (nmea2log_settings_render() below), else the generic 'logboek'.
+function nmea2log_default_slug(): string {
     if (defined('NMEA2LOG_SLUG')) {
-        return NMEA2LOG_SLUG;
+        return sanitize_title(NMEA2LOG_SLUG);
     }
     $configured = get_option(NMEA2LOG_SLUG_OPTION, '');
-    // sanitize_title() again here, not just on save (see nmea2log_sanitize_slug()): defensive
-    // against a value that predates this validation, or was written directly to the database by
-    // something other than the settings form below.
     return $configured !== '' ? sanitize_title($configured) : 'logboek';
 }
+
+// null, not '', when nothing is assigned -- lets callers tell "no personal boat" apart from a
+// (theoretically) empty-string slug, which sanitize_title() would never actually produce anyway.
+function nmea2log_slug_for_user(int $user_id): ?string {
+    $slug = get_user_meta($user_id, NMEA2LOG_BOAT_META_KEY, true);
+    return $slug !== '' ? sanitize_title($slug) : null;
+}
+
+// The boat to use for the currently logged-in user specifically -- their own assignment first,
+// the site default otherwise (e.g. an Administrator who hasn't been assigned one personally).
+function nmea2log_slug_for_current_user(): string {
+    $user_id = get_current_user_id();
+    if ($user_id) {
+        $own = nmea2log_slug_for_user($user_id);
+        if ($own !== null) {
+            return $own;
+        }
+    }
+    return nmea2log_default_slug();
+}
+
+// Like nmea2log_slug_for_current_user(), but an Administrator may pass ?boot=<slug> to browse a
+// different boat's logbook page -- e.g. to check on one whose Writer hasn't logged in yet, or
+// just to look something up. Never available to a Writer/Reader: they only ever see their own
+// boat, by design (this is what makes "Mijn lezers" below safe to scope by "the requester's own
+// boat" without a Writer being able to lie about which one that is). Only affects which *logbook*
+// is shown -- the Remarks REST calls a served page's own JS makes still resolve via
+// nmea2log_slug_for_current_user() (see nmea2log_remarks_get()/_set()), since those are separate
+// requests that don't carry this page's own ?boot= along; harmless in practice, since another
+// boat's trip_uids essentially never collide with the one being viewed, so this just shows no
+// remarks rather than the wrong ones.
+function nmea2log_effective_slug(): string {
+    if (current_user_can('manage_options') && isset($_GET['boot']) && $_GET['boot'] !== '') {
+        return sanitize_title(wp_unslash($_GET['boot']));
+    }
+    return nmea2log_slug_for_current_user();
+}
+
 // One level above ABSPATH (the www/ webroot), outside it entirely -- same path upload.py's own
 // SFTP upload has always targeted, still served only via logboek-index.php's own login-gated
 // read, never directly reachable by URL.
-define('NMEA2LOG_LOGBOOK_PATH', dirname(ABSPATH) . '/private/' . nmea2log_slug() . '/logbook.html');
+function nmea2log_logbook_path(string $slug): string {
+    return dirname(ABSPATH) . '/private/' . $slug . '/logbook.html';
+}
 
-// A single text field, Instellingen > nmea2log -- the friendlier alternative to the wp-config.php
-// constant above for whoever doesn't want to edit a PHP file by hand. sanitize_title() (the same
-// sanitizer WordPress uses for post slugs) rather than sanitize_text_field(): this value becomes
-// both a URL path segment and a filesystem directory name, so it's restricted to lowercase
-// letters/digits/hyphens rather than accepting arbitrary text that could contain a "/" or "..".
+// Instellingen > nmea2log -- just the site-default-boat field now (see nmea2log_default_slug()
+// above); per-user assignment lives on each user's own profile instead (see
+// nmea2log_render_boat_field()). sanitize_title() (the same sanitizer WordPress uses for post
+// slugs), not sanitize_text_field(): this value becomes both a URL path segment and a filesystem
+// directory name, so it's restricted to lowercase letters/digits/hyphens.
 add_action('admin_menu', function () {
     add_options_page(
         'nmea2log', 'nmea2log', 'manage_options', 'nmea2log-settings', 'nmea2log_settings_render'
@@ -80,7 +125,7 @@ function nmea2log_settings_render(): void {
             <?php settings_fields('nmea2log_settings'); ?>
             <table class="form-table">
                 <tr>
-                    <th scope="row"><label for="nmea2log_slug">Pad</label></th>
+                    <th scope="row"><label for="nmea2log_slug">Standaardboot</label></th>
                     <td>
                         <input
                             type="text" id="nmea2log_slug" name="<?= esc_attr(NMEA2LOG_SLUG_OPTION) ?>"
@@ -89,9 +134,10 @@ function nmea2log_settings_render(): void {
                             <?= $overridden_by_constant ? 'disabled' : '' ?>
                         >
                         <p class="description">
-                            Bepaalt zowel de URL (<code>jouwsite.nl/<em>pad</em>/</code>) als de
-                            privé-opslagmap van het logboek. Alleen kleine letters, cijfers en
-                            koppeltekens; leeg = <code>logboek</code>.
+                            Gebruikt voor iedereen zonder eigen boot-toewijzing (zie het
+                            "nmea2log"-veld op elk gebruikersprofiel onder Gebruikers) -- meestal
+                            alleen relevant voor een Administrator zonder eigen boot. Alleen kleine
+                            letters, cijfers en koppeltekens; leeg = <code>logboek</code>.
                             <?php if ($overridden_by_constant): ?>
                                 <br><strong>Overschreven door <code>NMEA2LOG_SLUG</code> in
                                 wp-config.php</strong> (<code><?= esc_html(NMEA2LOG_SLUG) ?></code>) --
@@ -102,6 +148,182 @@ function nmea2log_settings_render(): void {
                 </tr>
             </table>
             <?php submit_button(); ?>
+        </form>
+    </div>
+    <?php
+}
+
+// Per-user boat assignment, on each user's own Edit Profile screen (Gebruikers > naam) --
+// Administrator-only to view/edit, same trust level as assigning roles (which is also
+// Administrator-only in core WordPress): a Writer's own boat is something *they* get assigned,
+// not something they pick for themselves.
+add_action('show_user_profile', 'nmea2log_render_boat_field');
+add_action('edit_user_profile', 'nmea2log_render_boat_field');
+
+function nmea2log_render_boat_field(WP_User $user): void {
+    if (!current_user_can('manage_options')) {
+        return;
+    }
+    $current = get_user_meta($user->ID, NMEA2LOG_BOAT_META_KEY, true);
+    ?>
+    <h2>nmea2log</h2>
+    <table class="form-table">
+        <tr>
+            <th><label for="nmea2log_boat_slug">Boot</label></th>
+            <td>
+                <input
+                    type="text" name="nmea2log_boat_slug" id="nmea2log_boat_slug"
+                    value="<?= esc_attr($current) ?>" class="regular-text"
+                    placeholder="(standaardboot)"
+                >
+                <p class="description">
+                    Welk logboek deze gebruiker ziet (en, als Logbook Writer, bewerkt/uploadt).
+                    Leeg = de standaardboot uit Instellingen &gt; nmea2log.
+                </p>
+            </td>
+        </tr>
+    </table>
+    <?php
+}
+
+add_action('personal_options_update', 'nmea2log_save_boat_field');
+add_action('edit_user_profile_update', 'nmea2log_save_boat_field');
+
+function nmea2log_save_boat_field(int $user_id): void {
+    if (!current_user_can('manage_options') || !isset($_POST['nmea2log_boat_slug'])) {
+        return;
+    }
+    $value = sanitize_title(wp_unslash($_POST['nmea2log_boat_slug']));
+    if ($value === '') {
+        delete_user_meta($user_id, NMEA2LOG_BOAT_META_KEY);
+    } else {
+        update_user_meta($user_id, NMEA2LOG_BOAT_META_KEY, $value);
+    }
+}
+
+// "Mijn lezers" -- lets a Logbook Writer invite/remove readers for their *own* boat directly,
+// without asking the site Administrator to create every account by hand (found in practice to be
+// the real bottleneck once more than one boat/owner is involved). Gated on NMEA2LOG_EDIT_CAP, not
+// a broader WordPress capability like create_users: a Writer can only ever affect accounts that
+// are (a) not already an Editor/Administrator and (b) -- for removal -- already tagged with their
+// own boat, both enforced in nmea2log_readers_render() itself, so this never needs to expose
+// WordPress's own, unscoped "add new user" screen to a Writer at all.
+add_action('admin_menu', function () {
+    add_menu_page(
+        'Mijn lezers', 'Mijn lezers', NMEA2LOG_EDIT_CAP, NMEA2LOG_READERS_PAGE_SLUG,
+        'nmea2log_readers_render', 'dashicons-groups'
+    );
+});
+
+function nmea2log_readers_render(): void {
+    if (!nmea2log_can_edit()) {
+        wp_die('Geen toegang.');
+    }
+    $my_slug = nmea2log_slug_for_current_user();
+    $message = '';
+
+    if (
+        isset($_POST['nmea2log_add_reader_nonce'])
+        && wp_verify_nonce($_POST['nmea2log_add_reader_nonce'], 'nmea2log_add_reader')
+    ) {
+        $email = sanitize_email(wp_unslash($_POST['email'] ?? ''));
+        if ($email === '' || !is_email($email)) {
+            $message = '<div class="notice notice-error"><p>Ongeldig e-mailadres.</p></div>';
+        } else {
+            $existing = get_user_by('email', $email);
+            if ($existing) {
+                // add_role(), not set_role(): this site also has plain WooCommerce customer
+                // accounts (see the module docstring) -- set_role() would silently replace that
+                // role instead of adding Reader alongside it. Blocked only for an existing
+                // Editor/Administrator, so this can never quietly change what either of those can
+                // already do.
+                if (in_array(NMEA2LOG_EDITOR_ROLE, $existing->roles, true) || $existing->has_cap('manage_options')) {
+                    $message = '<div class="notice notice-error"><p>Dit account heeft al een andere nmea2log-rol, niet aangepast.</p></div>';
+                } else {
+                    $existing->add_role(NMEA2LOG_READER_ROLE);
+                    update_user_meta($existing->ID, NMEA2LOG_BOAT_META_KEY, $my_slug);
+                    $message = '<div class="notice notice-success"><p>' . esc_html($email) . ' is nu lezer van dit logboek.</p></div>';
+                }
+            } else {
+                $user_id = wp_insert_user([
+                    'user_login' => sanitize_user($email, true),
+                    'user_email' => $email,
+                    'user_pass' => wp_generate_password(20),
+                    'role' => NMEA2LOG_READER_ROLE,
+                ]);
+                if (is_wp_error($user_id)) {
+                    $message = '<div class="notice notice-error"><p>' . esc_html($user_id->get_error_message()) . '</p></div>';
+                } else {
+                    update_user_meta($user_id, NMEA2LOG_BOAT_META_KEY, $my_slug);
+                    // WordPress's own "set your password" flow -- this plugin never handles a
+                    // plaintext password of the new account's own beyond the random one above,
+                    // which nobody (including the inviting Writer) ever sees.
+                    wp_new_user_notification($user_id, null, 'user');
+                    $message = '<div class="notice notice-success"><p>' . esc_html($email) . ' uitgenodigd (mail met wachtwoord-link verstuurd).</p></div>';
+                }
+            }
+        }
+    }
+
+    if (
+        isset($_POST['nmea2log_remove_reader_nonce'])
+        && wp_verify_nonce($_POST['nmea2log_remove_reader_nonce'], 'nmea2log_remove_reader')
+    ) {
+        $user_id = (int) ($_POST['user_id'] ?? 0);
+        $target = get_userdata($user_id);
+        // Scoped to this Writer's own boat *and* the Reader role specifically: can't be used to
+        // touch an Editor/Administrator, or a Reader who belongs to a different boat, even by
+        // guessing/tampering with the user_id in the form post.
+        if (
+            $target
+            && in_array(NMEA2LOG_READER_ROLE, $target->roles, true)
+            && get_user_meta($user_id, NMEA2LOG_BOAT_META_KEY, true) === $my_slug
+        ) {
+            delete_user_meta($user_id, NMEA2LOG_BOAT_META_KEY);
+            $target->remove_role(NMEA2LOG_READER_ROLE); // not set_role(''): leaves e.g. a WooCommerce customer role intact
+            $message = '<div class="notice notice-success"><p>Lezer verwijderd.</p></div>';
+        }
+    }
+
+    $readers = get_users([
+        'role' => NMEA2LOG_READER_ROLE,
+        'meta_key' => NMEA2LOG_BOAT_META_KEY,
+        'meta_value' => $my_slug,
+    ]);
+    ?>
+    <div class="wrap">
+        <h1>Mijn lezers</h1>
+        <?php echo $message; ?>
+        <p>Lezers van jouw logboek (<code><?= esc_html($my_slug) ?></code>):</p>
+        <table class="widefat striped">
+            <thead><tr><th>E-mail</th><th></th></tr></thead>
+            <tbody>
+            <?php if (empty($readers)): ?>
+                <tr><td colspan="2"><em>Nog geen lezers.</em></td></tr>
+            <?php endif; ?>
+            <?php foreach ($readers as $reader): ?>
+                <tr>
+                    <td><?= esc_html($reader->user_email) ?></td>
+                    <td>
+                        <form method="post" style="display:inline">
+                            <?php wp_nonce_field('nmea2log_remove_reader', 'nmea2log_remove_reader_nonce'); ?>
+                            <input type="hidden" name="user_id" value="<?= esc_attr($reader->ID) ?>">
+                            <button
+                                type="submit" class="button-link-delete"
+                                onclick="return confirm('Lezer verwijderen?')"
+                            >Verwijderen</button>
+                        </form>
+                    </td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+
+        <h2>Lezer toevoegen</h2>
+        <form method="post">
+            <?php wp_nonce_field('nmea2log_add_reader', 'nmea2log_add_reader_nonce'); ?>
+            <input type="email" name="email" placeholder="naam@voorbeeld.nl" required class="regular-text">
+            <?php submit_button('Uitnodigen', 'primary', 'submit', false); ?>
         </form>
     </div>
     <?php
@@ -158,6 +380,26 @@ add_action('admin_init', function () {
     }
 });
 
+// One-time migration for a site that already had remarks saved before 1.6.0's multi-boat support:
+// the option used to be a flat trip_uid => text map (one boat, implicitly), now it's boat =>
+// trip_uid => text (see nmea2log_remarks_all_for_slug()) -- run on every request (not just
+// admin_init, which a REST-only visitor loading the logbook page never triggers), but guarded by
+// its own "already done" flag so the actual check only ever runs once in practice.
+add_action('init', 'nmea2log_maybe_migrate_remarks');
+
+function nmea2log_maybe_migrate_remarks(): void {
+    if (get_option('nmea2log_remarks_migrated_v2', false)) {
+        return;
+    }
+    $all = get_option(NMEA2LOG_REMARKS_OPTION, []);
+    if (is_array($all) && !empty($all) && !is_array(reset($all))) {
+        // Every remark saved so far belonged to the one boat this site had before multi-boat
+        // support existed -- filed under today's own default slug rather than silently orphaned.
+        update_option(NMEA2LOG_REMARKS_OPTION, [nmea2log_default_slug() => $all]);
+    }
+    update_option('nmea2log_remarks_migrated_v2', true);
+}
+
 register_uninstall_hook(__FILE__, 'nmea2log_remarks_uninstall');
 
 function nmea2log_remarks_uninstall() {
@@ -165,6 +407,8 @@ function nmea2log_remarks_uninstall() {
     remove_role(NMEA2LOG_EDITOR_ROLE);
     delete_option(NMEA2LOG_REMARKS_OPTION);
     delete_option(NMEA2LOG_SLUG_OPTION);
+    delete_option('nmea2log_remarks_migrated_v2');
+    delete_metadata('user', 0, NMEA2LOG_BOAT_META_KEY, '', true); // true: every user, not just id 0
 }
 
 function nmea2log_can_view(): bool {
@@ -204,9 +448,16 @@ add_action('rest_api_init', function () {
     ]);
 });
 
-function nmea2log_remarks_all(): array {
-    $remarks = get_option(NMEA2LOG_REMARKS_OPTION, []);
-    return is_array($remarks) ? $remarks : [];
+// Remarks are namespaced by boat (nmea2log_remarks_all_for_slug()'s own $slug param) -- multiple
+// boats share this one option, keyed by slug, rather than one flat trip_uid => text map: without
+// that, every boat's Reader/Writer would see (via the plain REST GET) every *other* boat's
+// remarks mixed into the same response, not just their own.
+function nmea2log_remarks_all_for_slug(string $slug): array {
+    $all = get_option(NMEA2LOG_REMARKS_OPTION, []);
+    if (!is_array($all) || !isset($all[$slug]) || !is_array($all[$slug])) {
+        return [];
+    }
+    return $all[$slug];
 }
 
 function nmea2log_remarks_get(WP_REST_Request $request) {
@@ -214,7 +465,7 @@ function nmea2log_remarks_get(WP_REST_Request $request) {
         // Cast to an object so an empty result still encodes as JSON "{}", not "[]" -- a PHP
         // array with no keys and a PHP array with string keys both need to look the same shape
         // to the JS side, which always expects to index it by trip_uid.
-        'remarks' => (object) nmea2log_remarks_all(),
+        'remarks' => (object) nmea2log_remarks_all_for_slug(nmea2log_slug_for_current_user()),
         // Lets the page show only a "Sluiten" (Close) button, no "Opslaan" (Save), for a visitor
         // who can view but not edit -- rather than showing Save and only discovering it doesn't
         // work after clicking it. Uses the exact same check as the POST permission_callback
@@ -230,18 +481,27 @@ function nmea2log_remarks_set(WP_REST_Request $request) {
         return new WP_Error('missing_trip_uid', 'trip_uid is required', ['status' => 400]);
     }
 
-    $remarks = nmea2log_remarks_all();
-    if ($text === '') {
-        unset($remarks[$trip_uid]); // an emptied remark is removed, not stored as ""
-    } else {
-        $remarks[$trip_uid] = $text;
+    $slug = nmea2log_slug_for_current_user();
+    $all = get_option(NMEA2LOG_REMARKS_OPTION, []);
+    if (!is_array($all)) {
+        $all = [];
     }
-    update_option(NMEA2LOG_REMARKS_OPTION, $remarks);
+    $boat_remarks = isset($all[$slug]) && is_array($all[$slug]) ? $all[$slug] : [];
+    if ($text === '') {
+        unset($boat_remarks[$trip_uid]); // an emptied remark is removed, not stored as ""
+    } else {
+        $boat_remarks[$trip_uid] = $text;
+    }
+    $all[$slug] = $boat_remarks;
+    update_option(NMEA2LOG_REMARKS_OPTION, $all);
 
     return rest_ensure_response(['ok' => true]);
 }
 
-/** Receives the whole built HTML logbook and writes it to NMEA2LOG_LOGBOOK_PATH -- the REST
+/** Receives the whole built HTML logbook and writes it to this uploading user's own boat path
+ * (nmea2log_slug_for_current_user() -- *not* nmea2log_effective_slug(): this is an unattended API
+ * call, not a page a human is browsing with a ?boot= override in the address bar, so it always
+ * writes to whichever boat the authenticated account itself is assigned to) -- the REST
  * replacement for upload.py's own SFTP upload_file(). The raw request body is the HTML itself
  * (no JSON envelope: at several hundred KB, wrapping it in a JSON string would only cost
  * escaping overhead for no benefit), so this reads $request->get_body() directly rather than a
@@ -264,7 +524,7 @@ function nmea2log_logbook_upload(WP_REST_Request $request) {
         );
     }
 
-    $target = NMEA2LOG_LOGBOOK_PATH;
+    $target = nmea2log_logbook_path(nmea2log_slug_for_current_user());
     $dir = dirname($target);
     if (!is_dir($dir) && !wp_mkdir_p($dir)) {
         return new WP_Error('logbook_dir_failed', 'Could not create the target directory', ['status' => 500]);

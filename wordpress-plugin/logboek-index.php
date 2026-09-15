@@ -1,11 +1,13 @@
 <?php
 /**
- * Gatekeeper for the nmea2log HTML logbook. Deploy as www/<slug>/index.php, where <slug> matches
- * NMEA2LOG_SLUG (see nmea2log-remarks.php's own wp-config.php-driven default) -- purely a
- * deployment/URL choice, this script itself never hardcodes it.
+ * Gatekeeper for the nmea2log HTML logbook. Deploy once, anywhere under www/ (e.g.
+ * www/logboek/index.php) -- since 1.6.0 this no longer needs to live at a URL matching any
+ * particular boat's own slug: nmea2log_effective_slug() (see nmea2log-remarks.php) resolves
+ * *which* boat's logbook to show from who's actually logged in, so one shared page serves every
+ * boat on the site.
  *
  * The generated logbook.html itself is uploaded (via the nmea2000processor --upload feature) to
- * NMEA2LOG_LOGBOOK_PATH (see nmea2log-remarks.php) -- outside the web-served www/ directory, so
+ * nmea2log_logbook_path() (see nmea2log-remarks.php) -- outside the web-served www/ directory, so
  * its URL alone is never enough to read it. This script bootstraps WordPress just far enough to
  * check the visitor's login state and view permission (nmea2log_can_view(), defined by the nmea2log-
  * remarks plugin -- reused here rather than re-checking the capability directly, so this always
@@ -46,7 +48,7 @@ if (!function_exists('nmea2log_can_view') || !nmea2log_can_view()) {
     exit;
 }
 
-$logbook_path = NMEA2LOG_LOGBOOK_PATH;
+$logbook_path = nmea2log_logbook_path(nmea2log_effective_slug());
 if (!file_exists($logbook_path)) {
     http_response_code(404);
     echo 'Logboek nog niet geüpload.';
