@@ -420,6 +420,88 @@ def test_write_html_logbook_map_button_only_with_track(tmp_path: Path):
     assert '"points": [[52.3, 4.9]]' in html.replace(" ", "").replace("\n", "") or "52.3" in html
 
 
+def test_write_html_logbook_overview_link_only_for_years_with_a_track(tmp_path: Path):
+    """The "Overzicht" season-map link (asked for explicitly) sits next to the year heading, but
+    only when there's actually a trip that year with a GPS track to put on the map -- an empty
+    map behind the link would just be confusing."""
+    track = [NavSample(datetime(2026, 7, 15, 9, 0), 52.30, 4.90, 3.0, None)]
+    trip_2026_with_track = _trip(track=track)
+    trip_2025_without_track = _trip(
+        depart_time=datetime(2025, 7, 15, 9, 0), arrive_time=datetime(2025, 7, 15, 10, 0)
+    )
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([trip_2026_with_track, trip_2025_without_track], out_path)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert '<a href="#" class="show-overview" data-year="2026">' in html
+    assert 'data-year="2025"' not in html
+
+
+def test_write_html_logbook_embeds_year_trip_indices_for_the_overview_map(tmp_path: Path):
+    track = [NavSample(datetime(2026, 7, 15, 9, 0), 52.30, 4.90, 3.0, None)]
+    earlier_trip = _trip(track=track)
+    later_trip = _trip(
+        track=track, depart_time=datetime(2026, 7, 20, 9, 0), arrive_time=datetime(2026, 7, 20, 10, 0)
+    )
+    out_path = tmp_path / "logbook.html"
+
+    # Passed in reverse-chronological order (later trip first) -- write_html_logbook sorts trips
+    # by depart_time before assigning indices, so earlier_trip becomes index 0 regardless of
+    # input order; YEAR_TRIP_INDICES must reflect that same chronological order too.
+    write_html_logbook([later_trip, earlier_trip], out_path)
+
+    html = out_path.read_text(encoding="utf-8")
+    year_indices = json.loads(re.search(r"const YEAR_TRIP_INDICES = (\{.*?\});", html).group(1))
+    assert year_indices["2026"] == [0, 1]  # earlier_trip is index 0 after sorting, later_trip is 1
+
+
+def test_write_html_logbook_trips_json_includes_overview_fields(tmp_path: Path):
+    track = [NavSample(datetime(2026, 7, 15, 9, 0), 52.30, 4.90, 3.0, None)]
+    trip = _trip(track=track, depart_place="Arzal", arrive_place="Vannes")
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([trip], out_path, utc_offset_hours=0)
+
+    html = out_path.read_text(encoding="utf-8")
+    trips_json = json.loads(re.search(r"const TRIPS = (\{.*?\});", html).group(1))
+    entry = trips_json["0"]
+    assert entry["seq"] == 1
+    assert entry["date"] == "2026-07-15"
+    assert entry["departPlace"] == "Arzal"
+    assert entry["arrivePlace"] == "Vannes"
+
+
+def test_write_html_logbook_trip_row_carries_its_own_index(tmp_path: Path):
+    """The overview map's own markers scroll to a trip's table row by this attribute (see the
+    click handler JS in write_html_logbook) -- same idx as TRIPS/YEAR_TRIP_INDICES use."""
+    track = [NavSample(datetime(2026, 7, 15, 9, 0), 52.30, 4.90, 3.0, None)]
+    trip = _trip(track=track)
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([trip], out_path)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert '<tr class="trip-row" data-trip="0"' in html
+
+
+def test_write_html_logbook_includes_a_single_overview_dialog(tmp_path: Path):
+    track = [NavSample(datetime(2026, 7, 15, 9, 0), 52.30, 4.90, 3.0, None)]
+    trip_a = _trip(track=track)
+    trip_b = _trip(
+        track=track, depart_time=datetime(2026, 7, 20, 9, 0), arrive_time=datetime(2026, 7, 20, 10, 0)
+    )
+    out_path = tmp_path / "logbook.html"
+
+    # Two trips in the same year -- the dialog/map must still only be emitted once (shared,
+    # populated per year on open by JS), not once per year link.
+    write_html_logbook([trip_a, trip_b], out_path)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert html.count('id="overview-dialog"') == 1
+    assert html.count('id="overview-map"') == 1
+
+
 def _track_every_10_minutes(count: int, cog_deg=200.0):
     return [
         NavSample(datetime(2026, 7, 15, 9, 0) + timedelta(minutes=10 * i), 52.30 + 0.001 * i, 4.90, 3.0, None, None, cog_deg)
@@ -724,7 +806,7 @@ def test_write_html_logbook_shows_the_last_known_position_under_last_updated(tmp
     assert 'data-i18n="last_position">Laatste positie</span>: ' in html
     assert "47.1388, -2.3630" in html  # NoGeocoder's own plain "{lat:.4f}, {lon:.4f}" format
     assert "(2026-09-04 11:37)" in html
-    assert 'href="https://www.google.com/maps?q=47.13877,-2.36295"' in html
+    assert 'class="show-last-position" data-lat="47.13877" data-lon="-2.36295"' in html
 
 
 def test_write_html_logbook_geocodes_the_last_position_into_a_place_name(tmp_path: Path):

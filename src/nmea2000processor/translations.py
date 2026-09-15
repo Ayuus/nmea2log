@@ -58,6 +58,9 @@ NL: Dict[str, str] = {
     "header_remarks": "Opmerkingen",
     # Week divider row, e.g. "Week 32 (11 aug - 17 aug)"
     "week_label_prefix": "Week",
+    # Year-overview map link (next to the year heading) + its popup title, e.g. "Overzicht 2026"
+    "overview_link": "Overzicht",
+    "overview_dialog_title": "Overzicht {year}",
     # Totals cards
     "totals_trips": "Reizen",
     "totals_distance": "Totale afstand",
@@ -150,6 +153,8 @@ EN: Dict[str, str] = {
     "header_details": "Log",
     "header_remarks": "Remarks",
     "week_label_prefix": "Week",
+    "overview_link": "Overview",
+    "overview_dialog_title": "Overview {year}",
     "totals_trips": "Trips",
     "totals_distance": "Total distance",
     "totals_hours": "Total hours underway",
@@ -230,6 +235,8 @@ FR: Dict[str, str] = {
     "header_details": "Journal",
     "header_remarks": "Remarques",
     "week_label_prefix": "Semaine",
+    "overview_link": "Aperçu",
+    "overview_dialog_title": "Aperçu {year}",
     "totals_trips": "Trajets",
     "totals_distance": "Distance totale",
     "totals_hours": "Heures de navigation totales",
@@ -310,6 +317,8 @@ DE: Dict[str, str] = {
     "header_details": "Log",
     "header_remarks": "Bemerkungen",
     "week_label_prefix": "Woche",
+    "overview_link": "Übersicht",
+    "overview_dialog_title": "Übersicht {year}",
     "totals_trips": "Fahrten",
     "totals_distance": "Gesamtdistanz",
     "totals_hours": "Gesamte Fahrstunden",

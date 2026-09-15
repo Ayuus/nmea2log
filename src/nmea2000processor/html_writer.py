@@ -738,7 +738,7 @@ def _trip_row_html(
             f'<div class="map" id="map-{idx}"></div></td></tr>'
         )
     uid_attr = f' data-uid="{escape(trip_uid)}"' if trip_uid else ""
-    return f'<tr class="trip-row"{uid_attr}>{row}</tr>{map_row}'
+    return f'<tr class="trip-row" data-trip="{idx}"{uid_attr}>{row}</tr>{map_row}'
 
 
 _HEADER_FULL_KEYS = {
@@ -894,10 +894,16 @@ def write_html_logbook(
         if latest_position is not None:
             place = geocoder.place_name(latest_position.lat, latest_position.lon)
             position_time_local = _to_local(latest_position.time, offset)
-            maps_url = f"https://www.google.com/maps?q={latest_position.lat:.5f},{latest_position.lon:.5f}"
+            # A small in-page map popup (asked for explicitly), not the external Google Maps link
+            # this used to be -- that link never worked from inside the Android app's WebView
+            # (target="_blank" has nowhere to go there, same class of problem the Overzicht map's
+            # own dialog already solves for trips). data-lat/lon/place/time feed the click handler
+            # below rather than a URL, so no geocoding/formatting logic needs duplicating in JS.
             last_position_html = (
                 f'<div class="last-updated">{_i18n_span("last_position")}: '
-                f'<a href="{escape(maps_url)}" target="_blank" rel="noopener">{escape(place)}</a>'
+                f'<a href="#" class="show-last-position" '
+                f'data-lat="{latest_position.lat:.5f}" data-lon="{latest_position.lon:.5f}" '
+                f'data-place="{escape(place)}">{escape(place)}</a>'
                 f" ({position_time_local:%Y-%m-%d %H:%M})</div>"
             )
 
@@ -922,6 +928,11 @@ def write_html_logbook(
     header_html = "".join(f"<th>{_header_cell_html(h)}</th>" for h in headers)
 
     sections: List[str] = []
+    # Accumulated across every year below (each year's own indices are disjoint, since every trip
+    # belongs to exactly one calendar_year) -- fed into trip_data/YEAR_TRIP_INDICES after the loop,
+    # for the "Overzicht" season map (see the <dialog id="overview-dialog"> further down).
+    seq_by_index_all: Dict[int, int] = {}
+    year_trip_indices: Dict[int, List[int]] = {}
     for calendar_year in sorted({y for y, _, _ in by_week}, reverse=True):
         weeks_in_year = sorted({(iy, iw) for y, iy, iw in by_week if y == calendar_year}, reverse=True)
         # Chronological (ascending), unlike weeks_in_year/indices below which are ordered for
@@ -939,6 +950,14 @@ def write_html_logbook(
         # 1-based sequence number for that year -- resets every year since each year's indices
         # are handled separately.
         seq_by_index = {i: n + 1 for n, i in enumerate(year_indices_chronological)}
+        seq_by_index_all.update(seq_by_index)
+        # Only trips with an actual GPS track have anything to place on the overview map (same
+        # condition trip_data/the per-trip "Kaart" button already use below) -- ordered by seq
+        # (ascending/chronological), so the map's own marker numbers read left-to-right the same
+        # way the table's "Nr." column does.
+        year_trip_indices[calendar_year] = [
+            i for i in year_indices_chronological if trips[i].track
+        ]
         # One continuous <table> for the whole year (not one per week): a single table lets the
         # browser compute column widths from *all* the year's rows together, so every week lines
         # up automatically and no column ever ends up narrower than its widest content -- which
@@ -970,8 +989,15 @@ def write_html_logbook(
                 )
                 for i in indices
             )
+        # No overview link at all when there's nothing to show on it (no trip that year has a GPS
+        # track) -- a link that opens an empty map would just be confusing.
+        overview_link_html = (
+            f' <a href="#" class="show-overview" data-year="{calendar_year}">{_i18n_span("overview_link")}</a>'
+            if year_trip_indices[calendar_year]
+            else ""
+        )
         sections.append(
-            f'<section class="year"><h2>{calendar_year}</h2>'
+            f'<section class="year"><h2>{calendar_year}{overview_link_html}</h2>'
             f"{_totals_html(_compute_totals(year_trips))}"
             f'<div class="table-scroll"><table class="trips"><thead><tr>{header_html}</tr></thead>'
             f'<tbody>{"".join(body_rows)}</tbody></table></div></section>'
@@ -991,11 +1017,19 @@ def write_html_logbook(
                 trip, _trip_utc_offset_hours(trip, utc_offset_hours), log_interval_minutes
             ),
             "maxSpeed": _max_speed_marker(trip, _trip_utc_offset_hours(trip, utc_offset_hours)),
+            # Only used by the "Overzicht" season map (see the <dialog id="overview-dialog">
+            # further down) -- seq is the same 1-based per-year number as the table's own "Nr."
+            # column (seq_by_index_all, built alongside year_trip_indices above).
+            "seq": seq_by_index_all.get(idx),
+            "date": _to_local(trip.depart_time, _trip_utc_offset_hours(trip, utc_offset_hours)).strftime("%Y-%m-%d"),
+            "departPlace": trip.depart_place,
+            "arrivePlace": trip.arrive_place,
         }
         for idx, trip in enumerate(trips)
         if trip.track
     }
     trips_json = json.dumps(trip_data).replace("</", "<\\/")
+    year_trip_indices_json = json.dumps(year_trip_indices).replace("</", "<\\/")
 
     title = f"{boat_name} - {T['logbook_title_suffix']}" if boat_name else T["logbook_title_suffix"]
     heading = (
@@ -1064,7 +1098,14 @@ def write_html_logbook(
   }}
   .lang-flag.active {{ border-color: #1a6ecc; box-shadow: 0 0 0 1px #1a6ecc inset; }}
   .last-updated {{ color: #666; font-size: 0.85em; margin-bottom: 1em; }}
-  h2 {{ margin-top: 2em; border-bottom: 2px solid #1a6ecc; padding-bottom: 0.2em; }}
+  /* flex, not relying on vertical-align (found in practice: it aligned the "Overzicht" link -- a
+     much smaller font-size than the year number -- to the surrounding text's baseline/x-height,
+     not the year number's own visual center) -- the only content h2 ever has is the year number
+     plus that one optional link, so this is safe to apply unconditionally. */
+  h2 {{
+    margin-top: 2em; border-bottom: 2px solid #1a6ecc; padding-bottom: 0.2em;
+    display: flex; align-items: center; gap: 0.5em;
+  }}
   /* A grid, not flex-wrap: flex-wrap gives each wrapped *row* its own independent flex-grow
      distribution, so a short last row (fewer cards) stretched those few cards much wider than
      the same cards on a fuller row above (found in practice). Grid's columns are shared by every
@@ -1214,6 +1255,22 @@ def write_html_logbook(
   textarea right away (found in practice: the intentionally thin #ccc border above was there all
   along, but got visually replaced by this outline as soon as the dialog opened). */
   .remarks-textarea:focus {{ outline: 1px solid #1a6ecc; }}
+  .show-overview {{ font-size: 0.6em; font-weight: 400; color: #1a6ecc; }}
+  .overview-dialog {{ width: min(900px, 90vw); }}
+  .overview-map {{ height: 70vh; width: 100%; }}
+  .last-position-dialog {{ width: min(500px, 90vw); }}
+  .last-position-map {{ height: 40vh; width: 100%; }}
+  /* iconSize/iconAnchor in the matching L.divIcon() call below must stay in sync with width/
+     height here -- Leaflet positions the icon from those JS numbers, not this CSS. */
+  .overview-marker {{
+    background: #1a6ecc; color: white; border: 2px solid white; border-radius: 50%;
+    width: 26px; height: 26px; display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700; cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+  }}
+  /* Briefly marks the row a marker's own click just scrolled to -- fades back out on its own
+     (transition, not a fixed background) so it doesn't look like a permanent selection state. */
+  .trip-row-highlight {{ background: #fff3cd !important; transition: background 2s ease-out; }}
+  .trip-row-highlight.fade-out {{ background: transparent !important; }}
   .remarks-error {{ color: #c0392b; font-size: 0.85em; margin: 0 0 0.6em; }}
   .remarks-buttons {{ display: flex; gap: 0.5em; }}
   .remarks-save {{ cursor: pointer; border: 1px solid #1a6ecc; background: #1a6ecc; color: white; border-radius: 4px; padding: 0.3em 0.8em; }}
@@ -1232,8 +1289,19 @@ def write_html_logbook(
 {last_position_html}
 {_totals_html(_compute_totals(trips))}
 {"".join(sections)}
+<dialog class="log-dialog overview-dialog" id="overview-dialog">
+  <div class="trip-map-title" id="overview-dialog-title"></div>
+  <div class="overview-map" id="overview-map"></div>
+  <button type="button" class="close-log">{_i18n_span("log_close_button")}</button>
+</dialog>
+<dialog class="log-dialog last-position-dialog" id="last-position-dialog">
+  <div class="trip-map-title" id="last-position-dialog-title"></div>
+  <div class="last-position-map" id="last-position-map"></div>
+  <button type="button" class="close-log">{_i18n_span("log_close_button")}</button>
+</dialog>
 <script>
 const TRIPS = {trips_json};
+const YEAR_TRIP_INDICES = {year_trip_indices_json};
 const REMARKS_API_URL = {json.dumps(remarks_api_url)};
 // Filled in by the server (see wordpress-plugin/logboek-index.php) when this file is
 // served through the login gate, which -- unlike this Python-generated static file -- can call
@@ -1430,7 +1498,14 @@ document.querySelectorAll('.show-map').forEach(function(btn) {{
 function enableDialogDrag(dialog) {{
   var dragging = false, moved = false, startX, startY, startLeft, startTop;
   dialog.addEventListener('pointerdown', function(e) {{
-    if (e.target.closest('button, textarea, input, select, a, td, th')) return;
+    // .leaflet-container (asked for explicitly, found in practice): without this, starting a
+    // click on the overview map's own markers/tiles/zoom buttons set pointer capture on the
+    // *dialog* below instead (this listener not otherwise excluding a plain <span>, which a
+    // Leaflet marker's own divIcon content is) -- that redirected the click away from the
+    // marker's own handler entirely, onto the dialog, which then read it as a backdrop click and
+    // just closed the dialog instead of opening that trip's map. Panning/clicking the map itself
+    // was always the expected gesture there anyway, not dragging the whole popup.
+    if (e.target.closest('button, textarea, input, select, a, td, th, .leaflet-container')) return;
     var rect = dialog.getBoundingClientRect();
     dialog.style.position = 'fixed';
     dialog.style.margin = '0';
@@ -1472,6 +1547,24 @@ function enableDialogDrag(dialog) {{
     dialog.style.removeProperty('top');
   }});
 }}
+// Lets the Android back button (see MainActivity's OnBackPressedCallback) close whatever popup
+// is currently open -- or, if a trip was just opened *from* the Overzicht map (which closes that
+// dialog on the way there, see closeOverviewAndHighlight below), reopen Overzicht instead of
+// falling through to the default "leave the app" behavior (found in practice, asked for
+// explicitly: with nothing left open at that point, back had nothing to undo but exiting). Kept
+// as one shared, always-defined entry point rather than duplicating the "what's open" check on
+// the Kotlin side, so this stays correct regardless of which dialog -- or none -- is involved.
+window.__handleBackPress = function() {{
+  var openDialog = document.querySelector('dialog[open]');
+  if (openDialog) {{ openDialog.close(); return true; }}
+  if (window.__pendingOverviewYear && window.__reopenOverview) {{
+    var year = window.__pendingOverviewYear;
+    window.__pendingOverviewYear = null;
+    window.__reopenOverview(year);
+    return true;
+  }}
+  return false;
+}};
 document.querySelectorAll('.show-log').forEach(function(btn) {{
   var dialog = document.getElementById('log-' + btn.dataset.trip);
   btn.addEventListener('click', function() {{ dialog.showModal(); }});
@@ -1483,6 +1576,174 @@ document.querySelectorAll('.show-log').forEach(function(btn) {{
   }});
   enableDialogDrag(dialog);
 }});
+// "Overzicht" (season map, one per year): a single shared dialog/map instance reused across
+// every year link, rather than one Leaflet map per year up front -- built (and, on a second
+// open, just cleared and repopulated) lazily, same reasoning as the per-trip maps above only
+// initializing on first open.
+(function() {{
+  var overviewDialog = document.getElementById('overview-dialog');
+  var overviewLinks = document.querySelectorAll('.show-overview');
+  if (!overviewDialog || !overviewLinks.length) return;
+  var overviewMap = null;
+  var overviewMarkers = [];
+  var overviewLines = [];
+
+  function closeOverviewAndHighlight(idx, year) {{
+    // Remembered so the back button can reopen this Overzicht instead of exiting the app (see
+    // window.__handleBackPress above) -- cleared again by the two "user actually dismissed
+    // Overzicht" paths below (Sluiten button, backdrop click), so back only reopens it right
+    // after a jump like this one, not after a deliberate close.
+    window.__pendingOverviewYear = year;
+    overviewDialog.close();
+    var row = document.querySelector('.trip-row[data-trip="' + idx + '"]');
+    if (!row) return;
+    // Opens that trip's own map too (asked for explicitly), not just scrolling to the row --
+    // reuses the existing .show-map click handler (further down) rather than duplicating its
+    // lazy-init logic here, so this stays in sync with whatever that handler does. Only clicked
+    // if not already open, so this can't accidentally *close* an already-open map.
+    var mapButton = row.querySelector('.show-map');
+    if (mapButton && !mapButton.classList.contains('active')) {{
+      mapButton.click();
+    }}
+    // Scrolls to the *map* row, not the trip row -- asked for explicitly, covers both the map
+    // having just been opened above and it having already been open before this click. The map
+    // sits in its own row right after the trip row (see _trip_row_html in html_writer.py), so
+    // scrollIntoView on the trip row alone doesn't promise the map (taller, and what the user
+    // actually asked to see) ends up in view too -- only whatever it was called on. Falls back to
+    // the trip row itself only if there's genuinely no map row (shouldn't happen here, since only
+    // trips with a track ever get a marker on the overview map in the first place).
+    var mapRow = document.querySelector('.trip-map-row[data-trip="' + idx + '"]');
+    // Deferred a tick: the .show-map handler above schedules its own map.invalidateSize()/
+    // fitBounds() via setTimeout(fn, 0) when the map has just been opened, which can still be
+    // adjusting the page's layout in the same tick this scroll would otherwise start in --
+    // letting that settle first keeps this scroll's own target position from being measured
+    // against a layout that's still about to shift under it.
+    setTimeout(function() {{
+      (mapRow || row).scrollIntoView({{behavior: 'smooth', block: 'center'}});
+    }}, 50);
+    row.classList.remove('fade-out');
+    row.classList.add('trip-row-highlight');
+    // Two classes (not just removing trip-row-highlight after a timeout): the CSS transition on
+    // .trip-row-highlight only animates when a *property value* changes, not when the class
+    // itself disappears, so a plain removal would snap back to no-highlight instantly instead of
+    // fading. fade-out changes the actual background value (to transparent) while the transition
+    // rule is still in effect, so it eases out instead.
+    setTimeout(function() {{ row.classList.add('fade-out'); }}, 50);
+    setTimeout(function() {{ row.classList.remove('trip-row-highlight', 'fade-out'); }}, 2100);
+  }}
+
+  function openOverviewForYear(year) {{
+    var indices = YEAR_TRIP_INDICES[year] || [];
+    var titleTpl = I18N[currentLang].overview_dialog_title || 'Overzicht {{year}}';
+    document.getElementById('overview-dialog-title').textContent = titleTpl.replace('{{year}}', year);
+    overviewDialog.showModal();
+    if (!overviewMap) {{
+      overviewMap = L.map('overview-map');
+      L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+        maxZoom: 19,
+        attribution: '&copy; OpenStreetMap contributors'
+      }}).addTo(overviewMap);
+    }}
+    overviewMarkers.forEach(function(m) {{ overviewMap.removeLayer(m); }});
+    overviewLines.forEach(function(l) {{ overviewMap.removeLayer(l); }});
+    overviewMarkers = [];
+    overviewLines = [];
+    var bounds = null;
+    indices.forEach(function(idx) {{
+      var trip = TRIPS[idx];
+      // The real route (same points the per-trip map's own line draws, see the .show-map
+      // handler above), not a straight line between depart/arrive -- asked for explicitly.
+      if (!trip || !trip.points || !trip.points.length) return;
+      var line = L.polyline(trip.points, {{color: '#1a6ecc', weight: 2, opacity: 0.6}}).addTo(overviewMap);
+      overviewLines.push(line);
+      bounds = bounds ? bounds.extend(line.getBounds()) : line.getBounds();
+      // The route's own middle point (not the geometric midpoint of depart/arrive, which can
+      // land nowhere near a winding route) -- close enough to "the middle of the trip" for a
+      // marker anchor without needing to walk the track by distance/time.
+      var mid = trip.points[Math.floor(trip.points.length / 2)];
+      var icon = L.divIcon({{
+        className: '', html: '<span class="overview-marker">' + trip.seq + '</span>',
+        iconSize: [26, 26], iconAnchor: [13, 13]
+      }});
+      var marker = L.marker(mid, {{icon: icon}}).addTo(overviewMap);
+      marker.bindTooltip(
+        trip.date + ' &middot; ' + trip.departPlace + ' &rarr; ' + trip.arrivePlace
+      );
+      marker.on('click', function() {{ closeOverviewAndHighlight(idx, year); }});
+      overviewMarkers.push(marker);
+    }});
+    setTimeout(function() {{
+      overviewMap.invalidateSize();
+      if (bounds) overviewMap.fitBounds(bounds, {{padding: [24, 24]}});
+    }}, 0);
+  }}
+  // Exposed so window.__handleBackPress (see above) can reopen this dialog for whichever year the
+  // user last jumped away from, without this whole IIFE's private state (overviewMap and friends)
+  // needing to move out to module scope just for that one call.
+  window.__reopenOverview = openOverviewForYear;
+
+  overviewLinks.forEach(function(link) {{
+    link.addEventListener('click', function(e) {{
+      e.preventDefault();
+      // A fresh, deliberate open -- not a "return" -- so any pending reopen from an earlier jump
+      // (e.g. a different year, still sitting there if the user backed out some other way) is
+      // stale now and shouldn't fire later.
+      window.__pendingOverviewYear = null;
+      openOverviewForYear(link.dataset.year);
+    }});
+  }});
+  overviewDialog.querySelector('.close-log').addEventListener('click', function() {{
+    window.__pendingOverviewYear = null;
+    overviewDialog.close();
+  }});
+  overviewDialog.addEventListener('click', function(e) {{
+    if (e.target === overviewDialog) {{
+      window.__pendingOverviewYear = null;
+      overviewDialog.close();
+    }}
+  }});
+  enableDialogDrag(overviewDialog);
+}})();
+// "Laatste positie" (single-point popup, asked for explicitly instead of the external Google
+// Maps link this used to be -- see last_position_html above): one shared dialog/map, same lazy-
+// init-on-first-open pattern as Overzicht, just for a single marker instead of a whole season's
+// routes, and zoomed in close (there's no route/bounds to fit here) rather than a wide view.
+(function() {{
+  var link = document.querySelector('.show-last-position');
+  var dialog = document.getElementById('last-position-dialog');
+  if (!link || !dialog) return;
+  var map = null;
+  var marker = null;
+
+  link.addEventListener('click', function(e) {{
+    e.preventDefault();
+    var lat = parseFloat(link.dataset.lat);
+    var lon = parseFloat(link.dataset.lon);
+    document.getElementById('last-position-dialog-title').textContent = link.dataset.place;
+    dialog.showModal();
+    if (!map) {{
+      map = L.map('last-position-map');
+      L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+        maxZoom: 19,
+        attribution: '&copy; OpenStreetMap contributors'
+      }}).addTo(map);
+      marker = L.marker([lat, lon]).addTo(map);
+    }} else {{
+      marker.setLatLng([lat, lon]);
+    }}
+    setTimeout(function() {{
+      map.invalidateSize();
+      // Close enough to make out the actual anchorage/berth, not just which town -- there's only
+      // ever one point here, so there's no route/bounds to fitBounds() to instead.
+      map.setView([lat, lon], 15);
+    }}, 0);
+  }});
+  dialog.querySelector('.close-log').addEventListener('click', function() {{ dialog.close(); }});
+  dialog.addEventListener('click', function(e) {{
+    if (e.target === dialog) dialog.close();
+  }});
+  enableDialogDrag(dialog);
+}})();
 if (REMARKS_API_URL) {{
   var remarksButtonsByUid = {{}};
   document.querySelectorAll('.show-remarks').forEach(function(btn) {{
