@@ -240,7 +240,7 @@ class Geocoder:
         self,
         *,
         cache_file: Optional[Path] = None,
-        user_agent: str = "nmea2000processor/0.1 (personal sailing logbook)",
+        user_agent: str = "nmea2log/0.1 (personal sailing logbook)",
         # Empty (default) means "don't ask for a specific language at all" -- see _lookup(),
         # which then omits Nominatim's accept-language parameter entirely rather than sending an
         # empty value for it. Nominatim's own documented behavior with no accept-language given is

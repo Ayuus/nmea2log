@@ -2,7 +2,7 @@ import struct
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from nmea2000processor.ebl_reader import iter_frames
+from nmea2log.ebl_reader import iter_frames
 
 _ESC = 0x1B
 _SOH = 0x01

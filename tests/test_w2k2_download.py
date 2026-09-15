@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from nmea2000processor.w2k2_download import (
+from nmea2log.w2k2_download import (
     _candidate_subnet_prefixes,
     _local_subnet_prefix,
     _looks_like_w2k2,
@@ -130,7 +130,7 @@ def test_windows_private_subnet_prefixes_orders_real_adapters_before_virtual_one
     switch adapter (172.23.192.1) was up alongside the real wifi (172.16.121.93) -- the real
     adapter must be tried first, but the virtual one still included as a fallback candidate, not
     dropped outright (asked for nothing to be silently excluded)."""
-    import nmea2000processor.w2k2_download as w2k2_download
+    import nmea2log.w2k2_download as w2k2_download
 
     payload = json.dumps(
         [
@@ -151,7 +151,7 @@ def test_windows_private_subnet_prefixes_orders_real_adapters_before_virtual_one
 def test_windows_private_subnet_prefixes_handles_a_single_adapter_not_wrapped_in_a_list(monkeypatch):
     """ConvertTo-Json emits a bare object, not a one-element array, when there's only one match --
     a real PowerShell quirk, not something to special-case away only in a test fixture."""
-    import nmea2000processor.w2k2_download as w2k2_download
+    import nmea2log.w2k2_download as w2k2_download
 
     payload = json.dumps({"Alias": "Wi-Fi", "Description": "Intel Wi-Fi", "IPv4": "10.0.0.5"})
     monkeypatch.setattr(
@@ -162,7 +162,7 @@ def test_windows_private_subnet_prefixes_handles_a_single_adapter_not_wrapped_in
 
 
 def test_windows_private_subnet_prefixes_returns_empty_when_powershell_is_unavailable(monkeypatch):
-    import nmea2000processor.w2k2_download as w2k2_download
+    import nmea2log.w2k2_download as w2k2_download
 
     def _raise(*a, **kw):
         raise FileNotFoundError("powershell not found")
@@ -173,7 +173,7 @@ def test_windows_private_subnet_prefixes_returns_empty_when_powershell_is_unavai
 
 
 def test_windows_private_subnet_prefixes_returns_empty_on_malformed_output(monkeypatch):
-    import nmea2000processor.w2k2_download as w2k2_download
+    import nmea2log.w2k2_download as w2k2_download
 
     monkeypatch.setattr(
         w2k2_download.subprocess, "run", lambda *a, **kw: _FakeCompletedProcess("not json")
@@ -185,7 +185,7 @@ def test_windows_private_subnet_prefixes_returns_empty_on_malformed_output(monke
 def test_candidate_subnet_prefixes_falls_back_to_the_single_guess_when_enumeration_finds_nothing(
     monkeypatch,
 ):
-    import nmea2000processor.w2k2_download as w2k2_download
+    import nmea2log.w2k2_download as w2k2_download
 
     monkeypatch.setattr(w2k2_download, "_windows_private_subnet_prefixes", lambda: [])
     monkeypatch.setattr(w2k2_download, "_local_subnet_prefix", lambda: "10.169.127.")
@@ -259,7 +259,7 @@ def test_local_subnet_prefix_reraises_when_every_fallback_finds_nothing_usable(m
 
 
 def test_discover_w2k2_returns_the_matching_host(monkeypatch):
-    import nmea2000processor.w2k2_download as w2k2_download
+    import nmea2log.w2k2_download as w2k2_download
 
     monkeypatch.setattr(w2k2_download, "_candidate_subnet_prefixes", lambda: ["10.0.0."])
     monkeypatch.setattr(w2k2_download, "_looks_like_w2k2", lambda ip: ip == "10.0.0.42")
@@ -268,7 +268,7 @@ def test_discover_w2k2_returns_the_matching_host(monkeypatch):
 
 
 def test_discover_w2k2_returns_none_when_nothing_on_any_subnet_matches(monkeypatch):
-    import nmea2000processor.w2k2_download as w2k2_download
+    import nmea2log.w2k2_download as w2k2_download
 
     monkeypatch.setattr(w2k2_download, "_candidate_subnet_prefixes", lambda: ["10.0.0."])
     monkeypatch.setattr(w2k2_download, "_looks_like_w2k2", lambda ip: False)
@@ -281,7 +281,7 @@ def test_discover_w2k2_tries_the_next_candidate_subnet_when_the_first_has_nothin
     switch being up alongside the real wifi meant guessing just one "the" local subnet (see
     _local_subnet_prefix()) wasn't reliable -- discover_w2k2() must keep trying every candidate,
     not give up after the first subnet comes up empty."""
-    import nmea2000processor.w2k2_download as w2k2_download
+    import nmea2log.w2k2_download as w2k2_download
 
     monkeypatch.setattr(
         w2k2_download, "_candidate_subnet_prefixes", lambda: ["172.23.192.", "172.16.121."]
@@ -295,7 +295,7 @@ def test_discover_w2k2_with_an_explicit_subnet_prefix_never_tries_others(monkeyp
     """An explicitly given subnet_prefix (used on Android, see this function's own doc comment)
     must be scanned alone -- never combined with _candidate_subnet_prefixes()'s own enumeration,
     which doesn't apply there at all (cellular's own subnet would just be noise)."""
-    import nmea2000processor.w2k2_download as w2k2_download
+    import nmea2log.w2k2_download as w2k2_download
 
     def _fail_if_called():
         raise AssertionError("_candidate_subnet_prefixes() must not be called with an explicit prefix")
@@ -310,7 +310,7 @@ def test_discover_w2k2_with_explicit_subnet_prefix_skips_self_detection(monkeypa
     """Android runs with both a hotspot and a cellular uplink active at once, so self-detecting
     the local subnet (via a UDP-connect to 8.8.8.8) would find the cellular subnet, not the
     hotspot's -- passing subnet_prefix explicitly must skip that self-detection entirely."""
-    import nmea2000processor.w2k2_download as w2k2_download
+    import nmea2log.w2k2_download as w2k2_download
 
     def _fail_if_called():
         raise AssertionError("_local_subnet_prefix() should not be called when subnet_prefix is given")
@@ -325,7 +325,7 @@ def test_main_reports_a_clear_error_when_no_w2k2_is_found_on_the_network(monkeyp
     config_path = tmp_path / "w2k2.ini"
     config_path.write_text("[w2k2]\nuser = skipper\npassword = geheim\n", encoding="utf-8")
 
-    import nmea2000processor.w2k2_download as w2k2_download
+    import nmea2log.w2k2_download as w2k2_download
 
     monkeypatch.setattr(w2k2_download, "discover_w2k2", lambda: None)
 
@@ -344,7 +344,7 @@ def test_main_reports_a_clear_error_when_discovery_has_no_network_route(monkeypa
     config_path = tmp_path / "w2k2.ini"
     config_path.write_text("[w2k2]\nuser = skipper\npassword = geheim\n", encoding="utf-8")
 
-    import nmea2000processor.w2k2_download as w2k2_download
+    import nmea2log.w2k2_download as w2k2_download
 
     def fake_discover_w2k2():
         raise OSError("[WinError 10051] network is unreachable")
@@ -368,7 +368,7 @@ def test_main_reports_a_clear_error_on_timeout_instead_of_a_raw_traceback(monkey
         encoding="utf-8",
     )
 
-    import nmea2000processor.w2k2_download as w2k2_download
+    import nmea2log.w2k2_download as w2k2_download
 
     monkeypatch.setattr(w2k2_download, "discover_w2k2", lambda: "http://10.164.231.101")
 
@@ -395,7 +395,7 @@ def test_main_reports_a_clear_error_on_connection_reset_instead_of_a_raw_traceba
         encoding="utf-8",
     )
 
-    import nmea2000processor.w2k2_download as w2k2_download
+    import nmea2log.w2k2_download as w2k2_download
 
     monkeypatch.setattr(w2k2_download, "discover_w2k2", lambda: "http://10.164.231.101")
 
@@ -416,7 +416,7 @@ def test_download_to_resumes_from_an_existing_partial_file(tmp_path, monkeypatch
     byte 0 meant a multi-megabyte file could never complete at all -- each attempt's own share of
     progress alone was smaller than the whole file. A partial file left by an earlier attempt must
     be resumed via an HTTP Range request, not thrown away."""
-    import nmea2000processor.w2k2_download as w2k2_download
+    import nmea2log.w2k2_download as w2k2_download
 
     target = tmp_path / "file.ebl"
     target.write_bytes(b"a" * 40)  # a previous attempt's own partial progress
@@ -457,7 +457,7 @@ def test_download_to_restarts_from_scratch_when_the_server_ignores_the_range_req
     """A server that doesn't support Range requests at all just returns the whole file again from
     the top (HTTP 200, not 206) -- must be detected and treated as a fresh download, not appended
     after the stale partial (which would silently corrupt the file)."""
-    import nmea2000processor.w2k2_download as w2k2_download
+    import nmea2log.w2k2_download as w2k2_download
 
     target = tmp_path / "file.ebl"
     target.write_bytes(b"a" * 40)
@@ -489,7 +489,7 @@ def test_download_to_restarts_from_scratch_on_a_416_response(tmp_path, monkeypat
     """A partial that no longer aligns with what the server has (e.g. replaced/rotated between
     attempts, or a stale/corrupt local leftover) gets a 416 for its Range request -- discarded and
     retried fresh instead of repeating an identical, permanently-416ing request forever."""
-    import nmea2000processor.w2k2_download as w2k2_download
+    import nmea2log.w2k2_download as w2k2_download
 
     target = tmp_path / "file.ebl"
     target.write_bytes(b"a" * 40)
@@ -534,7 +534,7 @@ def test_download_to_reports_bytes_received_so_far_when_it_times_out(tmp_path, m
     making real progress -- needed to decide whether a shorter timeout (fail faster) or a longer
     one (or resuming instead of restarting from scratch) would actually help. The timeout message
     itself must say how far it actually got, not just that it gave up."""
-    import nmea2000processor.w2k2_download as w2k2_download
+    import nmea2log.w2k2_download as w2k2_download
 
     class _FakeResponse:
         def __enter__(self):
@@ -564,7 +564,7 @@ def test_download_file_retries_and_succeeds_after_a_transient_connection_reset(t
     """A single transient connection reset (see the regression test above) must not give up on
     the file immediately -- retrying a couple of times is what actually recovers from a boat wifi
     hiccup instead of leaving that file (and every one queued after it this run) undownloaded."""
-    import nmea2000processor.w2k2_download as w2k2_download
+    import nmea2log.w2k2_download as w2k2_download
 
     calls = []
 
@@ -592,7 +592,7 @@ def test_download_file_skips_after_exhausting_retries_on_a_connection_error(tmp_
     real, otherwise-fine wifi link to the W2K-2 having one slow/dropped transfer among dozens of
     files is normal, not a sign every other file would fail too) -- now non-fatal, same as a
     persistent 404, left for _needs_download() to pick back up next run."""
-    import nmea2000processor.w2k2_download as w2k2_download
+    import nmea2log.w2k2_download as w2k2_download
 
     calls = []
 
@@ -617,7 +617,7 @@ def test_download_file_skips_after_exhausting_retries_on_a_persistent_timeout(tm
     clock TimeoutError (see _MAX_DOWNLOAD_SECONDS) -- a plain OSError subclass, caught by the same
     branch, and exactly the real-world failure this regression was found from (a slow wifi link to
     the W2K-2 timing out on one file among many queued)."""
-    import nmea2000processor.w2k2_download as w2k2_download
+    import nmea2log.w2k2_download as w2k2_download
 
     class _AlwaysTimesOutSession:
         def download_to(self, path, params, target, expected_size=None, should_cancel=None):
@@ -639,7 +639,7 @@ def test_download_file_retries_a_404_and_succeeds_if_a_later_attempt_works(tmp_p
     simple embedded web server can return a spurious 404 under concurrent load (e.g. Android and
     the desktop CLI both hitting it at once) for a file that's still really there. A 404 must get
     the same retry budget as any other error."""
-    import nmea2000processor.w2k2_download as w2k2_download
+    import nmea2log.w2k2_download as w2k2_download
 
     calls = []
 
@@ -664,7 +664,7 @@ def test_download_file_retries_a_404_and_succeeds_if_a_later_attempt_works(tmp_p
 def test_download_file_skips_after_exhausting_retries_still_404(tmp_path, monkeypatch):
     """Only once a 404 survives the full retry budget is the file treated as genuinely gone --
     skipped (not fatal to the rest of the run), unlike other errors which still raise."""
-    import nmea2000processor.w2k2_download as w2k2_download
+    import nmea2log.w2k2_download as w2k2_download
 
     calls = []
 
@@ -687,7 +687,7 @@ def test_download_file_skips_after_exhausting_retries_still_404(tmp_path, monkey
 def test_download_file_raises_after_exhausting_retries_on_a_non_404_http_error(tmp_path, monkeypatch):
     """Unlike a persistent 404 (skipped, not fatal), a persistent non-404 HTTP error still raises
     and aborts the run, same as before this change."""
-    import nmea2000processor.w2k2_download as w2k2_download
+    import nmea2log.w2k2_download as w2k2_download
 
     class _AlwaysFailsSession:
         def download_to(self, path, params, target, expected_size=None, should_cancel=None):
@@ -709,7 +709,7 @@ def test_download_file_deletes_a_truncated_leftover_before_giving_up_on_repeated
     retried), then attempts 2 and 3 both 404 *inside* the request itself -- before ever reaching
     target.open("wb") again -- so the truncated file from attempt 1 was never touched again, and
     the final "[skip] ... still 404" message wrongly implied nothing local was left behind."""
-    import nmea2000processor.w2k2_download as w2k2_download
+    import nmea2log.w2k2_download as w2k2_download
 
     calls = []
 
@@ -738,7 +738,7 @@ def test_download_file_deletes_a_truncated_leftover_before_skipping_on_repeated_
     """Same cleanup as the 404 case above, but for the connection-error path that now skips
     instead of raising -- a truncated leftover from an earlier attempt must not survive here
     either, or a size-only presence check would wrongly count it as already complete."""
-    import nmea2000processor.w2k2_download as w2k2_download
+    import nmea2log.w2k2_download as w2k2_download
 
     calls = []
 
@@ -765,7 +765,7 @@ def test_download_file_deletes_a_truncated_leftover_before_raising_on_a_non_404_
 ):
     """Same cleanup, but for the path that re-raises instead of skipping (a persistent non-404
     error) -- a truncated leftover from an earlier attempt must not survive here either."""
-    import nmea2000processor.w2k2_download as w2k2_download
+    import nmea2log.w2k2_download as w2k2_download
 
     calls = []
 
@@ -796,7 +796,7 @@ def test_download_file_retries_a_truncated_transfer_and_succeeds_if_a_later_atte
     download that was silently a quarter of the file's real size, previously logged as a plain
     "[ok]" since nothing checked the actual result against info["file_size"]. Must be retried like
     any other failure, not accepted just because no exception was raised."""
-    import nmea2000processor.w2k2_download as w2k2_download
+    import nmea2log.w2k2_download as w2k2_download
 
     calls = []
 
@@ -826,7 +826,7 @@ def test_download_file_accepts_a_transfer_larger_than_the_stale_expected_size(tm
     bytes than info["file_size"] said to expect. An .ebl file only ever grows, never shrinks, so
     this is accepted on the first attempt rather than being endlessly retried and then deleted like
     a genuine (too few bytes) truncation would be."""
-    import nmea2000processor.w2k2_download as w2k2_download
+    import nmea2log.w2k2_download as w2k2_download
 
     calls = []
 
@@ -851,7 +851,7 @@ def test_download_file_deletes_a_still_truncated_file_after_exhausting_retries(t
     -- otherwise it would be silently miscounted as "present" by anything that only checks
     existence (e.g. build_download_plan()'s already-complete-locally folder check), even though
     _needs_download()'s own size check would also have caught it on the next run regardless."""
-    import nmea2000processor.w2k2_download as w2k2_download
+    import nmea2log.w2k2_download as w2k2_download
 
     calls = []
 
@@ -877,7 +877,7 @@ def test_download_file_downloads_a_small_still_growing_file(tmp_path, monkeypatc
     practice, and a file that's genuinely still short gets naturally retried next run anyway by
     download_file()'s own size check (asked for explicitly: an occasional wasted redownload beats
     silently sitting on stale/incomplete data)."""
-    import nmea2000processor.w2k2_download as w2k2_download
+    import nmea2log.w2k2_download as w2k2_download
 
     monkeypatch.setattr(w2k2_download.time, "sleep", lambda s: None)
     calls = []
@@ -911,7 +911,7 @@ def test_build_download_plan_includes_every_file_regardless_of_size_or_position(
     """No file is ever excluded from the plan by size or by being the last file of the last
     folder -- every file the device reports gets downloaded (or skipped only because it's already
     complete locally, see _will_download())."""
-    import nmea2000processor.w2k2_download as w2k2_download
+    import nmea2log.w2k2_download as w2k2_download
 
     folders = [{"name": "EBL000001"}, {"name": "EBL000002"}]
     files = {
@@ -941,7 +941,7 @@ def test_build_download_plan_skips_a_non_last_folder_with_100_local_files(tmp_pa
     with exactly _FILES_PER_FOLDER files -- once we already have that many locally, there's
     nothing left it could need, so its own file-list request (a real HTTP round trip) is skipped
     entirely (asked for explicitly)."""
-    import nmea2000processor.w2k2_download as w2k2_download
+    import nmea2log.w2k2_download as w2k2_download
 
     complete_dir = tmp_path / "EBL000001"
     complete_dir.mkdir()
@@ -970,7 +970,7 @@ def test_build_download_plan_warns_about_a_partial_non_last_folder_but_still_che
     """Fewer than _FILES_PER_FOLDER files locally for a non-last folder is unexpected (asked for
     explicitly) -- but unlike the complete case, we don't know which specific file(s) are missing
     without asking the device, so this folder is still listed and checked normally."""
-    import nmea2000processor.w2k2_download as w2k2_download
+    import nmea2log.w2k2_download as w2k2_download
 
     partial_dir = tmp_path / "EBL000001"
     partial_dir.mkdir()

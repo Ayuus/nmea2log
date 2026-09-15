@@ -6,7 +6,7 @@
  * *which* boat's logbook to show from who's actually logged in, so one shared page serves every
  * boat on the site.
  *
- * The generated logbook.html itself is uploaded (via the nmea2000processor --upload feature) to
+ * The generated logbook.html itself is uploaded (via the nmea2log --upload feature) to
  * nmea2log_logbook_path() (see nmea2log-remarks.php) -- outside the web-served www/ directory, so
  * its URL alone is never enough to read it. This script bootstraps WordPress just far enough to
  * check the visitor's login state and view permission (nmea2log_can_view(), defined by the nmea2log-

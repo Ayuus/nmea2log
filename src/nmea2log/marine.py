@@ -1,12 +1,13 @@
-"""Look up historical hourly wind/precipitation/cloud cover for GPS positions via Open-Meteo's
-free historical weather API (https://open-meteo.com/en/docs/historical-weather-api). Uses only the
-Python standard library (urllib), no extra dependency. Results are cached locally, keyed on date +
-rounded position -- unlike port names, the underlying data is a fixed historical reanalysis for a
-past date, so once fetched a cache entry never goes stale and never needs re-checking.
+"""Look up historical hourly wave/ocean-current data for GPS positions via Open-Meteo's free
+marine weather API (https://open-meteo.com/en/docs/marine-weather-api) -- a separate host/dataset
+from the general historical weather archive used by weather.py. Uses only the Python standard
+library (urllib), no extra dependency. Results are cached locally, keyed on date + rounded
+position -- unlike port names, the underlying data is a fixed historical reanalysis for a past
+date, so once fetched a cache entry never goes stale and never needs re-checking.
 
-Not a measurement from the boat itself: this is regional weather-model data for the nearest grid
-cell to the given position (found in practice: a request for 46.4968,-1.7899 came back for
-46.502636,-1.733551, several km away) -- indicative of the conditions, not what an instrument on
+Not a measurement from the boat itself: this is regional wave/current-model data for the nearest
+sea grid cell to the given position (same grid-snapping behaviour as weather.py's archive API,
+confirmed against a real request) -- indicative of the conditions, not what an instrument on
 board would have recorded.
 """
 
@@ -26,36 +27,36 @@ from typing import Dict, Optional
 from ._net import urlopen_ipv4_first
 from .log import log
 
-_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
+_ARCHIVE_URL = "https://marine-api.open-meteo.com/v1/marine"
 _MAX_RETRIES = 5
-_HOURLY_FIELDS = "wind_speed_10m,wind_direction_10m,precipitation,cloud_cover"
-# Open-Meteo has no documented per-second limit like Nominatim's, but requests fired back-to-back
-# (one per day/position, no gap) were found in practice to get reset by the server about a third
-# of the time (WinError 10054 / connection reset) -- spacing them out the same way Geocoder does
-# for Nominatim clears that up.
+_HOURLY_FIELDS = "wave_height,wave_direction,wave_period,ocean_current_velocity,ocean_current_direction"
+_KMH_PER_KN = 1.852
+# Same throttle weather.py needed after being found, in practice, to get connection-reset by
+# Open-Meteo about a third of the time when requests were fired back-to-back with no gap.
 _MIN_INTERVAL_S = 1.0
 
 
 @dataclass(frozen=True)
-class HourlyWeather:
-    wind_kn: Optional[float]
-    wind_deg: Optional[float]
-    precip_mm: Optional[float]
-    cloud_pct: Optional[float]
+class HourlyMarine:
+    wave_height_m: Optional[float]
+    wave_direction_deg: Optional[float]
+    wave_period_s: Optional[float]
+    current_kn: Optional[float]
+    current_direction_deg: Optional[float]
 
 
 def _day_key(lat: float, lon: float, day: date) -> str:
-    # Rounded to 2 decimals (~1 km) -- finer than the weather model's own grid resolution, so this
-    # only ever creates a new cache entry for a position that could plausibly get different data.
+    # Rounded to 2 decimals (~1 km) -- finer than the model's own grid resolution, so this only
+    # ever creates a new cache entry for a position that could plausibly get different data.
     return f"{day.isoformat()}:{round(lat, 2)},{round(lon, 2)}"
 
 
-class WeatherFetcher:
+class MarineFetcher:
     def __init__(
         self,
         *,
         cache_file: Optional[Path] = None,
-        user_agent: str = "nmea2000processor/0.1 (personal sailing logbook)",
+        user_agent: str = "nmea2log/0.1 (personal sailing logbook)",
     ) -> None:
         self.cache_file = cache_file
         self.user_agent = user_agent
@@ -64,7 +65,7 @@ class WeatherFetcher:
         if cache_file is not None and cache_file.exists():
             self._cache = json.loads(cache_file.read_text(encoding="utf-8"))
 
-    def hour(self, lat: float, lon: float, when: datetime) -> Optional[HourlyWeather]:
+    def hour(self, lat: float, lon: float, when: datetime) -> Optional[HourlyMarine]:
         """The closest available hourly reading to ``when`` (a UTC datetime), or None if the
         day's data could never be fetched (a transient failure -- not cached, see _fetch_day)."""
         day_data = self._day(lat, lon, when.date())
@@ -74,11 +75,12 @@ class WeatherFetcher:
         values = day_data.get(hour_key)
         if values is None:
             return None
-        return HourlyWeather(
-            wind_kn=values.get("wind_kn"),
-            wind_deg=values.get("wind_deg"),
-            precip_mm=values.get("precip_mm"),
-            cloud_pct=values.get("cloud_pct"),
+        return HourlyMarine(
+            wave_height_m=values.get("wave_height_m"),
+            wave_direction_deg=values.get("wave_direction_deg"),
+            wave_period_s=values.get("wave_period_s"),
+            current_kn=values.get("current_kn"),
+            current_direction_deg=values.get("current_direction_deg"),
         )
 
     def _day(self, lat: float, lon: float, day: date) -> Optional[Dict[str, Dict[str, Optional[float]]]]:
@@ -88,7 +90,7 @@ class WeatherFetcher:
         result = self._fetch_day(lat, lon, day)
         # A confirmed empty/malformed response is still worth caching (Open-Meteo has no data for
         # some very recent dates yet) -- only a genuine request failure is left uncached, the same
-        # reasoning as Geocoder._lookup: an offline run must not permanently poison this date.
+        # reasoning as weather.py/geocode.py: an offline run must not permanently poison this date.
         if result is not None:
             self._cache[key] = result
             self._save_cache()
@@ -102,7 +104,6 @@ class WeatherFetcher:
                 "start_date": day.isoformat(),
                 "end_date": day.isoformat(),
                 "hourly": _HOURLY_FIELDS,
-                "wind_speed_unit": "kn",
             }
         )
         request = urllib.request.Request(
@@ -123,25 +124,36 @@ class WeatherFetcher:
             except (urllib.error.URLError, OSError, ValueError) as exc:
                 self._last_request = time.monotonic()
                 log(
-                    f"[weather] Open-Meteo request failed ({exc}) "
+                    f"[marine] Open-Meteo request failed ({exc}) "
                     f"-- attempt {attempt + 1}/{_MAX_RETRIES + 1}",
                     file=sys.stderr,
                 )
         if payload is None:
-            return None  # best-effort: caller shows no weather for this day rather than crashing
+            return None  # best-effort: caller shows no marine data for this day rather than crashing
 
         hourly = payload.get("hourly", {})
         times = hourly.get("time", [])
-        wind_kn = hourly.get("wind_speed_10m", [])
-        wind_deg = hourly.get("wind_direction_10m", [])
-        precip_mm = hourly.get("precipitation", [])
-        cloud_pct = hourly.get("cloud_cover", [])
+        wave_height_m = hourly.get("wave_height", [])
+        wave_direction_deg = hourly.get("wave_direction", [])
+        wave_period_s = hourly.get("wave_period", [])
+        current_kmh = hourly.get("ocean_current_velocity", [])
+        current_direction_deg = hourly.get("ocean_current_direction", [])
         return {
             t: {
-                "wind_kn": wind_kn[i] if i < len(wind_kn) else None,
-                "wind_deg": wind_deg[i] if i < len(wind_deg) else None,
-                "precip_mm": precip_mm[i] if i < len(precip_mm) else None,
-                "cloud_pct": cloud_pct[i] if i < len(cloud_pct) else None,
+                "wave_height_m": wave_height_m[i] if i < len(wave_height_m) else None,
+                "wave_direction_deg": wave_direction_deg[i] if i < len(wave_direction_deg) else None,
+                "wave_period_s": wave_period_s[i] if i < len(wave_period_s) else None,
+                # No server-side knots conversion for ocean current velocity (unlike wind's
+                # wind_speed_unit=kn, confirmed by a real request -- current_velocity_unit=kn is
+                # silently ignored and km/h still comes back), so converted here instead.
+                "current_kn": (
+                    current_kmh[i] / _KMH_PER_KN
+                    if i < len(current_kmh) and current_kmh[i] is not None
+                    else None
+                ),
+                "current_direction_deg": (
+                    current_direction_deg[i] if i < len(current_direction_deg) else None
+                ),
             }
             for i, t in enumerate(times)
         }
@@ -154,8 +166,8 @@ class WeatherFetcher:
         )
 
 
-class NoWeather:
-    """Skips the online weather lookup -- no weather columns shown."""
+class NoMarine:
+    """Skips the online wave/current lookup -- no marine columns shown."""
 
-    def hour(self, lat: float, lon: float, when: datetime) -> Optional[HourlyWeather]:
+    def hour(self, lat: float, lon: float, when: datetime) -> Optional[HourlyMarine]:
         return None

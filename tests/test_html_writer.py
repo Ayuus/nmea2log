@@ -3,11 +3,11 @@ import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from nmea2000processor.html_writer import write_html_logbook
-from nmea2000processor.model import PositionFix
-from nmea2000processor.tripbuilder import BatteryHealth, EngineHealth, NavSample, TripLeg
-from nmea2000processor.marine import HourlyMarine
-from nmea2000processor.weather import HourlyWeather
+from nmea2log.html_writer import write_html_logbook
+from nmea2log.model import PositionFix
+from nmea2log.tripbuilder import BatteryHealth, EngineHealth, NavSample, TripLeg
+from nmea2log.marine import HourlyMarine
+from nmea2log.weather import HourlyWeather
 
 
 class _StubGeocoder:

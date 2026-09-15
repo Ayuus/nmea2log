@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from nmea2000processor.upload import UploadError, _local_to_sftp_path, upload_file, upload_via_rest
+from nmea2log.upload import UploadError, _local_to_sftp_path, upload_file, upload_via_rest
 
 
 class _FakeCompletedProcess:

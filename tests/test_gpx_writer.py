@@ -2,8 +2,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-from nmea2000processor.gpx_writer import write_gpx
-from nmea2000processor.tripbuilder import EngineHealth, NavSample, TripLeg
+from nmea2log.gpx_writer import write_gpx
+from nmea2log.tripbuilder import EngineHealth, NavSample, TripLeg
 
 _NS = {"gpx": "http://www.topografix.com/GPX/1/1"}
 

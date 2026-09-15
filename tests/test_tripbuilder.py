@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from nmea2000processor.model import (
+from nmea2log.model import (
     AttitudeSample,
     BatterySample,
     DepthSample,
@@ -13,8 +13,8 @@ from nmea2000processor.model import (
     TripFuelSample,
     WaterTempSample,
 )
-from nmea2000processor.fix_array import FixArray
-from nmea2000processor.tripbuilder import _reject_gps_outliers, _reject_gps_outliers_array, build_trips
+from nmea2log.fix_array import FixArray
+from nmea2log.tripbuilder import _reject_gps_outliers, _reject_gps_outliers_array, build_trips
 
 
 class _StubGeocoder:

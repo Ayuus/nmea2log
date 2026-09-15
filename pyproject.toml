@@ -1,5 +1,5 @@
 [project]
-name = "nmea2000processor"
+name = "nmea2log"
 version = "0.1.0"
 description = "Turns Actisense W2K-2 NMEA2000 log files into a sailing logbook: ports, fuel consumption (engine data) and engine hours."
 readme = "README.md"
@@ -10,8 +10,8 @@ dependencies = []
 test = ["pytest"]
 
 [project.scripts]
-nmea2log = "nmea2000processor.cli:main"
-nmea2log-download = "nmea2000processor.w2k2_download:main"
+nmea2log = "nmea2log.cli:main"
+nmea2log-download = "nmea2log.w2k2_download:main"
 
 [build-system]
 requires = ["setuptools>=61"]

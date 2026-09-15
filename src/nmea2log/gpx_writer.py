@@ -75,7 +75,7 @@ def write_gpx(
     utc_offset_hours: Optional[float] = None,
     battery_warning_voltage: Optional[float] = None,
 ) -> None:
-    gpx = Element("gpx", version="1.1", creator="nmea2000processor", xmlns=_GPX_NAMESPACE)
+    gpx = Element("gpx", version="1.1", creator="nmea2log", xmlns=_GPX_NAMESPACE)
     for trip in trips:
         if not trip.track:
             continue

@@ -1,7 +1,7 @@
 from datetime import datetime
 
-from nmea2000processor.fix_array import FixArray, SogArray
-from nmea2000processor.model import PositionFix, SogSample
+from nmea2log.fix_array import FixArray, SogArray
+from nmea2log.model import PositionFix, SogSample
 
 
 def test_fix_array_round_trips_fixes_preserving_order():

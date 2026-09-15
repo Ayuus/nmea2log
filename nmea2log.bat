@@ -14,7 +14,7 @@ if exist "%~dp0nmea2log-local.bat" call "%~dp0nmea2log-local.bat"
 
 if "%~1"=="" (
     set "OUTPUT=%~dp0logbook.csv"
-    py -m nmea2000processor.w2k2_download
+    py -m nmea2log.w2k2_download
     if errorlevel 1 (
         echo.
         echo Download failed or the boat wasn't reachable -- continuing with whatever is
@@ -24,7 +24,7 @@ if "%~1"=="" (
     set "OUTPUT=%~dp1logbook.csv"
 )
 
-py -m nmea2000processor %* -o "%OUTPUT%"
+py -m nmea2log %* -o "%OUTPUT%"
 if errorlevel 1 (
     echo.
     echo Something went wrong -- see the message above.

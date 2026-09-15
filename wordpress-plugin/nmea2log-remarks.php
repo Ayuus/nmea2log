@@ -3,7 +3,7 @@
  * Plugin Name: nmea2log Remarks
  * Description: Stores per-trip remarks for the nmea2log HTML logbook, and (since 1.4.0) receives
  * the logbook itself, over the REST API. Previously the logbook was uploaded separately via SFTP
- * (see the nmea2000processor Python tool's upload.py) -- moved here so publishing reuses the same
+ * (see the nmea2log Python tool's upload.py) -- moved here so publishing reuses the same
  * WordPress role/Application Password this plugin already needs for remarks, instead of a
  * separate SSH key living on every machine that syncs. This plugin still supplies no page/
  * template of its own -- the logbook stays a static HTML file, just written here now rather than

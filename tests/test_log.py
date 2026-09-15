@@ -3,8 +3,8 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from nmea2000processor import log as log_module
-from nmea2000processor.log import log, set_log_file, set_log_level
+from nmea2log import log as log_module
+from nmea2log.log import log, set_log_file, set_log_level
 
 
 def test_log_prints_a_timestamped_line_to_the_given_stream():

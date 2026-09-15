@@ -1,11 +1,11 @@
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from nmea2000processor import android_entry
-from nmea2000processor.geocode import NoGeocoder
-from nmea2000processor.marine import NoMarine
-from nmea2000processor.model import PositionFix, SogSample
-from nmea2000processor.weather import NoWeather
+from nmea2log import android_entry
+from nmea2log.geocode import NoGeocoder
+from nmea2log.marine import NoMarine
+from nmea2log.model import PositionFix, SogSample
+from nmea2log.weather import NoWeather
 
 
 def _write_fake_ebl(tmp_path: Path, name: str = "000000_000.ebl") -> Path:
@@ -325,8 +325,8 @@ def test_build_from_local_files_forwards_log_lines_to_the_callback(tmp_path, mon
     message instead of the same "...decoded X/Y" progress a normal sync already shows -- whatever
     run_pipeline() logs while this is wired up must reach the callback, and the sink must not be
     left forwarding forever afterward."""
-    from nmea2000processor.log import log
-    import nmea2000processor.log as log_module
+    from nmea2log.log import log
+    import nmea2log.log as log_module
 
     def fake_run_pipeline(**kwargs):
         log("[info] ...decoded 1/1 logfile(s) so far")
@@ -371,7 +371,7 @@ def test_sync_from_w2k2_forwards_log_lines_to_the_callback(tmp_path, monkeypatch
     """onLogLine() should receive the exact same messages the desktop CLI prints (asked for
     explicitly, so the Android app doesn't need a separately-maintained set of status text) -- and
     the sink must be cleared afterward so it doesn't keep forwarding into a finished call."""
-    import nmea2000processor.log as log_module
+    import nmea2log.log as log_module
 
     monkeypatch.setattr(android_entry.w2k2_download, "discover_w2k2", lambda subnet_prefix: "http://10.0.0.5")
 

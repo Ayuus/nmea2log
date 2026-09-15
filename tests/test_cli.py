@@ -5,7 +5,7 @@ import os
 
 import pytest
 
-from nmea2000processor.cli import (
+from nmea2log.cli import (
     _acquire_lock,
     _AlreadyRunningError,
     _discover_ebl_files,
@@ -17,7 +17,7 @@ from nmea2000processor.cli import (
     build_arg_parser,
     main,
 )
-from nmea2000processor.model import EngineSample, PositionFix, SogSample, TripFuelSample
+from nmea2log.model import EngineSample, PositionFix, SogSample, TripFuelSample
 
 
 def test_dominant_source_only_picks_largest_group():
@@ -332,10 +332,10 @@ def _stub_one_trip_samples(monkeypatch):
 
     fixed_samples = ({10: fixes}, {10: sogs}, [], [], {}, {}, {}, [], {})
     monkeypatch.setattr(
-        "nmea2000processor.cli._collect_samples", lambda frames: fixed_samples
+        "nmea2log.cli._collect_samples", lambda frames: fixed_samples
     )
     monkeypatch.setattr(
-        "nmea2000processor.cli._iter_frames_for_path", lambda path, state: iter([])
+        "nmea2log.cli._iter_frames_for_path", lambda path, state: iter([])
     )
 
 
@@ -350,11 +350,11 @@ def test_main_prefers_rest_upload_over_sftp_when_both_are_configured(tmp_path, m
     rest_calls = []
     sftp_calls = []
     monkeypatch.setattr(
-        "nmea2000processor.cli.upload_via_rest",
+        "nmea2log.cli.upload_via_rest",
         lambda html_content, **kw: rest_calls.append((html_content, kw)),
     )
     monkeypatch.setattr(
-        "nmea2000processor.cli.upload_file", lambda local_path, **kw: sftp_calls.append((local_path, kw))
+        "nmea2log.cli.upload_file", lambda local_path, **kw: sftp_calls.append((local_path, kw))
     )
 
     exit_code = main(
@@ -397,9 +397,9 @@ def test_main_reuses_cached_samples_on_a_second_run(tmp_path, monkeypatch, capsy
         call_count += 1
         return fixed_samples
 
-    monkeypatch.setattr("nmea2000processor.cli._collect_samples", fake_collect_samples)
+    monkeypatch.setattr("nmea2log.cli._collect_samples", fake_collect_samples)
     monkeypatch.setattr(
-        "nmea2000processor.cli._iter_frames_for_path", lambda path, state: iter([])
+        "nmea2log.cli._iter_frames_for_path", lambda path, state: iter([])
     )
 
     cache_file = tmp_path / "cache.pkl"
@@ -453,10 +453,10 @@ def _run_with_one_trip(tmp_path: Path, monkeypatch, extra_args=()):
         {},
     )
     monkeypatch.setattr(
-        "nmea2000processor.cli._collect_samples", lambda frames: fixed_samples
+        "nmea2log.cli._collect_samples", lambda frames: fixed_samples
     )
     monkeypatch.setattr(
-        "nmea2000processor.cli._iter_frames_for_path", lambda path, state: iter([])
+        "nmea2log.cli._iter_frames_for_path", lambda path, state: iter([])
     )
     output = tmp_path / "logbook.csv"
     main([str(ebl_path), "-o", str(output), "--no-geocode", "--no-sample-cache", *extra_args])
@@ -495,7 +495,7 @@ def test_acquire_lock_raises_when_another_process_still_holds_it(tmp_path: Path,
     output directory race on the shared sample cache and HTML output -- found in practice, a
     re-launched run while the first was still working silently produced a live logbook with only
     1 of 15 real trips instead of a clear error."""
-    import nmea2000processor.cli as cli
+    import nmea2log.cli as cli
 
     lock_path = tmp_path / ".nmea2log.lock"
     lock_path.write_text("4242", encoding="utf-8")
@@ -512,7 +512,7 @@ def test_acquire_lock_takes_over_a_stale_lock(tmp_path: Path, monkeypatch):
     """A lock file left behind by a run that crashed or was killed without cleaning up must not
     permanently block every future run -- its PID no longer being alive is what tells the
     difference from a run that's still genuinely in progress."""
-    import nmea2000processor.cli as cli
+    import nmea2log.cli as cli
 
     lock_path = tmp_path / ".nmea2log.lock"
     lock_path.write_text("4242", encoding="utf-8")
@@ -551,7 +551,7 @@ def test_release_lock_is_a_noop_if_the_file_is_already_gone(tmp_path: Path):
 
 
 def test_main_refuses_to_run_while_another_instance_holds_the_lock(tmp_path: Path, monkeypatch, capsys):
-    import nmea2000processor.cli as cli
+    import nmea2log.cli as cli
 
     ebl_path = tmp_path / "000000_000.ebl"
     ebl_path.write_bytes(b"x" * 100)
@@ -637,8 +637,8 @@ def _stub_samples_by_path(monkeypatch, paths, samples_by_name, call_log):
         call_log.append(name)
         return samples_by_name[name]
 
-    monkeypatch.setattr("nmea2000processor.cli._iter_frames_for_path", fake_iter_frames_for_path)
-    monkeypatch.setattr("nmea2000processor.cli._collect_samples", fake_collect_samples)
+    monkeypatch.setattr("nmea2log.cli._iter_frames_for_path", fake_iter_frames_for_path)
+    monkeypatch.setattr("nmea2log.cli._collect_samples", fake_collect_samples)
 
 
 def test_main_trip_cache_skips_decoding_already_settled_files_on_a_later_run(tmp_path, monkeypatch, capsys):
@@ -861,7 +861,7 @@ def test_main_trip_cache_is_invalidated_by_a_trip_logic_version_bump(tmp_path, m
     call_log.clear()
     capsys.readouterr()
 
-    monkeypatch.setattr("nmea2000processor.cli.TRIP_LOGIC_VERSION", -1)
+    monkeypatch.setattr("nmea2log.cli.TRIP_LOGIC_VERSION", -1)
     exit_code = main(
         [str(p) for p in run1_files]
         + ["-o", str(tmp_path / "logbook.csv"), "--no-geocode", "--no-weather", "--no-marine",

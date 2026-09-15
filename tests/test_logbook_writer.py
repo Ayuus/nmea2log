@@ -2,8 +2,8 @@ import csv
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from nmea2000processor.logbook_writer import _is_eu_dst, write_csv
-from nmea2000processor.tripbuilder import BatteryHealth, EngineHealth, NavSample, TripLeg
+from nmea2log.logbook_writer import _is_eu_dst, write_csv
+from nmea2log.tripbuilder import BatteryHealth, EngineHealth, NavSample, TripLeg
 
 
 def _trip(**overrides) -> TripLeg:

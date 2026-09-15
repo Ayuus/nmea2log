@@ -3,7 +3,7 @@ import json
 import urllib.error
 import urllib.request
 
-from nmea2000processor.geocode import Geocoder, NoGeocoder
+from nmea2log.geocode import Geocoder, NoGeocoder
 
 
 class _FakeResponse:
@@ -211,7 +211,7 @@ def test_failed_lookup_is_not_cached(monkeypatch, tmp_path):
         raise urllib.error.URLError("getaddrinfo failed")
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-    monkeypatch.setattr("nmea2000processor.geocode.time.sleep", lambda s: None)
+    monkeypatch.setattr("nmea2log.geocode.time.sleep", lambda s: None)
     cache_file = tmp_path / "cache.json"
     geocoder = Geocoder(cache_file=cache_file)
 
@@ -238,7 +238,7 @@ def test_remote_disconnected_is_treated_as_a_failed_lookup_not_a_crash(monkeypat
         raise http.client.RemoteDisconnected("Remote end closed connection without response")
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-    monkeypatch.setattr("nmea2000processor.geocode.time.sleep", lambda s: None)
+    monkeypatch.setattr("nmea2log.geocode.time.sleep", lambda s: None)
     geocoder = Geocoder(cache_file=tmp_path / "cache.json")
 
     name = geocoder.place_name(47.4889, -3.1012)
@@ -264,7 +264,7 @@ def test_place_name_retries_the_nominatim_lookup_after_a_transient_failure(monke
         return _FakeResponse({"address": {"village": "Arzal"}})
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-    monkeypatch.setattr("nmea2000processor.geocode.time.sleep", lambda s: None)
+    monkeypatch.setattr("nmea2log.geocode.time.sleep", lambda s: None)
     geocoder = Geocoder(cache_file=tmp_path / "cache.json")
 
     assert geocoder.place_name(47.5027, -2.3857) == "Arzal"
@@ -280,7 +280,7 @@ def test_successful_lookup_is_cached_and_not_looked_up_again(monkeypatch, tmp_pa
         return _FakeResponse({"address": {"village": "Loctudy"}})
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-    monkeypatch.setattr("nmea2000processor.geocode.time.sleep", lambda s: None)
+    monkeypatch.setattr("nmea2log.geocode.time.sleep", lambda s: None)
     cache_file = tmp_path / "cache.json"
     geocoder = Geocoder(cache_file=cache_file)
 
@@ -441,7 +441,7 @@ def test_place_name_retries_when_overpass_times_out_server_side(monkeypatch, tmp
         return _FakeResponse({"address": {"village": "Kerners"}})
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-    monkeypatch.setattr("nmea2000processor.geocode.time.sleep", lambda s: None)
+    monkeypatch.setattr("nmea2log.geocode.time.sleep", lambda s: None)
     geocoder = Geocoder(cache_file=tmp_path / "cache.json")
 
     assert geocoder.place_name(47.5706676, -2.8852789) == "op het water, bij Île de la Jument"
@@ -504,7 +504,7 @@ def test_place_name_ignores_a_failed_landmark_check(monkeypatch, tmp_path):
         return _FakeResponse({"address": {"village": "Kerners"}})
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-    monkeypatch.setattr("nmea2000processor.geocode.time.sleep", lambda s: None)
+    monkeypatch.setattr("nmea2log.geocode.time.sleep", lambda s: None)
     geocoder = Geocoder(cache_file=tmp_path / "cache.json")
 
     assert geocoder.place_name(47.5707, -2.8853) == "Kerners"
@@ -521,7 +521,7 @@ def test_place_name_ignores_a_remote_disconnected_landmark_check(monkeypatch, tm
         return _FakeResponse({"address": {"village": "Kerners"}})
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-    monkeypatch.setattr("nmea2000processor.geocode.time.sleep", lambda s: None)
+    monkeypatch.setattr("nmea2log.geocode.time.sleep", lambda s: None)
     geocoder = Geocoder(cache_file=tmp_path / "cache.json")
 
     assert geocoder.place_name(47.5707, -2.8853) == "Kerners"
@@ -553,7 +553,7 @@ def test_place_name_retries_the_landmark_check_after_a_transient_failure(monkeyp
         return _FakeResponse({"address": {"village": "Kerners"}})
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-    monkeypatch.setattr("nmea2000processor.geocode.time.sleep", lambda s: None)
+    monkeypatch.setattr("nmea2log.geocode.time.sleep", lambda s: None)
     geocoder = Geocoder(cache_file=tmp_path / "cache.json")
 
     assert geocoder.place_name(47.5706676, -2.8852789) == "op het water, bij Île de la Jument"
@@ -571,7 +571,7 @@ def test_landmark_check_retries_twice_before_giving_up(monkeypatch, tmp_path):
         return _FakeResponse({"address": {"village": "Kerners"}})
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-    monkeypatch.setattr("nmea2000processor.geocode.time.sleep", lambda s: None)
+    monkeypatch.setattr("nmea2log.geocode.time.sleep", lambda s: None)
     geocoder = Geocoder(cache_file=tmp_path / "cache.json")
 
     geocoder.place_name(47.5707, -2.8853)
@@ -586,7 +586,7 @@ def test_landmark_check_logs_each_failed_attempt(monkeypatch, tmp_path, capsys):
         return _FakeResponse({"address": {"village": "Kerners"}})
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-    monkeypatch.setattr("nmea2000processor.geocode.time.sleep", lambda s: None)
+    monkeypatch.setattr("nmea2log.geocode.time.sleep", lambda s: None)
     geocoder = Geocoder(cache_file=tmp_path / "cache.json")
 
     geocoder.place_name(47.5707, -2.8853)
@@ -607,7 +607,7 @@ def test_result_is_not_cached_when_the_landmark_check_fails_entirely(monkeypatch
         return _FakeResponse({"address": {"village": "Kerners"}})
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-    monkeypatch.setattr("nmea2000processor.geocode.time.sleep", lambda s: None)
+    monkeypatch.setattr("nmea2log.geocode.time.sleep", lambda s: None)
     cache_file = tmp_path / "cache.json"
     geocoder = Geocoder(cache_file=cache_file)
 

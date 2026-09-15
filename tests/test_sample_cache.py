@@ -3,8 +3,8 @@ import zlib
 from datetime import datetime
 from pathlib import Path
 
-from nmea2000processor.model import AttitudeSample, EngineSample, PositionFix
-from nmea2000processor.sample_cache import (
+from nmea2log.model import AttitudeSample, EngineSample, PositionFix
+from nmea2log.sample_cache import (
     CACHE_FORMAT_VERSION,
     SampleCache,
     _decode_samples,

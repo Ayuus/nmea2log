@@ -4,7 +4,7 @@ from datetime import date, datetime, timedelta
 
 import pytest
 
-from nmea2000processor.pgn_decode import (
+from nmea2log.pgn_decode import (
     decode_battery_status,
     decode_cog,
     decode_engine_dynamic,

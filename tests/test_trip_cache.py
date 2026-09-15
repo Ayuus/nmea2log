@@ -1,7 +1,7 @@
 from datetime import datetime
 from pathlib import Path
 
-from nmea2000processor.trip_cache import (
+from nmea2log.trip_cache import (
     TripCache,
     choose_resume_index,
     config_signature,

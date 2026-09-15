@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 
-from nmea2000processor.trip_ids import assign_trip_ids
-from nmea2000processor.tripbuilder import NavSample, TripLeg
+from nmea2log.trip_ids import assign_trip_ids
+from nmea2log.tripbuilder import NavSample, TripLeg
 
 
 def _trip(**overrides) -> TripLeg:
