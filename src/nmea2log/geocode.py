@@ -452,16 +452,25 @@ def _pick_place_name(payload: dict, lat: float, lon: float) -> str:
     return f"Onbekend ({lat:.4f}, {lon:.4f})"
 
 
+# Module-level (not just local to _with_distance_prefix) so html_writer.py can import the exact
+# same literals to split a formatted place name back apart into (name, prefix_kind) for the HTML
+# logbook's own language switcher (see html_writer.py's _split_place_prefix()) -- these strings
+# have to stay in lockstep with each other by construction, not by two call sites happening to
+# agree on the same text.
+PREFIX_MOORING = "aan de kant, bij"
+PREFIX_WATER = "op het water, bij"
+
+
 def _with_distance_prefix(name: str, distance_m: float, is_mooring_type: bool) -> str:
-    """Prefixes name with "aan de kant, bij" (alongside, near) or "op het water, bij" (on the
-    water, near) when distance_m is more than ``_NEARBY_THRESHOLD_M`` -- otherwise the name reads
-    as if we were right there, e.g. showing a village name for a position that was really
-    anchored ~250 m offshore of it. is_mooring_type picks which of the two prefixes: alongside
-    for somewhere a boat actually ties up (a marina, a lock waiting alongside it, ...), on the
-    water for everything else (open water, an islet you'd anchor off rather than on, ...)."""
+    """Prefixes name with PREFIX_MOORING (alongside, near) or PREFIX_WATER (on the water, near)
+    when distance_m is more than ``_NEARBY_THRESHOLD_M`` -- otherwise the name reads as if we were
+    right there, e.g. showing a village name for a position that was really anchored ~250 m
+    offshore of it. is_mooring_type picks which of the two prefixes: alongside for somewhere a
+    boat actually ties up (a marina, a lock waiting alongside it, ...), on the water for
+    everything else (open water, an islet you'd anchor off rather than on, ...)."""
     if distance_m <= _NEARBY_THRESHOLD_M:
         return name
-    prefix = "aan de kant, bij" if is_mooring_type else "op het water, bij"
+    prefix = PREFIX_MOORING if is_mooring_type else PREFIX_WATER
     return f"{prefix} {name}"
 
 

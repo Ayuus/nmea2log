@@ -44,7 +44,7 @@ from .logbook_writer import (
 )
 from .translations import LANGUAGE_FLAGS, LANGUAGES, MONTH_ABBR, MONTH_ABBR_NL, NL as T
 from .tripbuilder import NavSample, TripLeg
-from .geocode import NoGeocoder
+from .geocode import PREFIX_MOORING, PREFIX_WATER, NoGeocoder
 from .marine import NoMarine
 from .model import PositionFix
 from .weather import NoWeather
@@ -148,6 +148,32 @@ def _i18n_tpl_html(key: str, **args: object) -> str:
         f'<span data-i18n-tpl="{escape(key)}" data-i18n-args="{escape(args_json, {chr(34): "&quot;"})}">'
         f"{escape(text)}</span>"
     )
+
+
+def _split_place_prefix(place: str) -> Tuple[str, Optional[str]]:
+    """Splits a place name back apart into (name, prefix_kind) if geocode.py prefixed it with
+    PREFIX_MOORING/PREFIX_WATER, else returns (place, None) unchanged. geocode.py bakes that
+    prefix directly into the returned string (it has no reason of its own to keep the two apart --
+    CSV/GPX output, which has no language switcher, is happy with the fixed Dutch phrase as-is),
+    so this is the one place that ever needs to pull them apart again, for _place_html() below."""
+    if place.startswith(PREFIX_MOORING + " "):
+        return place[len(PREFIX_MOORING) + 1 :], "mooring"
+    if place.startswith(PREFIX_WATER + " "):
+        return place[len(PREFIX_WATER) + 1 :], "water"
+    return place, None
+
+
+def _place_html(place: str) -> str:
+    """Escaped HTML for a place name, translatable even when geocode.py prefixed it with "aan de
+    kant, bij"/"op het water, bij" (asked for explicitly: that prefix used to stay Dutch regardless
+    of the page's own language switcher, since geocode.py bakes it into the name at generation
+    time, well before there's a language switcher to speak of). The place name itself is never
+    translated (see translations.py's own module docstring) -- only the surrounding phrase, via the
+    same data-i18n-tpl mechanism every other translatable sentence on this page already uses."""
+    name, prefix_kind = _split_place_prefix(place)
+    if prefix_kind is None:
+        return escape(place)
+    return _i18n_tpl_html(f"place_prefix_{prefix_kind}", name=name)
 
 
 def _localized_date(d: date) -> str:
@@ -445,8 +471,15 @@ def _max_speed_marker(trip: TripLeg, offset_hours: float) -> Optional[dict]:
 def _trip_title(trip: TripLeg, depart_local: datetime) -> str:
     """Shared with the map popup's own title (see _trip_row_html) -- the Details popup needs the
     same "which trip is this" context, since unlike the always-visible table row it replaces a
-    cell of, a popup can be scrolled away from the row that opened it."""
-    return f"{depart_local:%Y-%m-%d %H:%M} {trip.depart_place} -> {trip.arrive_place}"
+    cell of, a popup can be scrolled away from the row that opened it.
+
+    Returns HTML, not plain text (like _week_label()) -- depart_place/arrive_place each go through
+    _place_html(), so a distance-prefixed place name stays translatable here too; the caller must
+    not escape() this like a plain string."""
+    return (
+        f"{depart_local:%Y-%m-%d %H:%M} {_place_html(trip.depart_place)} "
+        f"-&gt; {_place_html(trip.arrive_place)}"
+    )
 
 
 def _details_row_html(icon: str, label_key: str, value: str) -> str:
@@ -579,7 +612,7 @@ def _details_cell_html(
     if not sections:
         return ""
     depart_local = _to_local(trip.depart_time, offset_hours)
-    title = f'<div class="trip-map-title">{escape(_trip_title(trip, depart_local))}</div>'
+    title = f'<div class="trip-map-title">{_trip_title(trip, depart_local)}</div>'
     dialog = (
         f'<dialog class="log-dialog" id="log-{idx}">{title}{"".join(sections)}'
         f'<button type="button" class="close-log">{_i18n_span("log_close_button")}</button></dialog>'
@@ -712,9 +745,9 @@ def _trip_row_html(
         str(seq) if seq is not None else "",
         depart_local.strftime("%Y-%m-%d"),
         depart_local.strftime("%H:%M"),
-        escape(trip.depart_place),
+        _place_html(trip.depart_place),
         arrive_local.strftime("%H:%M"),
-        escape(trip.arrive_place),
+        _place_html(trip.arrive_place),
         _format_duration(trip.duration),
         f"{_nl_num(trip.distance_nm)} nm",
         _nl_num(trip.avg_speed_kn) + " kn" if trip.avg_speed_kn is not None else "",
@@ -731,7 +764,7 @@ def _trip_row_html(
     row = "".join(f"<td>{cell}</td>" for cell in cells)
     map_row = ""
     if trip.track:
-        title = escape(_trip_title(trip, depart_local))
+        title = _trip_title(trip, depart_local)
         map_row = (
             f'<tr class="trip-map-row" data-trip="{idx}" style="display:none">'
             f'<td colspan="{len(_headers_for(remarks_api_url))}"><div class="trip-map-title">{title}</div>'
@@ -897,13 +930,19 @@ def write_html_logbook(
             # A small in-page map popup (asked for explicitly), not the external Google Maps link
             # this used to be -- that link never worked from inside the Android app's WebView
             # (target="_blank" has nowhere to go there, same class of problem the Overzicht map's
-            # own dialog already solves for trips). data-lat/lon/place/time feed the click handler
-            # below rather than a URL, so no geocoding/formatting logic needs duplicating in JS.
+            # own dialog already solves for trips). data-lat/lon/place-name/place-prefix/time feed
+            # the click handler below rather than a URL, so no geocoding/formatting logic needs
+            # duplicating in JS. place-name/place-prefix (not one baked-together data-place, see
+            # _split_place_prefix()) so the dialog's own title -- built fresh from these each time
+            # it opens, same as Overzicht's own marker tooltips -- follows the page's language
+            # switcher instead of a fallback place staying stuck in Dutch regardless of currentLang.
+            place_name, place_prefix = _split_place_prefix(place)
             last_position_html = (
                 f'<div class="last-updated">{_i18n_span("last_position")}: '
                 f'<a href="#" class="show-last-position" '
                 f'data-lat="{latest_position.lat:.5f}" data-lon="{latest_position.lon:.5f}" '
-                f'data-place="{escape(place)}">{escape(place)}</a>'
+                f'data-place-name="{escape(place_name)}" '
+                f'data-place-prefix="{escape(place_prefix or "")}">{_place_html(place)}</a>'
                 f" ({position_time_local:%Y-%m-%d %H:%M})</div>"
             )
 
@@ -1022,8 +1061,14 @@ def write_html_logbook(
             # column (seq_by_index_all, built alongside year_trip_indices above).
             "seq": seq_by_index_all.get(idx),
             "date": _to_local(trip.depart_time, _trip_utc_offset_hours(trip, utc_offset_hours)).strftime("%Y-%m-%d"),
-            "departPlace": trip.depart_place,
-            "arrivePlace": trip.arrive_place,
+            # Split, not the raw geocode.py string, so the Overzicht map's own JS-built tooltips
+            # (built fresh from TRIPS every time the map is opened, see formatPlace() below) follow
+            # the page's language switcher instead of a fallback place name staying stuck in the
+            # Dutch "aan de kant, bij"/"op het water, bij" phrasing regardless of currentLang.
+            "departPlace": _split_place_prefix(trip.depart_place)[0],
+            "departPlacePrefix": _split_place_prefix(trip.depart_place)[1],
+            "arrivePlace": _split_place_prefix(trip.arrive_place)[0],
+            "arrivePlacePrefix": _split_place_prefix(trip.arrive_place)[1],
         }
         for idx, trip in enumerate(trips)
         if trip.track
@@ -1327,6 +1372,19 @@ const I18N = {json.dumps(LANGUAGES)};
 const MONTH_ABBR_BY_LANG = {json.dumps(MONTH_ABBR)};
 const BOAT_NAME = {json.dumps(boat_name or "")};
 let currentLang = 'nl';
+
+// Composes a TRIPS place (see write_html_logbook's own trip_data, split via
+// _split_place_prefix() before it ever reaches this JSON) back into displayable text in the
+// current language -- the counterpart, for JS-built content like Overzicht's own marker
+// tooltips, to what _place_html() does for content this file renders directly as HTML.
+function formatPlace(name, prefixKind) {{
+  if (!prefixKind) return name;
+  var tpl = I18N[currentLang]['place_prefix_' + prefixKind];
+  if (!tpl) return name;
+  return tpl.replace(/\\{{(\\w+)\\}}/g, function(whole, key) {{
+    return key === 'name' ? name : whole;
+  }});
+}}
 
 function applyLanguage(lang) {{
   if (!I18N[lang]) return;
@@ -1671,7 +1729,8 @@ document.querySelectorAll('.show-log').forEach(function(btn) {{
       }});
       var marker = L.marker(mid, {{icon: icon}}).addTo(overviewMap);
       marker.bindTooltip(
-        trip.date + ' &middot; ' + trip.departPlace + ' &rarr; ' + trip.arrivePlace
+        trip.date + ' &middot; ' + formatPlace(trip.departPlace, trip.departPlacePrefix) +
+        ' &rarr; ' + formatPlace(trip.arrivePlace, trip.arrivePlacePrefix)
       );
       marker.on('click', function() {{ closeOverviewAndHighlight(idx, year); }});
       overviewMarkers.push(marker);
@@ -1723,7 +1782,8 @@ document.querySelectorAll('.show-log').forEach(function(btn) {{
     e.preventDefault();
     var lat = parseFloat(link.dataset.lat);
     var lon = parseFloat(link.dataset.lon);
-    document.getElementById('last-position-dialog-title').textContent = link.dataset.place;
+    document.getElementById('last-position-dialog-title').textContent =
+      formatPlace(link.dataset.placeName, link.dataset.placePrefix || null);
     dialog.showModal();
     if (!map) {{
       map = L.map('last-position-map');

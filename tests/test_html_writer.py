@@ -2,6 +2,7 @@ import json
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Optional
 
 from nmea2log.html_writer import write_html_logbook
 from nmea2log.model import PositionFix
@@ -11,12 +12,13 @@ from nmea2log.weather import HourlyWeather
 
 
 class _StubGeocoder:
-    def __init__(self) -> None:
+    def __init__(self, place: Optional[str] = None) -> None:
         self.calls = []
+        self._place = place
 
     def place_name(self, lat: float, lon: float) -> str:
         self.calls.append((lat, lon))
-        return f"Port@{lat:.2f},{lon:.2f}"
+        return self._place if self._place is not None else f"Port@{lat:.2f},{lon:.2f}"
 
 
 def _trip(**overrides) -> TripLeg:
@@ -825,6 +827,69 @@ def test_write_html_logbook_geocodes_the_last_position_into_a_place_name(tmp_pat
     html = out_path.read_text(encoding="utf-8")
     assert ">Port@47.14,-2.36<" in html
     assert geocoder.calls == [(47.13877, -2.36295)]
+
+
+def test_write_html_logbook_trip_places_with_a_distance_prefix_are_translatable(tmp_path: Path):
+    """Asked for explicitly: geocode.py's own "aan de kant, bij"/"op het water, bij" distance
+    prefix (see PREFIX_MOORING/PREFIX_WATER) used to stay Dutch regardless of the page's language
+    switcher, since it's baked into the place name string well before there's a language switcher
+    to speak of. It must now ride the same data-i18n-tpl mechanism as everything else translatable,
+    with the place name itself (never translated) passed through as a template argument."""
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook(
+        [_trip(
+            depart_place="op het water, bij Jument",
+            arrive_place="aan de kant, bij Crouesty",
+        )],
+        out_path, utc_offset_hours=0,
+    )
+
+    html = out_path.read_text(encoding="utf-8")
+    assert (
+        'data-i18n-tpl="place_prefix_water" data-i18n-args="{&quot;name&quot;: '
+        '&quot;Jument&quot;}"' in html
+    )
+    assert (
+        'data-i18n-tpl="place_prefix_mooring" data-i18n-args="{&quot;name&quot;: '
+        '&quot;Crouesty&quot;}"' in html
+    )
+    # The rendered (server-side, Dutch) text stays exactly as geocode.py produced it -- only the
+    # markup around it changed, not what a no-JS/email viewer sees.
+    assert "op het water, bij Jument" in html
+    assert "aan de kant, bij Crouesty" in html
+
+
+def test_write_html_logbook_trip_places_without_a_distance_prefix_stay_plain(tmp_path: Path):
+    """A place name geocode.py didn't prefix (the common case -- within _NEARBY_THRESHOLD_M of a
+    real match) must not gain a data-i18n-tpl wrapper it doesn't need."""
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([_trip(depart_place="Marina A", arrive_place="Marina B")], out_path, utc_offset_hours=0)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert 'data-i18n-tpl="place_prefix_water"' not in html
+    assert 'data-i18n-tpl="place_prefix_mooring"' not in html
+    assert ">Marina A<" in html
+    assert ">Marina B<" in html
+
+
+def test_write_html_logbook_last_position_prefix_is_translatable_too(tmp_path: Path):
+    """Same fix as the trip places above, applied to "Laatste positie" -- data-place-name/
+    data-place-prefix (not one baked-together data-place) so the popup's own JS-built title stays
+    in step with whichever language is active when it's opened."""
+    geocoder = _StubGeocoder(place="op het water, bij Arzal")
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook(
+        [_trip()], out_path, utc_offset_hours=0,
+        latest_position=PositionFix(time=datetime(2026, 9, 4, 11, 37), lat=47.13877, lon=-2.36295),
+        geocoder=geocoder,
+    )
+
+    html = out_path.read_text(encoding="utf-8")
+    assert 'data-place-name="Arzal"' in html
+    assert 'data-place-prefix="water"' in html
 
 
 def test_write_html_logbook_no_last_position_without_one_given(tmp_path: Path):

@@ -8,8 +8,12 @@ The generated page itself only ever renders in NL server-side (unchanged from be
 translatable element also carries a data-i18n/data-i18n-tpl attribute (see html_writer.py), and all
 four languages below are embedded in the page as one JS object so a visitor can switch languages
 client-side without regenerating the file -- see the language-switcher button in the page header.
-Free-form data that isn't UI chrome (place names, fault/warning text from the decoded NMEA data
-itself) is never translated by this mechanism.
+Free-form data that isn't UI chrome (the place names themselves, fault/warning text from the
+decoded NMEA data) is never translated by this mechanism -- "place_prefix_mooring"/
+"place_prefix_water" are the one exception: geocode.py's own distance-prefix phrasing ("aan de
+kant, bij"/"op het water, bij" a place, not the place name itself) rides the same data-i18n-tpl
+mechanism as everything else UI chrome uses (see html_writer.py's _place_html()), since it's
+wording this page controls, unlike the place name Nominatim returned.
 
 To add another language: copy ``NL`` into a same-shaped dict (every key must be present --
 html_writer.py doesn't fall back key-by-key), add its month-abbreviation table, and register both
@@ -25,6 +29,8 @@ NL: Dict[str, str] = {
     "logbook_title_suffix": "Vaarlogboek",
     "last_updated": "Laatst bijgewerkt",
     "last_position": "Laatste positie",
+    "place_prefix_mooring": "aan de kant, bij {name}",
+    "place_prefix_water": "op het water, bij {name}",
     "vessel_call_sign": "Roepnaam",
     # <noscript> banner
     "noscript_warning": (
@@ -123,6 +129,8 @@ EN: Dict[str, str] = {
     "logbook_title_suffix": "Sailing Logbook",
     "last_updated": "Last updated",
     "last_position": "Last position",
+    "place_prefix_mooring": "alongside, near {name}",
+    "place_prefix_water": "on the water, near {name}",
     "vessel_call_sign": "Call sign",
     "noscript_warning": (
         'The "Map", "Details" and "Remark" buttons in this logbook need JavaScript to open. Most '
@@ -205,6 +213,8 @@ FR: Dict[str, str] = {
     "logbook_title_suffix": "Journal de bord",
     "last_updated": "Dernière mise à jour",
     "last_position": "Dernière position",
+    "place_prefix_mooring": "à quai, près de {name}",
+    "place_prefix_water": "sur l'eau, près de {name}",
     "vessel_call_sign": "Indicatif d'appel",
     "noscript_warning": (
         'Les boutons « Carte », « Détails » et « Remarque » de ce journal de bord nécessitent '
@@ -287,6 +297,8 @@ DE: Dict[str, str] = {
     "logbook_title_suffix": "Bordbuch",
     "last_updated": "Zuletzt aktualisiert",
     "last_position": "Letzte Position",
+    "place_prefix_mooring": "am Kai, bei {name}",
+    "place_prefix_water": "auf dem Wasser, bei {name}",
     "vessel_call_sign": "Rufzeichen",
     "noscript_warning": (
         'Die Schaltflächen "Karte", "Details" und "Bemerkung" in diesem Bordbuch benötigen '
