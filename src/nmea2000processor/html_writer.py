@@ -1064,6 +1064,7 @@ def write_html_logbook(
 <html lang="nl">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{escape(title)}</title>
 <link rel="icon" href="{_ICON_URL}">
 <link rel="apple-touch-icon" href="{_ICON_URL}">
