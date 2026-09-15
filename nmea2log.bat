@@ -18,7 +18,7 @@ if "%~1"=="" (
     if errorlevel 1 (
         echo.
         echo Download failed or the boat wasn't reachable -- continuing with whatever is
-        echo already downloaded. Use nmea2log-no-download.bat to skip this step entirely.
+        echo already downloaded.
     )
 ) else (
     set "OUTPUT=%~dp1logbook.csv"

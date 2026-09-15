@@ -229,11 +229,8 @@ Once configured (see above), day-to-day use is one double-click, no terminal nee
   `--csv`/`--gpx` (e.g. by editing the shortcut/command) if you also want those files.
   Drag a single log file onto it instead to skip both the download and the `ebl_dir` search, and
   process just that one file.
-- **`nmea2log-no-download.bat`** — the same, but always skips the download step. Handy for
-  regenerating the logbook after tweaking a setting in `nmea2log.ini`, without needing the boat's
-  wifi.
 
-The rest of this section explains what these do underneath, and the full command-line options,
+The rest of this section explains what this does underneath, and the full command-line options,
 for other platforms or more control.
 
 ### Processing log files
@@ -273,46 +270,23 @@ Processing multiple files at once (e.g. one per day):
 nmea2log Actisense/EBL000000/000000_014.ebl Actisense/EBL000000/000000_015.ebl -o logbook.csv
 ```
 
-### Uploading the logbook
-
-Pass `--upload` to also copy the generated HTML logbook to a website over SFTP right after
-writing it, so it's viewable from anywhere without running a server of your own (no port-
-forwarding or dynamic DNS needed for a home connection). Requires an SSH key pair for
-authentication -- a login password can't be scripted through the `sftp` client without an
-interactive prompt, which defeats the point of running this unattended. Uses the system's own
-`sftp` client (OpenSSH, already installed on Windows 10/11 and Debian), not an extra dependency.
-
-```bash
-ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519
-```
-
-Add the resulting `~/.ssh/id_ed25519.pub` to your hosting provider's SSH/SFTP access settings
-(for TransIP webhosting: control panel → Webhosting → your domain → Website → SFTP/SSH → "+ Key
-toevoegen"), then either pass the connection details on the command line or set them once in the
-config file's `[upload]` section (see `nmea2log.ini`):
-
-```bash
-nmea2log --upload --upload-host ssh.example.transip.nl --upload-user my-user \
-  --upload-remote-path logboek/logbook.html --upload-key-file ~/.ssh/id_ed25519 -o logbook.csv
-```
-
 ### Per-trip remarks, login-gated, via WordPress
 
-Pass `--remarks-api-url` to add a "Remarks" button+popup (save/cancel) to each trip, backed by a
-small WordPress plugin (`wordpress-plugin/nmea2log-remarks.php`) instead of a database or server
-of this tool's own. This also login-gates the whole logbook, not just remarks: the uploaded file
-goes to a `private/` directory outside the public web root, and `wordpress-plugin/logboek-
-index.php` (deployed as e.g. `www/logboek/index.php`) checks the visitor is both logged in
-and specifically allowed to view the logbook, redirecting to the WordPress login page (not logged
-in) or showing a plain access-denied message (logged in as some unrelated account, e.g. a
-webshop customer) otherwise.
+The preferred way to publish: pass `--remarks-api-url` to add a "Remarks" button+popup
+(save/cancel) to each trip, backed by a small WordPress plugin
+(`wordpress-plugin/nmea2log-remarks.php`) instead of a database or server of this tool's own.
+This also login-gates the whole logbook, not just remarks: the uploaded file goes to a `private/`
+directory outside the public web root, and `wordpress-plugin/logboek-index.php` (deployed as
+e.g. `www/logboek/index.php`) checks the visitor is both logged in and specifically allowed to
+view the logbook, redirecting to the WordPress login page (not logged in) or showing a plain
+access-denied message (logged in as some unrelated account, e.g. a webshop customer) otherwise.
 
 Multiple boats can share one WordPress site: which logbook a person sees (or a Logbook Writer
 edits/uploads) is resolved from *who's logged in*, via a "boat" field on their own user profile --
 not from the URL, so the gatekeeper page below is deployed exactly once no matter how many boats
 use the site.
 
-One-time setup on the WordPress site:
+**Installing the plugin** (one-time setup on the WordPress site):
 
 1. Upload `wordpress-plugin/nmea2log-remarks.php` to `wp-content/plugins/nmea2log-remarks/` and
    activate it in wp-admin → Plugins. It registers two purpose-built roles -- deliberately not
@@ -334,21 +308,57 @@ One-time setup on the WordPress site:
    views.php` as `views.php` into one shared location under `www/` (e.g. `www/logboek/`) -- both
    resolve the right boat per visitor at request time, so there's nothing inside either file
    itself to adjust for your own layout, and nothing to repeat per boat.
-5. Point each boat's own `--upload-rest-user`/`--upload-rest-app-password` at that boat's own
-   WordPress account (step 3) -- the REST endpoint writes to `private/<that account's own
-   slug>/logbook.html`, *outside* the public web root (e.g. `private/` on TransIP webhosting,
-   which already isn't served over HTTP), automatically; nothing to configure client-side for the
-   path itself.
+5. On each Writer's own profile page (wp-admin → Users → Profile → Application Passwords),
+   generate a new Application Password -- a long, auto-generated credential scoped to this one
+   integration, not the account's real login password. Copy it now; WordPress only shows it once.
+
+**Using it** (publishing from `nmea2log`): pass `--upload-rest` plus the REST endpoint and that
+Application Password. The REST endpoint writes to `private/<that account's own slug>/logbook.html`,
+*outside* the public web root (e.g. `private/` on TransIP webhosting, which already isn't served
+over HTTP), automatically -- nothing to configure client-side for the path itself.
 
 ```bash
-nmea2log --upload --remarks-api-url /wp-json/nmea2log/v1/remarks -o logbook.csv
+nmea2log --upload-rest --upload-rest-url https://your-site.example/wp-json/nmea2log/v1/logbook \
+  --upload-rest-user my-writer-account --upload-rest-app-password "xxxx xxxx xxxx xxxx xxxx xxxx" \
+  --remarks-api-url /wp-json/nmea2log/v1/remarks -o logbook.csv
 ```
 
-A relative URL resolves against whatever site the page is opened from, so no separate host needs
-configuring as long as the logbook is uploaded to the same site as the plugin. Reading and saving
-both ride on the visitor's existing WordPress login session (cookie + a nonce the login-gate
-script patches into the page at serve time) -- there's no separate username/password entered in
-the popup itself.
+Or set all four once in the config file's `[upload]` section instead of typing them every time
+(see "Configuration" above -- `hostname`/`username`/`password` there map to
+`--upload-rest-url`/`--upload-rest-user`/`--upload-rest-app-password`; filling in all three there
+also turns `--upload-rest` on by default, no separate flag needed).
+
+`--remarks-api-url` takes a relative URL, resolved against whatever site the page is opened from,
+so no separate host needs configuring as long as the logbook is uploaded to the same site as the
+plugin. Reading and saving remarks both ride on the visitor's existing WordPress login session
+(cookie + a nonce the login-gate script patches into the page at serve time) -- there's no
+separate username/password entered in the popup itself.
+
+### Uploading over SFTP instead
+
+An older, still-supported alternative to the WordPress/REST route above, for a plain website with
+no WordPress on it: pass `--upload` to copy the generated HTML logbook to a website over SFTP
+right after writing it, so it's viewable from anywhere without running a server of your own (no
+port-forwarding or dynamic DNS needed for a home connection). Requires an SSH key pair for
+authentication -- a login password can't be scripted through the `sftp` client without an
+interactive prompt, which defeats the point of running this unattended. Uses the system's own
+`sftp` client (OpenSSH, already installed on Windows 10/11 and Debian), not an extra dependency.
+Note: this only uploads the file itself -- no login gate, no per-trip remarks; anyone with the URL
+can view it.
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519
+```
+
+Add the resulting `~/.ssh/id_ed25519.pub` to your hosting provider's SSH/SFTP access settings
+(for TransIP webhosting: control panel → Webhosting → your domain → Website → SFTP/SSH → "+ Key
+toevoegen"), then either pass the connection details on the command line or set them once in the
+config file's `[upload]` section (see `nmea2log.ini`):
+
+```bash
+nmea2log --upload --upload-host ssh.example.transip.nl --upload-user my-user \
+  --upload-remote-path logboek/logbook.html --upload-key-file ~/.ssh/id_ed25519 -o logbook.csv
+```
 
 ### Useful options
 
@@ -373,10 +383,11 @@ the popup itself.
 | `--mmsi MMSI` | MMSI at the top of the HTML logbook (default: none, or the `mmsi` setting from the config file) |
 | `--call-sign SIGN` | Call sign at the top of the HTML logbook (default: none, or the `call_sign` setting from the config file) |
 | `--log-interval-minutes` | Interval between periodic course/speed/position entries in each trip's "Log" table (default 30) |
-| `--upload` | Upload the HTML logbook over SFTP after writing it (see "Uploading the logbook" above) |
+| `--upload-rest` | Upload the HTML logbook to a WordPress REST endpoint after writing it (see "Per-trip remarks, login-gated, via WordPress" above) |
+| `--upload-rest-url` / `--upload-rest-user` / `--upload-rest-app-password` | WordPress REST connection details (only with `--upload-rest`) |
+| `--upload` | Upload the HTML logbook over SFTP after writing it instead (see "Uploading over SFTP instead" above) |
 | `--upload-host` / `--upload-user` / `--upload-remote-path` / `--upload-key-file` / `--upload-port` | SFTP connection details (only with `--upload`; default port 22) |
 | `--remarks-api-url` | URL of a WordPress REST endpoint storing per-trip remarks (see "Per-trip remarks" above). Default: disabled |
-| `--download-failed` | Marks the "Laatst bijgewerkt" timestamp in the HTML logbook in red -- pass this when a preceding download step failed, so it's visible at a glance that this run didn't get new data (set automatically by `nmea2log.bat`) |
 | `--engine-count N` | Number of physical engines. With `1`, any extra engine instance in the data is ignored as noise (same idea as the GPS source-dominance filtering) |
 | `--ebl-dir DIR` | Folder to search recursively for `.ebl` files when no logfiles are given. Default: not set, or the `ebl_dir` setting from the config file |
 | `--battery-warning-voltage V` | Flags a trip's battery voltage as low in the 'Warnings' column if it drops below this at any point (default 12.2 V; a common threshold for a 12V lead-acid battery -- adjust for a 24V system or a different chemistry) |
