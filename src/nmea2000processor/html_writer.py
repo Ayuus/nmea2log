@@ -1258,9 +1258,12 @@ def write_html_logbook(
   .remarks-textarea:focus {{ outline: 1px solid #1a6ecc; }}
   .show-overview {{ font-size: 0.6em; font-weight: 400; color: #1a6ecc; }}
   .overview-dialog {{ width: min(900px, 90vw); }}
-  .overview-map {{ height: 70vh; width: 100%; }}
+  /* margin-bottom matches .log-table's own (asked for explicitly, to match the Details popup's
+     spacing before its close button) -- both these maps and the Details table are the last thing
+     before .close-log, and would otherwise sit flush against it. */
+  .overview-map {{ height: 70vh; width: 100%; margin-bottom: 0.8em; }}
   .last-position-dialog {{ width: min(500px, 90vw); }}
-  .last-position-map {{ height: 40vh; width: 100%; }}
+  .last-position-map {{ height: 40vh; width: 100%; margin-bottom: 0.8em; }}
   /* iconSize/iconAnchor in the matching L.divIcon() call below must stay in sync with width/
      height here -- Leaflet positions the icon from those JS numbers, not this CSS. */
   .overview-marker {{
