@@ -515,6 +515,16 @@ pytest
   CLI reports on stderr which source was chosen as primary whenever there's more than one.
   **Caveat**: "most messages" is a proxy, not a quality assessment — GPS accuracy (HDOP,
   satellite count, fix type) isn't taken into account.
+- **Fuel consumption** is calculated from engine fuel-rate data (PGN 127489, integrated over
+  time) or the engine's own trip counter (PGN 127497) — nothing is shown when a boat has no
+  engine-reporting PGNs at all, which matters for sailboats that are often underway with the
+  engine off. A fuel tank level sensor (PGN 127505, not currently parsed anywhere in this
+  codebase) could fill that gap, but isn't the more accurate choice even on boats that have one:
+  differencing tank level before/after a single trip is noisy (fuel sloshing while
+  underway/heeling, coarse resistive-sender resolution, non-linear tank shapes) and only really
+  settles out over many refuels, not one trip. Future work: parse PGN 127505 as a *fallback* for
+  when engine fuel-rate data is absent, clearly labeled as a rougher estimate rather than shown
+  the same way as engine-derived figures.
 - **Water depth**: the app uses the raw "Depth" value from PGN 128267 (depth under the
   transducer), without adding the transducer offset — usually that's already the value
   instruments show by default, but check this against your own depth-sounder settings.
