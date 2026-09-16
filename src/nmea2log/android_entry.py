@@ -38,7 +38,7 @@ from .marine import MarineFetcher
 from .sample_cache import SampleCache
 from .trip_cache import TripCache, choose_resume_index, config_signature, find_resume_index
 from .trip_ids import assign_trip_ids
-from .tripbuilder import TRIP_LOGIC_VERSION, build_trips
+from .tripbuilder import TRIP_LOGIC_VERSION, build_trips, resolve_trip_places
 from .weather import WeatherFetcher
 
 
@@ -294,7 +294,6 @@ def run_pipeline(
                 all_battery,
                 all_rpm,
                 all_attitude,
-                geocoder=geocoder,
                 speed_threshold_kn=args.speed_threshold_kn,
                 min_stop_minutes=args.min_stop_minutes,
                 max_gap_minutes=args.max_gap_minutes,
@@ -355,6 +354,13 @@ def run_pipeline(
         new_resume_file = str(logfiles[new_resume_index].resolve())
         new_resume_state = ebl_time_state_before_file.get(new_resume_index)
         trip_cache_store.save(new_settled_trips, new_resume_file, new_resume_state, trip_signature)
+
+    # Every run, over every trip -- settled trips (just loaded straight from
+    # trip_cache_store.load() above, never touched by build_trips() at all this run) included,
+    # not just the fresh ones -- see resolve_trip_places()'s own doc comment for why this can't
+    # just happen once inside build_trips() and get cached alongside everything else about a
+    # settled trip.
+    trips = resolve_trip_places(trips, geocoder)
 
     # trips (a small, already-summarized list of TripLeg) is everything write_html_logbook()
     # below needs -- the season's worth of raw per-sample arrays that built it are pure dead

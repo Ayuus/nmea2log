@@ -54,7 +54,7 @@ from .pgn_decode import (
     decode_water_depth,
 )
 from .trip_ids import assign_trip_ids
-from .tripbuilder import TRIP_LOGIC_VERSION, build_trips
+from .tripbuilder import TRIP_LOGIC_VERSION, build_trips, resolve_trip_places
 from .upload import UploadError, upload_file, upload_via_rest
 
 _T = TypeVar("_T")
@@ -1006,7 +1006,6 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
                 all_battery,
                 all_rpm,
                 all_attitude,
-                geocoder=geocoder,
                 speed_threshold_kn=args.speed_threshold_kn,
                 min_stop_minutes=args.min_stop_minutes,
                 max_gap_minutes=args.max_gap_minutes,
@@ -1099,6 +1098,12 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         new_resume_file = str(args.logfiles[new_resume_index].resolve())
         new_resume_state = ebl_time_state_before_file.get(new_resume_index)
         trip_cache_store.save(new_settled_trips, new_resume_file, new_resume_state, trip_signature)
+
+    # Every run, over every trip -- settled (just loaded straight from trip_cache_store.load()
+    # above, never touched by build_trips() at all this run) included, not just the fresh ones --
+    # see resolve_trip_places()'s own doc comment for why this can't just happen once inside
+    # build_trips() and get cached alongside everything else about a settled trip.
+    trips = resolve_trip_places(trips, geocoder)
 
     log(f"[info] {len(trips)} trip(s) found, writing logbook...", file=sys.stderr)
     trip_uids = assign_trip_ids(trips, utc_offset_hours=args.utc_offset)

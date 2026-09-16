@@ -14,13 +14,13 @@ import bisect
 import math
 import statistics
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from itertools import groupby
 from typing import Dict, FrozenSet, List, Optional, Tuple
 
 from .fix_array import AttitudeArray, FixArray, SogArray
-from .geocode import Geocoder, NoGeocoder
+from .geocode import NoGeocoder
 from .log import log
 from .model import (
     AttitudeSample,
@@ -1138,7 +1138,6 @@ def build_trips(
     rpm_samples: Optional[List[EngineRpmSample]] = None,
     attitude_samples: Optional[List[AttitudeSample]] = None,
     *,
-    geocoder: Optional[object] = None,
     speed_threshold_kn: float = 0.5,
     min_stop_minutes: float = 10.0,
     max_gap_minutes: Optional[float] = None,
@@ -1184,8 +1183,6 @@ def build_trips(
     if not isinstance(sogs, SogArray):
         sogs = SogArray(sogs)
 
-    if geocoder is None:
-        geocoder = NoGeocoder()
     if trip_fuel_samples is None:
         trip_fuel_samples = []
     if battery_samples is None:
@@ -1245,13 +1242,24 @@ def build_trips(
     runs = _merge_negligible_trips(runs, effective_min_leg_distance_nm, max_gap, lock_radius_m)
     log(f"[info] ...{len(runs)} run(s) classified, computing per-trip statistics...")
 
+    # A cheap, offline placeholder -- never the real geocoder. Actually resolving place names
+    # here would get them baked straight into a "settled" TripLeg (see trip_cache.py), frozen in
+    # the cache forever the moment this trip stops being freshly rebuilt every run: a real
+    # lookup failure (a rate-limited geocoding service, no internet that one time, ...) would
+    # otherwise permanently stick a wrong/degraded name on that trip, with no way for a later,
+    # working run to ever correct it short of clearing the whole trip cache and re-decoding
+    # everything (found in practice). resolve_trip_places() below is the real, always-rerun
+    # resolution step instead -- run once, every run, over every trip (settled or fresh alike),
+    # right before a trip is actually shown/written -- so a fixed connection or an unrelated
+    # geocode-cache clear fixes it on the very next run, no full rebuild required.
+    placeholder_geocoder = NoGeocoder()
     stays: List[Optional[Stay]] = []
     for label, group in runs:
         if label != "stationary":
             stays.append(None)
             continue
         lat, lon = _settled_position(group, speed_threshold_ms, on_intervals, lock_radius_m)
-        place = geocoder.place_name(lat, lon)
+        place = placeholder_geocoder.place_name(lat, lon)
         stays.append(Stay(group[0].time, group[-1].time, lat, lon, place))
 
     trips: List[TripLeg] = []
@@ -1327,3 +1335,35 @@ def build_trips(
             )
         )
     return [trip for trip in trips if trip.distance_nm >= min_trip_distance_nm]
+
+
+def resolve_trip_places(trips: List[TripLeg], geocoder: object) -> List[TripLeg]:
+    """Fills in depart_place/arrive_place with real place names (asked for explicitly, moved out
+    of build_trips() itself -- see its own placeholder_geocoder comment for the full reasoning):
+    the trip's own geometry/timing/statistics genuinely never change once settled, so caching
+    those is exactly right, but a place name can still improve later (a rate-limited geocoding
+    service recovering, a stale entry in the geocode cache getting cleared, ...) -- there's no
+    good reason a caller should ever need a full trip-cache clear and re-decode just to pick that
+    up. Callers should run this over *every* trip about to be shown/written (settled trips loaded
+    straight from trip_cache.pkl included, not just newly-built ones) on every run: the geocoder's
+    own cache (see geocode.Geocoder) already makes a repeat, already-successful lookup cheap, so
+    this doesn't reintroduce the network cost settling was there to avoid -- only a lookup that
+    previously failed (and so was never cached, see Geocoder._lookup's own cacheable return)
+    actually costs anything here, exactly the case worth retrying.
+
+    "Unknown (start/end outside log file)" placeholders (a trip with no known stay on that end,
+    see build_trips() above) are left alone -- there's no position to look up in the first place,
+    and geocoding wasn't ever involved in producing that text."""
+    resolved: List[TripLeg] = []
+    for trip in trips:
+        depart_place = trip.depart_place
+        if not depart_place.startswith("Unknown ("):
+            depart_place = geocoder.place_name(trip.depart_lat, trip.depart_lon)
+        arrive_place = trip.arrive_place
+        if not arrive_place.startswith("Unknown ("):
+            arrive_place = geocoder.place_name(trip.arrive_lat, trip.arrive_lon)
+        if depart_place == trip.depart_place and arrive_place == trip.arrive_place:
+            resolved.append(trip)  # no change -- skip the copy
+        else:
+            resolved.append(replace(trip, depart_place=depart_place, arrive_place=arrive_place))
+    return resolved

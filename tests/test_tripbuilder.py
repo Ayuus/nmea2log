@@ -14,7 +14,12 @@ from nmea2log.model import (
     WaterTempSample,
 )
 from nmea2log.fix_array import FixArray
-from nmea2log.tripbuilder import _reject_gps_outliers, _reject_gps_outliers_array, build_trips
+from nmea2log.tripbuilder import (
+    _reject_gps_outliers,
+    _reject_gps_outliers_array,
+    build_trips,
+    resolve_trip_places,
+)
 
 
 class _StubGeocoder:
@@ -58,16 +63,18 @@ def _build_scenario():
 
 def test_build_trips_single_leg():
     fixes, sogs, engine_samples = _build_scenario()
-    geocoder = _StubGeocoder()
 
     trips = build_trips(
-        fixes, sogs, engine_samples, geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10
+        fixes, sogs, engine_samples, speed_threshold_kn=0.5, min_stop_minutes=10
     )
 
     assert len(trips) == 1
     trip = trips[0]
-    assert trip.depart_place.startswith("Port@52.30")
-    assert trip.arrive_place.startswith("Port@52.40")
+    # Placeholder text only -- build_trips() itself no longer geocodes at all (see
+    # resolve_trip_places(), tested separately below), so this is just confirming there's a
+    # place-holding string here, not a real place name yet.
+    assert trip.depart_place == "52.3000, 4.9000"
+    assert trip.arrive_place == "52.4000, 4.9500"
     assert trip.distance_nm > 5
     assert trip.fuel_liters > 0
     assert 0 in trip.engine_hours
@@ -82,8 +89,58 @@ def test_build_trips_single_leg():
     # engine 0 does have samples, but none of the health fields were populated
     assert trip.engine_health[0].oil_pressure_bar_avg is None
     assert trip.engine_health[0].warnings == frozenset()
-    # the geocoder must not be called more often than the number of port visits
+
+
+def test_resolve_trip_places_fills_in_real_place_names():
+    """build_trips() itself only ever produces the plain-coordinate placeholder (see
+    test_build_trips_single_leg above) -- resolve_trip_places() is the actual, real-geocoder
+    resolution step, meant to run every time a trip is about to be shown/written, not just once at
+    build time (see its own doc comment for why)."""
+    fixes, sogs, engine_samples = _build_scenario()
+    trips = build_trips(fixes, sogs, engine_samples, speed_threshold_kn=0.5, min_stop_minutes=10)
+    geocoder = _StubGeocoder()
+
+    resolved = resolve_trip_places(trips, geocoder)
+
+    assert len(resolved) == 1
+    assert resolved[0].depart_place == "Port@52.30,4.90"
+    assert resolved[0].arrive_place == "Port@52.40,4.95"
+    # Everything else about the trip carries over unchanged -- only the two place fields differ.
+    assert resolved[0].distance_nm == trips[0].distance_nm
+    assert resolved[0].depart_lat == trips[0].depart_lat
+    # The geocoder must not be called more often than the number of distinct port visits --
+    # once each for departure and arrival here, not once per trip-in-general or per sample.
     assert len(geocoder.calls) == 2
+
+
+def test_resolve_trip_places_leaves_unresolvable_placeholders_alone():
+    """A trip with no known stay on one end (see build_trips()'s own "Unknown (start/end outside
+    log file)" fallback) has no position to look up in the first place -- resolve_trip_places()
+    must leave that text exactly as-is, not hand geocode.py's own NoGeocoder-style coordinates (or
+    worse, its own actual departure/arrival lat/lon, which is *not* where a stay was ever
+    confirmed) to a real geocoder as if it were a real position."""
+    fixes = []
+    sogs = []
+    # Moving from the very first sample -- no stationary period beforehand, so there's no known
+    # stay to depart from at all (see build_trips()'s own prev_stay handling).
+    for i, m in enumerate(range(0, 20)):
+        frac = i / 19
+        fixes.append(PositionFix(_dt(m), 52.30 + 0.10 * frac, 4.90 + 0.05 * frac))
+        sogs.append(SogSample(_dt(m), 3.0))
+    for m in range(20, 32):
+        fixes.append(PositionFix(_dt(m), 52.40, 4.95))
+        sogs.append(SogSample(_dt(m), 0.0))
+
+    trips = build_trips(fixes, sogs, [], speed_threshold_kn=0.5, min_stop_minutes=10)
+    assert trips[0].depart_place == "Unknown (start outside log file)"
+
+    geocoder = _StubGeocoder()
+    resolved = resolve_trip_places(trips, geocoder)
+
+    assert resolved[0].depart_place == "Unknown (start outside log file)"
+    assert resolved[0].arrive_place == "Port@52.40,4.95"
+    # Only the resolvable (arrival) end was ever looked up.
+    assert len(geocoder.calls) == 1
 
 
 def test_trip_depart_and_arrive_lat_lon_are_the_stays_averaged_position_not_a_single_fix():
@@ -110,9 +167,8 @@ def test_trip_depart_and_arrive_lat_lon_are_the_stays_averaged_position_not_a_si
         fixes.append(PositionFix(_dt(m), 52.40 + jitter, 4.95 + jitter))
         sogs.append(SogSample(_dt(m), 0.0))
 
-    geocoder = _StubGeocoder()
     trips = build_trips(
-        fixes, sogs, [], geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10
+        fixes, sogs, [], speed_threshold_kn=0.5, min_stop_minutes=10
     )
 
     assert len(trips) == 1
@@ -159,9 +215,8 @@ def test_arrival_position_excludes_still_gliding_samples_right_after_arrival():
         fixes.append(PositionFix(_dt(m), 52.40, 4.90))
         sogs.append(SogSample(_dt(m), 0.0))
 
-    geocoder = _StubGeocoder()
     trips = build_trips(
-        fixes, sogs, [], geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+        fixes, sogs, [], speed_threshold_kn=0.5, min_stop_minutes=10,
     )
 
     assert len(trips) == 1
@@ -198,9 +253,8 @@ def test_arrival_position_excludes_samples_while_the_engine_is_still_running():
     for m in range(42, 54):
         add(m, 52.40, 0.0, 0.0)
 
-    geocoder = _StubGeocoder()
     trips = build_trips(
-        fixes, sogs, engine_samples, geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+        fixes, sogs, engine_samples, speed_threshold_kn=0.5, min_stop_minutes=10,
     )
 
     assert len(trips) == 1
@@ -240,10 +294,9 @@ def test_build_trips_ignores_a_single_gps_glitch_in_distance():
     fixes, sogs, engine_samples = _build_scenario()
     # a single corrupted fix landing mid-trip, far from anywhere near the real track
     fixes.insert(20, PositionFix(_dt(20) + timedelta(seconds=1), -78.6, -60.8))
-    geocoder = _StubGeocoder()
 
     trips = build_trips(
-        fixes, sogs, engine_samples, geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10
+        fixes, sogs, engine_samples, speed_threshold_kn=0.5, min_stop_minutes=10
     )
 
     assert len(trips) == 1
@@ -282,10 +335,9 @@ def test_max_speed_records_when_and_at_what_rpm_it_happened():
         sogs.append(SogSample(_dt(m), 0.0))
         engine_samples.append(EngineSample(_dt(m), 0, 0.5, 3600 * 100 + m * 60))
 
-    geocoder = _StubGeocoder()
     trips = build_trips(
         fixes, sogs, engine_samples, rpm_samples=rpm_samples,
-        geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+        speed_threshold_kn=0.5, min_stop_minutes=10,
     )
 
     assert len(trips) == 1
@@ -304,10 +356,9 @@ def test_track_carries_cog_forward_filled_from_sog_samples():
     sogs = [
         SogSample(s.time, s.sog_ms, 225.0) if 12 <= i < 42 else s for i, s in enumerate(sogs)
     ]
-    geocoder = _StubGeocoder()
 
     trips = build_trips(
-        fixes, sogs, engine_samples, geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10
+        fixes, sogs, engine_samples, speed_threshold_kn=0.5, min_stop_minutes=10
     )
 
     trip = trips[0]
@@ -319,7 +370,6 @@ def test_track_carries_cog_forward_filled_from_sog_samples():
 
 def test_trip_fuel_device_delta():
     fixes, sogs, engine_samples = _build_scenario()
-    geocoder = _StubGeocoder()
 
     # engine's own trip meter: rises steadily, only relevant to the trip while underway
     trip_fuel_samples = [
@@ -328,7 +378,7 @@ def test_trip_fuel_device_delta():
 
     trips = build_trips(
         fixes, sogs, engine_samples, trip_fuel_samples,
-        geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+        speed_threshold_kn=0.5, min_stop_minutes=10,
     )
 
     assert len(trips) == 1
@@ -341,7 +391,6 @@ def test_trip_fuel_device_delta():
 
 def test_min_depth_with_position():
     fixes, sogs, engine_samples = _build_scenario()
-    geocoder = _StubGeocoder()
 
     # depth varies while underway (m 12..41), with a clear low point at m=25
     depth_samples = []
@@ -354,7 +403,7 @@ def test_min_depth_with_position():
 
     trips = build_trips(
         fixes, sogs, engine_samples, None, depth_samples,
-        geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+        speed_threshold_kn=0.5, min_stop_minutes=10,
     )
 
     assert len(trips) == 1
@@ -367,7 +416,6 @@ def test_min_depth_with_position():
 
 def test_water_temp_stats_with_position():
     fixes, sogs, engine_samples = _build_scenario()
-    geocoder = _StubGeocoder()
 
     # water temp varies while underway (m 12..41), rising steadily
     water_temp_samples = []
@@ -380,7 +428,7 @@ def test_water_temp_stats_with_position():
 
     trips = build_trips(
         fixes, sogs, engine_samples, None, None, water_temp_samples,
-        geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+        speed_threshold_kn=0.5, min_stop_minutes=10,
     )
 
     assert len(trips) == 1
@@ -392,11 +440,10 @@ def test_water_temp_stats_with_position():
 
 def test_water_temp_stats_absent_without_samples():
     fixes, sogs, engine_samples = _build_scenario()
-    geocoder = _StubGeocoder()
 
     trips = build_trips(
         fixes, sogs, engine_samples,
-        geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+        speed_threshold_kn=0.5, min_stop_minutes=10,
     )
 
     assert len(trips) == 1
@@ -408,7 +455,6 @@ def test_water_temp_stats_absent_without_samples():
 
 def test_battery_health_with_low_voltage():
     fixes, sogs, engine_samples = _build_scenario()
-    geocoder = _StubGeocoder()
 
     # voltage sags to a low point mid-trip, then recovers
     battery_samples = []
@@ -421,7 +467,7 @@ def test_battery_health_with_low_voltage():
 
     trips = build_trips(
         fixes, sogs, engine_samples, battery_samples=battery_samples,
-        geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+        speed_threshold_kn=0.5, min_stop_minutes=10,
     )
 
     assert len(trips) == 1
@@ -433,11 +479,10 @@ def test_battery_health_with_low_voltage():
 
 def test_battery_health_absent_without_samples():
     fixes, sogs, engine_samples = _build_scenario()
-    geocoder = _StubGeocoder()
 
     trips = build_trips(
         fixes, sogs, engine_samples,
-        geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+        speed_threshold_kn=0.5, min_stop_minutes=10,
     )
 
     assert len(trips) == 1
@@ -449,7 +494,6 @@ def test_typical_rpm_is_the_most_common_bucketed_value():
     it reflects the steady cruising speed rather than being skewed by idle/neutral periods or
     brief revs."""
     fixes, sogs, engine_samples = _build_scenario()
-    geocoder = _StubGeocoder()
 
     rpm_samples = []
     for m in range(0, 54):
@@ -462,7 +506,7 @@ def test_typical_rpm_is_the_most_common_bucketed_value():
 
     trips = build_trips(
         fixes, sogs, engine_samples, rpm_samples=rpm_samples,
-        geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+        speed_threshold_kn=0.5, min_stop_minutes=10,
     )
 
     assert len(trips) == 1
@@ -471,11 +515,10 @@ def test_typical_rpm_is_the_most_common_bucketed_value():
 
 def test_typical_rpm_absent_without_samples():
     fixes, sogs, engine_samples = _build_scenario()
-    geocoder = _StubGeocoder()
 
     trips = build_trips(
         fixes, sogs, engine_samples,
-        geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+        speed_threshold_kn=0.5, min_stop_minutes=10,
     )
 
     assert len(trips) == 1
@@ -515,10 +558,9 @@ def test_typical_rpm_speed_range_reflects_speed_at_that_rpm_not_trip_average():
         sogs.append(SogSample(_dt(m), 0.0))
         engine_samples.append(EngineSample(_dt(m), 0, 0.5, 3600 * 100 + m * 60))
 
-    geocoder = _StubGeocoder()
     trips = build_trips(
         fixes, sogs, engine_samples, rpm_samples=rpm_samples,
-        geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+        speed_threshold_kn=0.5, min_stop_minutes=10,
     )
 
     assert len(trips) == 1
@@ -564,10 +606,9 @@ def test_typical_rpm_speed_range_ignores_a_brief_pass_through_while_accelerating
         sogs.append(SogSample(_dt(m), 0.0))
         engine_samples.append(EngineSample(_dt(m), 0, 0.5, 3600 * 100 + m * 60))
 
-    geocoder = _StubGeocoder()
     trips = build_trips(
         fixes, sogs, engine_samples, rpm_samples=rpm_samples,
-        geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+        speed_threshold_kn=0.5, min_stop_minutes=10,
     )
 
     assert len(trips) == 1
@@ -583,7 +624,6 @@ def test_typical_rpm_speed_range_ignores_a_brief_pass_through_while_accelerating
 
 def test_motion_variation_reflects_roll_and_pitch_spread():
     fixes, sogs, engine_samples = _build_scenario()
-    geocoder = _StubGeocoder()
 
     attitude_samples = []
     for m in range(0, 54):
@@ -597,7 +637,7 @@ def test_motion_variation_reflects_roll_and_pitch_spread():
 
     trips = build_trips(
         fixes, sogs, engine_samples, attitude_samples=attitude_samples,
-        geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+        speed_threshold_kn=0.5, min_stop_minutes=10,
     )
 
     assert len(trips) == 1
@@ -613,7 +653,6 @@ def test_motion_variation_range_survives_a_single_rough_patch():
     """A trip that's calm except for one short rough patch should still show the full
     peak-to-peak swing, even though the standard deviation gets diluted by the calm majority."""
     fixes, sogs, engine_samples = _build_scenario()
-    geocoder = _StubGeocoder()
 
     attitude_samples = []
     for m in range(0, 54):
@@ -625,7 +664,7 @@ def test_motion_variation_range_survives_a_single_rough_patch():
 
     trips = build_trips(
         fixes, sogs, engine_samples, attitude_samples=attitude_samples,
-        geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+        speed_threshold_kn=0.5, min_stop_minutes=10,
     )
 
     assert len(trips) == 1
@@ -636,11 +675,10 @@ def test_motion_variation_range_survives_a_single_rough_patch():
 
 def test_motion_variation_absent_without_samples():
     fixes, sogs, engine_samples = _build_scenario()
-    geocoder = _StubGeocoder()
 
     trips = build_trips(
         fixes, sogs, engine_samples,
-        geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+        speed_threshold_kn=0.5, min_stop_minutes=10,
     )
 
     assert len(trips) == 1
@@ -652,7 +690,6 @@ def test_motion_variation_absent_without_samples():
 
 def test_engine_health_and_warnings():
     fixes, sogs, _unused_engine = _build_scenario()
-    geocoder = _StubGeocoder()
 
     engine_samples = []
     for m in range(0, 54):
@@ -671,7 +708,7 @@ def test_engine_health_and_warnings():
         )
 
     trips = build_trips(
-        fixes, sogs, engine_samples, geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10
+        fixes, sogs, engine_samples, speed_threshold_kn=0.5, min_stop_minutes=10
     )
 
     assert len(trips) == 1
@@ -696,9 +733,8 @@ def test_short_stop_does_not_split_trip():
     fixes = fixes[:39] + extra_fixes + fixes[39:]
     sogs = sogs[:39] + extra_sogs + sogs[39:]
 
-    geocoder = _StubGeocoder()
     trips = build_trips(
-        fixes, sogs, engine_samples, geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10
+        fixes, sogs, engine_samples, speed_threshold_kn=0.5, min_stop_minutes=10
     )
 
     assert len(trips) == 1
@@ -742,21 +778,22 @@ def test_large_data_gap_keeps_harbor_but_excludes_gap_from_duration():
         sogs.append(SogSample(_dt(m), 2.0))
         engine_samples.append(EngineSample(_dt(m), 0, 0.0, 3600 * 100 + m * 60))  # engine off
 
-    geocoder = _StubGeocoder()
     trips = build_trips(
-        fixes, sogs, engine_samples, geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10
+        fixes, sogs, engine_samples, speed_threshold_kn=0.5, min_stop_minutes=10
     )
 
     assert len(trips) == 2  # the main trip, and the short trip after the gap, separately
     first_trip, second_trip = trips
 
     # the main trip keeps its real arrival port (not "Unknown"!)...
-    assert first_trip.arrive_place == "Port@52.40,4.95"
+    assert first_trip.arrive_lat == pytest.approx(52.40, abs=0.005)
+    assert first_trip.arrive_lon == pytest.approx(4.95, abs=0.005)
     # ...with a duration that doesn't bridge the gap
     assert first_trip.duration < timedelta(hours=1)
 
     # the trip after the gap logically departs from that same port
-    assert second_trip.depart_place == "Port@52.40,4.95"
+    assert second_trip.depart_lat == pytest.approx(52.40, abs=0.005)
+    assert second_trip.depart_lon == pytest.approx(4.95, abs=0.005)
     assert second_trip.arrive_place == "Unknown (end outside log file)"
 
 
@@ -775,14 +812,14 @@ def test_negligible_distance_trip_is_filtered_out():
         sogs.append(SogSample(_dt(m), 2.0))
         engine_samples.append(EngineSample(_dt(m), 0, 0.0, 3600 * 100 + m * 60))
 
-    geocoder = _StubGeocoder()
     trips = build_trips(
-        fixes, sogs, engine_samples, geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10
+        fixes, sogs, engine_samples, speed_threshold_kn=0.5, min_stop_minutes=10
     )
 
     # only the original trip (52.30 -> 52.40) should remain
     assert len(trips) == 1
-    assert trips[0].arrive_place == "Port@52.40,4.95"
+    assert trips[0].arrive_lat == pytest.approx(52.40, abs=0.005)
+    assert trips[0].arrive_lon == pytest.approx(4.95, abs=0.005)
 
 
 def test_gap_within_a_stationary_run_does_not_bridge_to_a_later_unrelated_stay():
@@ -825,9 +862,8 @@ def test_gap_within_a_stationary_run_does_not_bridge_to_a_later_unrelated_stay()
         sogs.append(SogSample(_dt(m), 0.0))
         engine_samples.append(EngineSample(_dt(m), 0, 0.5, 3600 * 100 + m * 60))
 
-    geocoder = _StubGeocoder()
     trips = build_trips(
-        fixes, sogs, engine_samples, geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+        fixes, sogs, engine_samples, speed_threshold_kn=0.5, min_stop_minutes=10,
     )
 
     assert len(trips) == 1
@@ -871,9 +907,8 @@ def test_negligible_trip_between_two_stays_is_folded_into_one_combined_stay():
         sogs.append(SogSample(_dt(m), 0.0))
         engine_samples.append(EngineSample(_dt(m), 0, 0.5, 3600 * 100 + m * 60))
 
-    geocoder = _StubGeocoder()
     trips = build_trips(
-        fixes, sogs, engine_samples, geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+        fixes, sogs, engine_samples, speed_threshold_kn=0.5, min_stop_minutes=10,
     )
 
     # no separate mini-trip for the nudge -- just the original trip
@@ -929,9 +964,8 @@ def test_same_stay_looks_right_as_a_departure_but_needs_the_marker_splice_as_an_
     for m in range(84, 96):
         add(m, 52.50, 5.00, 0.0, 0.5)
 
-    geocoder = _StubGeocoder()
     trips = build_trips(
-        fixes, sogs, engine_samples, geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+        fixes, sogs, engine_samples, speed_threshold_kn=0.5, min_stop_minutes=10,
     )
 
     assert len(trips) == 2
@@ -974,10 +1008,9 @@ def test_min_trip_distance_nm_can_be_disabled():
         sogs.append(SogSample(_dt(m), 2.0))
         engine_samples.append(EngineSample(_dt(m), 0, 0.0, 3600 * 100 + m * 60))
 
-    geocoder = _StubGeocoder()
     trips = build_trips(
         fixes, sogs, engine_samples,
-        geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10, min_trip_distance_nm=0.0,
+        speed_threshold_kn=0.5, min_stop_minutes=10, min_trip_distance_nm=0.0,
     )
 
     assert len(trips) == 2  # with the filter disabled, the tiny trip counts too
@@ -1017,9 +1050,8 @@ def test_arrival_position_uses_only_the_final_resting_stretch_after_a_folded_int
     for m in range(57, 69):
         add(m, 52.402246, 0.0, 0.0)  # the boat's real final berth, engine off for good, 12 min
 
-    geocoder = _StubGeocoder()
     trips = build_trips(
-        fixes, sogs, engine_samples, geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+        fixes, sogs, engine_samples, speed_threshold_kn=0.5, min_stop_minutes=10,
         min_leg_distance_nm=0.2, lock_radius_m=10.0,
     )
 
@@ -1060,9 +1092,8 @@ def test_arrival_position_stays_the_full_average_when_an_engine_restart_did_not_
         # -- safely under lock_radius_m=10.0
         add(m, 52.40007, 0.0, 0.0)
 
-    geocoder = _StubGeocoder()
     trips = build_trips(
-        fixes, sogs, engine_samples, geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+        fixes, sogs, engine_samples, speed_threshold_kn=0.5, min_stop_minutes=10,
         lock_radius_m=10.0,
     )
 
@@ -1095,22 +1126,21 @@ def test_min_leg_distance_nm_folds_an_in_harbour_reposition_into_one_trip():
         sogs.append(SogSample(_dt(m), 0.0))
         engine_samples.append(EngineSample(_dt(m), 0, 0.5, 3600 * 100 + m * 60))
 
-    geocoder = _StubGeocoder()
 
     # Unset (defaults to --min-trip-distance-nm's own value, same as before this feature existed):
     # the 0.3 nm reposition is a real trip on its own, splitting the visit in two.
     trips_default = build_trips(
-        fixes, sogs, engine_samples, geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+        fixes, sogs, engine_samples, speed_threshold_kn=0.5, min_stop_minutes=10,
     )
     assert len(trips_default) == 2
 
     # With --min-leg-distance-nm=0.5 (the CLI's own default): folded into one continuous arrival.
     trips_with_leg_distance = build_trips(
-        fixes, sogs, engine_samples, geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+        fixes, sogs, engine_samples, speed_threshold_kn=0.5, min_stop_minutes=10,
         min_leg_distance_nm=0.5,
     )
     assert len(trips_with_leg_distance) == 1
-    assert trips_with_leg_distance[0].arrive_place.startswith("Port@52.40")
+    assert trips_with_leg_distance[0].arrive_lat == pytest.approx(52.40, abs=0.005)
 
 
 def test_noisy_low_speed_blip_is_folded_by_spatial_spread_even_though_its_path_length_adds_up():
@@ -1142,9 +1172,8 @@ def test_noisy_low_speed_blip_is_folded_by_spatial_spread_even_though_its_path_l
         fixes.append(PositionFix(_dt(m), 52.30, 4.90))
         sogs.append(SogSample(_dt(m), 0.0))
 
-    geocoder = _StubGeocoder()
     trips = build_trips(
-        fixes, sogs, [], geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+        fixes, sogs, [], speed_threshold_kn=0.5, min_stop_minutes=10,
         lock_radius_m=10.0,
     )
 
@@ -1172,9 +1201,8 @@ def test_noisy_low_speed_blip_is_not_folded_when_lock_radius_m_is_none():
         fixes.append(PositionFix(_dt(m), 52.30, 4.90))
         sogs.append(SogSample(_dt(m), 0.0))
 
-    geocoder = _StubGeocoder()
     trips = build_trips(
-        fixes, sogs, [], geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+        fixes, sogs, [], speed_threshold_kn=0.5, min_stop_minutes=10,
     )
 
     assert len(trips) == 1  # unchanged from before this fix -- the blip still shows as its own trip
@@ -1208,15 +1236,14 @@ def test_real_short_there_and_back_trip_is_not_folded_despite_near_zero_net_disp
         fixes.append(PositionFix(_dt(m), 52.30, 4.90))
         sogs.append(SogSample(_dt(m), 0.0))
 
-    geocoder = _StubGeocoder()
     trips = build_trips(
-        fixes, sogs, [], geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10,
+        fixes, sogs, [], speed_threshold_kn=0.5, min_stop_minutes=10,
         lock_radius_m=10.0,
     )
 
     assert len(trips) == 1  # a real excursion, not folded away
-    assert trips[0].depart_place.startswith("Port@52.30")
-    assert trips[0].arrive_place.startswith("Port@52.30")  # back at the same berth, still a real trip
+    assert trips[0].depart_lat == pytest.approx(52.30, abs=0.005)
+    assert trips[0].arrive_lat == pytest.approx(52.30, abs=0.005)  # back at the same berth, still a real trip
 
 
 def test_gap_masked_by_moving_noise_on_both_sides_still_splits_the_trip():
@@ -1257,16 +1284,17 @@ def test_gap_masked_by_moving_noise_on_both_sides_still_splits_the_trip():
         sogs.append(SogSample(_dt(m), 0.0))
         engine_samples.append(EngineSample(_dt(m), 0, 0.0, 3600 * 100 + m * 60))
 
-    geocoder = _StubGeocoder()
     trips = build_trips(
         fixes, sogs, engine_samples,
-        geocoder=geocoder, speed_threshold_kn=0.25, min_stop_minutes=10, max_gap_minutes=10,
+        speed_threshold_kn=0.25, min_stop_minutes=10, max_gap_minutes=10,
     )
 
     assert len(trips) == 1  # the phantom 0 nm hop across the gap is filtered out
     trip = trips[0]
-    assert trip.depart_place == "Port@52.30,4.90"
-    assert trip.arrive_place == "Port@52.35,4.95"  # not "Unknown" and not haven B found hours later
+    assert trip.depart_lat == pytest.approx(52.30, abs=0.005)
+    assert trip.depart_lon == pytest.approx(4.90, abs=0.005)
+    assert trip.arrive_lat == pytest.approx(52.35, abs=0.005)
+    assert trip.arrive_lon == pytest.approx(4.95, abs=0.005)  # not "Unknown" and not haven B found hours later
     assert trip.duration < timedelta(minutes=20)  # doesn't bridge the ~15 minute gap
 
 
@@ -1302,27 +1330,25 @@ def test_lock_pause_is_folded_into_trip():
     """Engine off, minimal drift (well under --lock-radius-m), and it comes back on later the
     same trip -- treated as a lock/opening bridge, not a port visit."""
     fixes, sogs, engine_samples = _lock_scenario(anchor_drift=False)
-    geocoder = _StubGeocoder()
 
     trips = build_trips(
-        fixes, sogs, engine_samples, geocoder=geocoder,
+        fixes, sogs, engine_samples,
         speed_threshold_kn=0.5, min_stop_minutes=10,
         lock_radius_m=10.0, lock_max_duration_minutes=120.0,
     )
 
     assert len(trips) == 1  # the lock pause doesn't show up as a separate port visit
-    assert trips[0].depart_place.startswith("Port@52.30")
-    assert trips[0].arrive_place.startswith("Port@52.45")
+    assert trips[0].depart_lat == pytest.approx(52.30, abs=0.005)
+    assert trips[0].arrive_lat == pytest.approx(52.45, abs=0.005)
 
 
 def test_lock_detection_disabled_by_default():
     """The same scenario as above, but without opting in: build_trips() keeps the old, purely
     speed-based behavior -- a 20-minute stop is a real port visit."""
     fixes, sogs, engine_samples = _lock_scenario(anchor_drift=False)
-    geocoder = _StubGeocoder()
 
     trips = build_trips(
-        fixes, sogs, engine_samples, geocoder=geocoder,
+        fixes, sogs, engine_samples,
         speed_threshold_kn=0.5, min_stop_minutes=10,
     )
 
@@ -1333,10 +1359,9 @@ def test_anchor_stop_with_drift_is_not_folded_as_a_lock():
     """Engine off and on again, same as a lock, but the boat drifted well beyond
     --lock-radius-m (e.g. swinging at anchor) -- still counts as a real stop."""
     fixes, sogs, engine_samples = _lock_scenario(anchor_drift=True)
-    geocoder = _StubGeocoder()
 
     trips = build_trips(
-        fixes, sogs, engine_samples, geocoder=geocoder,
+        fixes, sogs, engine_samples,
         speed_threshold_kn=0.5, min_stop_minutes=10,
         lock_radius_m=10.0, lock_max_duration_minutes=120.0,
     )
@@ -1377,16 +1402,15 @@ def test_confined_stop_with_engine_running_is_folded_like_a_lock():
     for m in range(57, 69):
         add(m, 52.403, 4.90, 0.0, 0.0)  # the actual berth, 11 min, engine off
 
-    geocoder = _StubGeocoder()
     trips = build_trips(
-        fixes, sogs, engine_samples, geocoder=geocoder,
+        fixes, sogs, engine_samples,
         speed_threshold_kn=0.5, min_stop_minutes=10,
         lock_radius_m=10.0, lock_max_duration_minutes=120.0,
     )
 
     assert len(trips) == 1  # the wait-for-a-berth pause doesn't show up as a separate port visit
-    assert trips[0].depart_place.startswith("Port@52.30")
-    assert trips[0].arrive_place.startswith("Port@52.40")
+    assert trips[0].depart_lat == pytest.approx(52.30, abs=0.005)
+    assert trips[0].arrive_lat == pytest.approx(52.40, abs=0.005)
 
 
 def test_confined_stop_with_engine_running_stays_a_real_stop_without_lock_detection():
@@ -1412,9 +1436,8 @@ def test_confined_stop_with_engine_running_stays_a_real_stop_without_lock_detect
     for m in range(57, 69):
         add(m, 52.403, 4.90, 0.0, 0.0)
 
-    geocoder = _StubGeocoder()
     trips = build_trips(
-        fixes, sogs, engine_samples, geocoder=geocoder,
+        fixes, sogs, engine_samples,
         speed_threshold_kn=0.5, min_stop_minutes=10,
     )
 
@@ -1442,15 +1465,14 @@ def test_confined_stop_with_engine_running_is_not_folded_when_it_is_the_last_run
     for m in range(42, 54):
         add(m, 52.40, 4.90, 0.2, 2.0)  # confined, engine idling, 11 min -- but the log ends right here
 
-    geocoder = _StubGeocoder()
     trips = build_trips(
-        fixes, sogs, engine_samples, geocoder=geocoder,
+        fixes, sogs, engine_samples,
         speed_threshold_kn=0.5, min_stop_minutes=10,
         lock_radius_m=10.0, lock_max_duration_minutes=120.0,
     )
 
     assert len(trips) == 1
-    assert trips[0].arrive_place.startswith("Port@52.40")  # kept as a real arrival, not folded away
+    assert trips[0].arrive_lat == pytest.approx(52.40, abs=0.005)  # kept as a real arrival, not folded away
 
 
 def test_lock_check_does_not_apply_to_the_first_stop_in_the_data():
@@ -1472,15 +1494,14 @@ def test_lock_check_does_not_apply_to_the_first_stop_in_the_data():
     for m in range(35, 46):
         add(m, 52.35, 4.90, 0.0, 0.0)  # port B
 
-    geocoder = _StubGeocoder()
     trips = build_trips(
-        fixes, sogs, engine_samples, geocoder=geocoder,
+        fixes, sogs, engine_samples,
         speed_threshold_kn=0.5, min_stop_minutes=10,
         lock_radius_m=10.0, lock_max_duration_minutes=120.0,
     )
 
     assert len(trips) == 1
-    assert trips[0].depart_place.startswith("Port@52.30")  # not "Unknown (start outside log file)"
+    assert trips[0].depart_lat == pytest.approx(52.30, abs=0.005)  # not "Unknown (start outside log file)"
 
 
 def test_lock_check_never_applies_to_a_stop_the_engine_never_restarts_from():
@@ -1496,15 +1517,14 @@ def test_lock_check_never_applies_to_a_stop_the_engine_never_restarts_from():
     sogs = [s for s in sogs if s.time < cutoff]
     engine_samples = [e for e in engine_samples if e.time < cutoff]
 
-    geocoder = _StubGeocoder()
     trips = build_trips(
-        fixes, sogs, engine_samples, geocoder=geocoder,
+        fixes, sogs, engine_samples,
         speed_threshold_kn=0.5, min_stop_minutes=10,
         lock_radius_m=10.0, lock_max_duration_minutes=120.0,
     )
 
     assert len(trips) == 1
-    assert trips[0].arrive_place.startswith("Port@52.35")  # kept as a real arrival, not folded away
+    assert trips[0].arrive_lat == pytest.approx(52.35, abs=0.005)  # kept as a real arrival, not folded away
 
 
 def test_long_stop_fragmented_by_sog_noise_still_recognized():
@@ -1539,16 +1559,15 @@ def test_long_stop_fragmented_by_sog_noise_still_recognized():
     for m in range(187, 198):
         add(m, 52.45, 4.90, 0.0, 0.0)  # port Y
 
-    geocoder = _StubGeocoder()
     trips = build_trips(
-        fixes, sogs, engine_samples, geocoder=geocoder,
+        fixes, sogs, engine_samples,
         speed_threshold_kn=0.5, min_stop_minutes=10,
         lock_radius_m=10.0, lock_max_duration_minutes=120.0,
     )
 
     assert len(trips) == 2  # port X stays a real port visit, despite the noisy tail fragment
-    assert trips[0].arrive_place.startswith("Port@52.35")
-    assert trips[1].depart_place.startswith("Port@52.35")
+    assert trips[0].arrive_lat == pytest.approx(52.35, abs=0.005)
+    assert trips[1].depart_lat == pytest.approx(52.35, abs=0.005)
 
 
 def test_small_data_gap_does_not_split_trip():
@@ -1560,9 +1579,8 @@ def test_small_data_gap_does_not_split_trip():
     fixes = [f for f in fixes if not (43 <= (f.time - _dt(0)).total_seconds() / 60 < 45)]
     sogs = [s for s in sogs if not (43 <= (s.time - _dt(0)).total_seconds() / 60 < 45)]
 
-    geocoder = _StubGeocoder()
     trips = build_trips(
-        fixes, sogs, engine_samples, geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10
+        fixes, sogs, engine_samples, speed_threshold_kn=0.5, min_stop_minutes=10
     )
 
     assert len(trips) == 1  # unchanged behavior: the small gap is ignored
@@ -1593,9 +1611,8 @@ def test_engine_hours_extends_into_continuous_running_before_and_after_the_trip(
     for m in range(30, 40):  # engine stopped, rest of the port B stay
         add(m, 52.35, 4.95, 0.0, 0.0)
 
-    geocoder = _StubGeocoder()
     trips = build_trips(
-        fixes, sogs, engine_samples, geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10
+        fixes, sogs, engine_samples, speed_threshold_kn=0.5, min_stop_minutes=10
     )
 
     assert len(trips) == 1
@@ -1639,9 +1656,8 @@ def test_engine_hours_extension_splits_a_shared_stay_instead_of_double_counting(
     for m in range(51, 65):  # rest of port C, engine off
         add(m, 52.40, 5.00, 0.0, 0.0)
 
-    geocoder = _StubGeocoder()
     trips = build_trips(
-        fixes, sogs, engine_samples, geocoder=geocoder, speed_threshold_kn=0.5, min_stop_minutes=10
+        fixes, sogs, engine_samples, speed_threshold_kn=0.5, min_stop_minutes=10
     )
 
     assert len(trips) == 2
