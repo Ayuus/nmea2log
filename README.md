@@ -12,13 +12,14 @@ software like OpenCPN/Navionics) — same name as `-o`, different extension.
 
 **[View an example logbook](https://htmlpreview.github.io/?https://github.com/Ayuus/nmea2log/blob/main/examples/demo-logbook.html)** — a fictional boat and trips ([examples/demo-logbook.html](examples/demo-logbook.html)), showing what the generated HTML output looks like.
 
-> **Looking for testers**: so far this has only been run against one boat's NMEA2000 network
-> (one Actisense W2K-2, one particular mix of engine/GPS/depth/battery instruments). Other boats
-> report data differently enough — different instrument brands, different PGNs available, engines
-> that report fuel rate differently, and so on — that edge cases are likely still hiding. If you
-> have a W2K-2 and try this on your own boat, feedback (what worked, what looked wrong, a
-> `.ebl` file that fails to parse) is very welcome via
-> [GitHub issues](https://github.com/Ayuus/nmea2log/issues).
+> **Looking for testers**: so far this has only been run against one boat's NMEA2000 network — a
+> **motorboat** (one Actisense W2K-2, one particular mix of engine/GPS/depth/battery instruments).
+> Other boats report data differently enough — different instrument brands, different PGNs
+> available, engines that report fuel rate differently, and so on — that edge cases are likely
+> still hiding. Sailboat support in particular is on the wishlist (wind instruments, a boat that's
+> often underway with the engine off) but untested so far. If you have a W2K-2 and try this on
+> your own boat, feedback (what worked, what looked wrong, a `.ebl` file that fails to parse) is
+> very welcome via [GitHub issues](https://github.com/Ayuus/nmea2log/issues).
 
 > **Attribution**: the SD-card `.ebl` binary log format has never been officially published by
 > Actisense. `ebl_reader.py` is a clean-room Python reimplementation based on reading the
