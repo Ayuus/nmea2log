@@ -285,6 +285,10 @@ nmea2log Actisense/EBL000000/000000_014.ebl Actisense/EBL000000/000000_015.ebl -
 
 ### Per-trip remarks, login-gated, via WordPress
 
+**Remarks only work when publishing over WordPress REST (`--upload-rest`), not over SFTP** -- the
+feature is backed by the WordPress plugin below, which has nothing to talk to on a site published
+over plain SFTP.
+
 The preferred way to publish: pass `--remarks-api-url` to add a "Remarks" button+popup
 (save/cancel) to each trip, backed by a small WordPress plugin
 (`wordpress-plugin/nmea2log-remarks.php`) instead of a database or server of this tool's own.
