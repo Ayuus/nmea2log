@@ -10,7 +10,7 @@ year/week, and a clickable, zoomable map per trip. Pass `--csv` and/or `--gpx` t
 **CSV** (`.csv`) and/or a **GPX** with the sailed route per trip (`.gpx`, opens in navigation
 software like OpenCPN/Navionics) — same name as `-o`, different extension.
 
-**[View an example logbook](https://htmlpreview.github.io/?https://github.com/Ayuus/nmea2log/blob/main/examples/demo-logbook.html)** — a fictional boat and trips ([examples/demo-logbook.html](examples/demo-logbook.html)), showing what the generated HTML output looks like.
+**[View an example logbook](https://ayuus.github.io/nmea2log/examples/demo-logbook.html)** — a fictional boat and trips ([examples/demo-logbook.html](examples/demo-logbook.html)), showing what the generated HTML output looks like.
 
 > **Looking for testers**: so far this has only been run against one boat's NMEA2000 network — a
 > **motorboat** (one Actisense W2K-2, one particular mix of engine/GPS/depth/battery instruments).
