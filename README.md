@@ -10,6 +10,8 @@ year/week, and a clickable, zoomable map per trip. Pass `--csv` and/or `--gpx` t
 **CSV** (`.csv`) and/or a **GPX** with the sailed route per trip (`.gpx`, opens in navigation
 software like OpenCPN/Navionics) — same name as `-o`, different extension.
 
+**[View an example logbook](https://htmlpreview.github.io/?https://github.com/Ayuus/nmea2log/blob/main/examples/demo-logbook.html)** — a fictional boat and trips ([examples/demo-logbook.html](examples/demo-logbook.html)), showing what the generated HTML output looks like.
+
 > **Attribution**: the SD-card `.ebl` binary log format has never been officially published by
 > Actisense. `ebl_reader.py` is a clean-room Python reimplementation based on reading the
 > open-source Go library [aldas/go-nmea-client](https://github.com/aldas/go-nmea-client)
