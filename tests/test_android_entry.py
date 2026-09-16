@@ -763,3 +763,31 @@ def test_report_result_uses_minus_one_for_a_missing_trip_or_downloaded_count(tmp
     android_entry._report_result(_Listener(), {"ok": False, "error": "No trips found."})
 
     assert calls == [(False, "No trips found.", False, -1, None, -1)]
+
+
+def test_discover_w2k2_only_reports_true_via_the_callback_when_found(monkeypatch):
+    monkeypatch.setattr(android_entry.w2k2_download, "discover_w2k2", lambda subnet_prefix: "http://10.0.0.5")
+
+    calls = []
+
+    class _Listener:
+        def onDiscoverResult(self, found):
+            calls.append(found)
+
+    android_entry.discover_w2k2_only("192.168.43.", _Listener())
+
+    assert calls == [True]
+
+
+def test_discover_w2k2_only_reports_false_via_the_callback_when_not_found(monkeypatch):
+    monkeypatch.setattr(android_entry.w2k2_download, "discover_w2k2", lambda subnet_prefix: None)
+
+    calls = []
+
+    class _Listener:
+        def onDiscoverResult(self, found):
+            calls.append(found)
+
+    android_entry.discover_w2k2_only("192.168.43.", _Listener())
+
+    assert calls == [False]

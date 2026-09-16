@@ -624,3 +624,19 @@ def _sync_from_w2k2(
         return {"ok": False, "error": f"Unexpected error while building the logbook: {exc}"}
     result["downloaded_count"] = downloaded_count
     return result
+
+
+def discover_w2k2_only(subnet_prefix: str, progress_callback) -> None:
+    """Chaquopy entry point for a plain "is the W2K-2 reachable right now" check -- the same
+    network scan sync_from_w2k2() does as its own first step, but standing alone, with no
+    download/decode/build attempted afterward. Used by the Android app to decide whether to
+    enable its sync button, before committing to a real sync (asked for explicitly: a cheap,
+    local-only "does this device's own hotspot look on" check isn't the same as the W2K-2 itself
+    actually being reachable on it).
+
+    Reports the result via progress_callback.onDiscoverResult(found: bool), not this call's own
+    return value -- same reasoning as _report_result() above: reading a returned PyObject's
+    fields after a Chaquopy call has already returned has been unreliable in this app, while
+    calling into Kotlin *during* the call has not."""
+    found = w2k2_download.discover_w2k2(subnet_prefix) is not None
+    progress_callback.onDiscoverResult(found)
