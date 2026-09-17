@@ -18,7 +18,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Dict, FrozenSet, Iterator, List, Optional, Tuple
 
-from .fix_array import AttitudeArray, FixArray, NavSampleArray, SogArray
+from .fix_array import AttitudeArray, EngineArray, FixArray, NavSampleArray, RpmArray, SogArray, TripFuelArray
 from .geocode import NoGeocoder
 from .log import log
 from .model import (
@@ -1231,12 +1231,12 @@ def _motion_variation(
 def build_trips(
     fixes: FixArray | List[PositionFix],
     sogs: SogArray | List[SogSample],
-    engine_samples: List[EngineSample],
-    trip_fuel_samples: Optional[List[TripFuelSample]] = None,
+    engine_samples: EngineArray | List[EngineSample],
+    trip_fuel_samples: Optional[TripFuelArray | List[TripFuelSample]] = None,
     depth_samples: Optional[List[DepthSample]] = None,
     water_temp_samples: Optional[List[WaterTempSample]] = None,
     battery_samples: Optional[List[BatterySample]] = None,
-    rpm_samples: Optional[List[EngineRpmSample]] = None,
+    rpm_samples: Optional[RpmArray | List[EngineRpmSample]] = None,
     attitude_samples: Optional[List[AttitudeSample]] = None,
     *,
     speed_threshold_kn: float = 0.5,
@@ -1274,22 +1274,28 @@ def build_trips(
     ``_reclassify_locks``). Both default to ``None`` (disabled) at this level -- the CLI turns
     this on with sensible defaults; left off here so callers/tests that don't care about it get
     the plain speed-based behavior."""
-    # Callers that already accumulate season-wide data as FixArray/SogArray (see fix_array.py --
-    # cli.py/android_entry.py do, to avoid ever holding millions of PositionFix/SogSample objects
-    # at once) pass those straight through; anything else (a plain list, as every existing test
-    # in this file still constructs) is wrapped here so this function's own public contract
-    # doesn't change for any existing caller.
+    # Callers that already accumulate season-wide data as one of fix_array.py's array.array-backed
+    # types (cli.py/android_entry.py do, to avoid ever holding millions of boxed sample objects at
+    # once) pass those straight through; anything else (a plain list, as every existing test in
+    # this file still constructs) is wrapped here so this function's own public contract doesn't
+    # change for any existing caller.
     if not isinstance(fixes, FixArray):
         fixes = FixArray(fixes)
     if not isinstance(sogs, SogArray):
         sogs = SogArray(sogs)
-
+    if not isinstance(engine_samples, EngineArray):
+        engine_samples = EngineArray(engine_samples)
     if trip_fuel_samples is None:
-        trip_fuel_samples = []
+        trip_fuel_samples = TripFuelArray()
+    elif not isinstance(trip_fuel_samples, TripFuelArray):
+        trip_fuel_samples = TripFuelArray(trip_fuel_samples)
+    if rpm_samples is None:
+        rpm_samples = RpmArray()
+    elif not isinstance(rpm_samples, RpmArray):
+        rpm_samples = RpmArray(rpm_samples)
+
     if battery_samples is None:
         battery_samples = []
-    if rpm_samples is None:
-        rpm_samples = []
     if attitude_samples is None:
         attitude_samples = []
     # AttitudeArray gets its own array-native sort (see fix_array.py) -- a plain sorted(...)

@@ -30,7 +30,17 @@ from .cli import (
     _select_primary_gps_source,
     build_arg_parser,
 )
-from .fix_array import AttitudeArray, BatteryArray, DepthArray, FixArray, SogArray, WaterTempArray
+from .fix_array import (
+    AttitudeArray,
+    BatteryArray,
+    DepthArray,
+    EngineArray,
+    FixArray,
+    RpmArray,
+    SogArray,
+    TripFuelArray,
+    WaterTempArray,
+)
 from .geocode import Geocoder
 from .html_writer import write_html_logbook
 from .log import log, set_log_file, set_log_sink
@@ -165,20 +175,21 @@ def run_pipeline(
     # mirrors it.
     widen_attempts = 0
     while True:
-        # fixes_by_source/sogs_by_source accumulate as FixArray/SogArray (see fix_array.py), not
-        # plain lists -- same reasoning as cli.py's _run(): position/speed are this app's
-        # highest-cardinality sample types, and holding a season's worth of them as Python
-        # objects rather than array.array columns is what actually got this app OOM-killed by
-        # the phone's OS.
+        # Every season-wide accumulator here is one of the array.array-backed types from
+        # fix_array.py, not a plain list -- same reasoning as cli.py's _run(): a season's worth of
+        # these held as boxed Python objects instead of array.array columns is what actually got
+        # this app OOM-killed by the phone's OS (confirmed in practice, on a real ~2326-file
+        # archive: engine ~400k samples, RPM ~1.75 million -- comparable cardinality to
+        # position/speed, not negligible).
         fixes_by_source: Dict[int, FixArray] = {}
         sogs_by_source: Dict[int, SogArray] = {}
         depth_by_source: Dict[int, DepthArray] = {}
         water_temp_by_source: Dict[int, WaterTempArray] = {}
         battery_by_source: Dict[int, BatteryArray] = {}
         attitude_by_source: Dict[int, AttitudeArray] = {}
-        all_engine = []
-        all_trip_fuel = []
-        all_rpm = []
+        all_engine = EngineArray()
+        all_trip_fuel = TripFuelArray()
+        all_rpm = RpmArray()
 
         # The cache's own recorded seed only applies to the *original* resume point -- see
         # cli.py's own _run() for why a widened attempt starts one file earlier with no seed at
@@ -234,12 +245,12 @@ def run_pipeline(
 
             _merge_array_by_source(fixes_by_source, fixes, FixArray)
             _merge_array_by_source(sogs_by_source, sogs, SogArray)
-            all_engine += engine
-            all_trip_fuel += trip_fuel
+            all_engine.extend(engine)
+            all_trip_fuel.extend(trip_fuel)
             _merge_array_by_source(depth_by_source, depth, DepthArray)
             _merge_array_by_source(water_temp_by_source, water_temp, WaterTempArray)
             _merge_array_by_source(battery_by_source, battery, BatteryArray)
-            all_rpm += rpm
+            all_rpm.extend(rpm)
             _merge_array_by_source(attitude_by_source, attitude, AttitudeArray)
 
         # Unconditional, unlike the in-loop progress line above (which deliberately skips the very

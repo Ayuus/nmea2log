@@ -10,7 +10,17 @@ from typing import Callable, Dict, Iterable, List, Optional, Tuple, TypeVar
 
 from .config import load_section
 from .ebl_reader import iter_frames as iter_frames_ebl
-from .fix_array import AttitudeArray, BatteryArray, DepthArray, FixArray, SogArray, WaterTempArray
+from .fix_array import (
+    AttitudeArray,
+    BatteryArray,
+    DepthArray,
+    EngineArray,
+    FixArray,
+    RpmArray,
+    SogArray,
+    TripFuelArray,
+    WaterTempArray,
+)
 from .geocode import Geocoder, NoGeocoder
 from .marine import MarineFetcher, NoMarine
 from .weather import NoWeather, WeatherFetcher
@@ -129,24 +139,30 @@ def _merge_array_by_source(target: Dict[int, _ArrayT], addition: Dict[int, list]
 
 
 def _filter_to_dominant_engine(
-    engine_samples: List[EngineSample],
-    trip_fuel_samples: List[TripFuelSample],
-    rpm_samples: List[EngineRpmSample],
-) -> Tuple[List[EngineSample], List[TripFuelSample], List[EngineRpmSample]]:
+    engine_samples: EngineArray,
+    trip_fuel_samples: TripFuelArray,
+    rpm_samples: RpmArray,
+) -> Tuple[EngineArray, TripFuelArray, RpmArray]:
     """Keeps only the engine instance with the most samples, discarding any other instance
     entirely. Used when ``--engine-count 1`` tells us there's really just one physical engine,
     so any additional instance that shows up in the data is noise (a duplicate/ghost source),
-    not a second engine -- the same idea as ``_dominant_source_only`` for GPS sources."""
-    by_instance: Dict[int, List[EngineSample]] = {}
+    not a second engine -- the same idea as ``_dominant_source_only`` for GPS sources.
+
+    Counts per instance rather than grouping full samples into per-instance lists (the season-
+    wide engine_samples/rpm_samples arrays can be hundreds of thousands to millions of samples,
+    see EngineArray/RpmArray's own docstrings in fix_array.py) -- a single filtering pass over
+    each array, once the dominant instance is known, is enough."""
+    counts: Dict[int, int] = {}
     for sample in engine_samples:
-        by_instance.setdefault(sample.instance, []).append(sample)
-    if len(by_instance) <= 1:
+        counts[sample.instance] = counts.get(sample.instance, 0) + 1
+    if len(counts) <= 1:
         return engine_samples, trip_fuel_samples, rpm_samples
 
-    dominant = max(by_instance, key=lambda instance: len(by_instance[instance]))
-    filtered_fuel = [sample for sample in trip_fuel_samples if sample.instance == dominant]
-    filtered_rpm = [sample for sample in rpm_samples if sample.instance == dominant]
-    return by_instance[dominant], filtered_fuel, filtered_rpm
+    dominant = max(counts, key=counts.get)
+    filtered_engine = EngineArray(sample for sample in engine_samples if sample.instance == dominant)
+    filtered_fuel = TripFuelArray(sample for sample in trip_fuel_samples if sample.instance == dominant)
+    filtered_rpm = RpmArray(sample for sample in rpm_samples if sample.instance == dominant)
+    return filtered_engine, filtered_fuel, filtered_rpm
 
 
 def _select_primary_gps_source(
@@ -865,26 +881,23 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     # weather/marine/sample_cache carry over between attempts.
     widen_attempts = 0
     while True:
-        # fixes_by_source/sogs_by_source specifically -- not the other four dicts below, or the
-        # per-file accumulation inside _collect_samples() -- accumulate as FixArray/SogArray (see
-        # fix_array.py) rather than plain lists: position/speed are, by far, this app's
-        # highest-cardinality sample types (a real multi-year archive holds millions), so this is
-        # where holding a season's worth as Python objects instead of array.array columns
-        # actually mattered (found in practice: this is what got the Android app OOM-killed by
-        # the phone's OS). The other four (lower cardinality, but not negligible over a
-        # multi-year archive) get the same treatment below; engine/trip-fuel/RPM samples stay
-        # plain lists -- EngineSample in particular has a FrozenSet[str] field (warnings) that
-        # doesn't map cleanly onto a fixed-width array column, and engine data is only ever
-        # logged while the engine runs, not continuously.
+        # Every season-wide accumulator here is one of the array.array-backed types from
+        # fix_array.py rather than a plain list -- a season's worth of these held as boxed Python
+        # objects instead of array.array columns is what actually got the Android app OOM-killed
+        # by the phone's OS (confirmed in practice, on a real ~2326-file archive: engine ~400k
+        # samples, RPM ~1.75 million -- comparable cardinality to position/speed, not negligible).
+        # EngineArray's own ``warnings`` field (a FrozenSet[str], the one field of the bunch that
+        # doesn't map onto a fixed-width array column) is stored sparsely inside it instead --
+        # see its own docstring.
         fixes_by_source: Dict[int, FixArray] = {}
         sogs_by_source: Dict[int, SogArray] = {}
         depth_by_source: Dict[int, DepthArray] = {}
         water_temp_by_source: Dict[int, WaterTempArray] = {}
         battery_by_source: Dict[int, BatteryArray] = {}
         attitude_by_source: Dict[int, AttitudeArray] = {}
-        all_engine: List[EngineSample] = []
-        all_trip_fuel: List[TripFuelSample] = []
-        all_rpm: List[EngineRpmSample] = []
+        all_engine = EngineArray()
+        all_trip_fuel = TripFuelArray()
+        all_rpm = RpmArray()
 
         # The cache's own recorded seed only applies to the *original* resume point -- a widened
         # attempt starts one file earlier than that, whose own carried-over PGN 126992 time was
@@ -944,12 +957,12 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
 
             _merge_array_by_source(fixes_by_source, fixes, FixArray)
             _merge_array_by_source(sogs_by_source, sogs, SogArray)
-            all_engine += engine
-            all_trip_fuel += trip_fuel
+            all_engine.extend(engine)
+            all_trip_fuel.extend(trip_fuel)
             _merge_array_by_source(depth_by_source, depth, DepthArray)
             _merge_array_by_source(water_temp_by_source, water_temp, WaterTempArray)
             _merge_array_by_source(battery_by_source, battery, BatteryArray)
-            all_rpm += rpm
+            all_rpm.extend(rpm)
             _merge_array_by_source(attitude_by_source, attitude, AttitudeArray)
 
         # Unconditional, unlike the in-loop progress line above (which deliberately skips the very

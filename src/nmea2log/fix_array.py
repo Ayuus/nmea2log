@@ -26,9 +26,19 @@ import array
 import bisect
 import math
 from datetime import datetime, timedelta
-from typing import Iterable, Iterator, List, Optional, Tuple, Union
+from typing import Dict, FrozenSet, Iterable, Iterator, List, Optional, Tuple, Union
 
-from .model import AttitudeSample, BatterySample, DepthSample, PositionFix, SogSample, WaterTempSample
+from .model import (
+    AttitudeSample,
+    BatterySample,
+    DepthSample,
+    EngineRpmSample,
+    EngineSample,
+    PositionFix,
+    SogSample,
+    TripFuelSample,
+    WaterTempSample,
+)
 
 _EPOCH = datetime(1970, 1, 1)
 
@@ -279,6 +289,192 @@ class BatteryArray:
 
     def __repr__(self) -> str:
         return f"BatteryArray({list(self)!r})"
+
+
+class RpmArray:
+    """Same idea as FixArray, for EngineRpmSample (PGN 127488, engine speed) -- on a real
+    full-season archive this is comparable in cardinality to GPS fixes (an NMEA2000 engine
+    typically reports RPM at least once a second whenever running: confirmed in practice on a
+    real ~2326-file archive, roughly 1.75 million samples), so the same columnar approach
+    applies here as everywhere else a season-wide accumulator exists. build_trips() only ever
+    consumes this via a single filtering pass per trip (see _rpm_at_time/_typical_rpm/
+    _typical_rpm_speed_range in tripbuilder.py), so -- unlike NavSampleArray -- a plain
+    __iter__ yielding real EngineRpmSample objects one at a time is enough: those functions
+    never need to change at all."""
+
+    __slots__ = ("_time", "_instance", "_rpm")
+
+    def __init__(self, samples: Iterable[EngineRpmSample] = ()) -> None:
+        self._time: "array.array[float]" = array.array("d")
+        self._instance: "array.array[float]" = array.array("d")
+        self._rpm: "array.array[float]" = array.array("d")
+        self.extend(samples)
+
+    def append(self, sample: EngineRpmSample) -> None:
+        self._time.append(_to_epoch(sample.time))
+        self._instance.append(sample.instance)
+        self._rpm.append(sample.rpm if sample.rpm is not None else math.nan)
+
+    def extend(self, samples: Iterable[EngineRpmSample]) -> None:
+        for sample in samples:
+            self.append(sample)
+
+    def __len__(self) -> int:
+        return len(self._time)
+
+    def __iter__(self) -> Iterator[EngineRpmSample]:
+        for t, instance, rpm in zip(self._time, self._instance, self._rpm):
+            yield EngineRpmSample(_from_epoch(t), int(instance), None if math.isnan(rpm) else rpm)
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, RpmArray):
+            return list(self) == list(other)
+        if isinstance(other, list):
+            return list(self) == other
+        return NotImplemented
+
+    def __repr__(self) -> str:
+        return f"RpmArray({list(self)!r})"
+
+
+class TripFuelArray:
+    """Same idea as FixArray, for TripFuelSample (PGN 127497, the engine's own trip fuel meter)."""
+
+    __slots__ = ("_time", "_instance", "_trip_fuel_used_l")
+
+    def __init__(self, samples: Iterable[TripFuelSample] = ()) -> None:
+        self._time: "array.array[float]" = array.array("d")
+        self._instance: "array.array[float]" = array.array("d")
+        self._trip_fuel_used_l: "array.array[float]" = array.array("d")
+        self.extend(samples)
+
+    def append(self, sample: TripFuelSample) -> None:
+        self._time.append(_to_epoch(sample.time))
+        self._instance.append(sample.instance)
+        self._trip_fuel_used_l.append(
+            sample.trip_fuel_used_l if sample.trip_fuel_used_l is not None else math.nan
+        )
+
+    def extend(self, samples: Iterable[TripFuelSample]) -> None:
+        for sample in samples:
+            self.append(sample)
+
+    def __len__(self) -> int:
+        return len(self._time)
+
+    def __iter__(self) -> Iterator[TripFuelSample]:
+        for t, instance, trip_fuel in zip(self._time, self._instance, self._trip_fuel_used_l):
+            yield TripFuelSample(_from_epoch(t), int(instance), None if math.isnan(trip_fuel) else trip_fuel)
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, TripFuelArray):
+            return list(self) == list(other)
+        if isinstance(other, list):
+            return list(self) == other
+        return NotImplemented
+
+    def __repr__(self) -> str:
+        return f"TripFuelArray({list(self)!r})"
+
+
+class EngineArray:
+    """Same idea as FixArray, for EngineSample -- the season-wide list of raw engine PGN
+    readings (fuel rate, hour meter, oil/coolant temperature, alternator voltage, engine load)
+    build_trips() holds resident for its entire run (every per-trip engine statistics function
+    -- _engine_health, _fuel_liters, _engine_hours_delta, ... -- filters this whole list down to
+    its own trip's time window, once per trip). On a real full-season archive this is hundreds
+    of thousands of samples (confirmed in practice: ~400k on a real 2326-file archive), so the
+    same columnar approach applies.
+
+    Only ``warnings`` (a FrozenSet[str], almost always empty in practice) can't go in an
+    array.array column -- stored in a plain sparse dict instead (row index -> non-empty warning
+    set), so the overwhelmingly common empty case costs nothing, rather than a per-row frozenset
+    object regardless."""
+
+    __slots__ = (
+        "_time",
+        "_instance",
+        "_fuel_rate_lph",
+        "_total_hours_s",
+        "_oil_pressure_pa",
+        "_oil_temperature_k",
+        "_coolant_temperature_k",
+        "_alternator_voltage_v",
+        "_engine_load_pct",
+        "_warnings",
+    )
+
+    def __init__(self, samples: Iterable[EngineSample] = ()) -> None:
+        self._time: "array.array[float]" = array.array("d")
+        self._instance: "array.array[float]" = array.array("d")
+        self._fuel_rate_lph: "array.array[float]" = array.array("d")
+        self._total_hours_s: "array.array[float]" = array.array("d")
+        self._oil_pressure_pa: "array.array[float]" = array.array("d")
+        self._oil_temperature_k: "array.array[float]" = array.array("d")
+        self._coolant_temperature_k: "array.array[float]" = array.array("d")
+        self._alternator_voltage_v: "array.array[float]" = array.array("d")
+        self._engine_load_pct: "array.array[float]" = array.array("d")
+        self._warnings: Dict[int, FrozenSet[str]] = {}
+        self.extend(samples)
+
+    def append(self, sample: EngineSample) -> None:
+        i = len(self._time)
+        self._time.append(_to_epoch(sample.time))
+        self._instance.append(sample.instance)
+        self._fuel_rate_lph.append(sample.fuel_rate_lph if sample.fuel_rate_lph is not None else math.nan)
+        self._total_hours_s.append(sample.total_hours_s if sample.total_hours_s is not None else math.nan)
+        self._oil_pressure_pa.append(sample.oil_pressure_pa if sample.oil_pressure_pa is not None else math.nan)
+        self._oil_temperature_k.append(
+            sample.oil_temperature_k if sample.oil_temperature_k is not None else math.nan
+        )
+        self._coolant_temperature_k.append(
+            sample.coolant_temperature_k if sample.coolant_temperature_k is not None else math.nan
+        )
+        self._alternator_voltage_v.append(
+            sample.alternator_voltage_v if sample.alternator_voltage_v is not None else math.nan
+        )
+        self._engine_load_pct.append(sample.engine_load_pct if sample.engine_load_pct is not None else math.nan)
+        if sample.warnings:
+            self._warnings[i] = sample.warnings
+
+    def extend(self, samples: Iterable[EngineSample]) -> None:
+        for sample in samples:
+            self.append(sample)
+
+    def __len__(self) -> int:
+        return len(self._time)
+
+    def __iter__(self) -> Iterator[EngineSample]:
+        for i in range(len(self)):
+            fuel_rate = self._fuel_rate_lph[i]
+            total_hours = self._total_hours_s[i]
+            oil_pressure = self._oil_pressure_pa[i]
+            oil_temperature = self._oil_temperature_k[i]
+            coolant_temperature = self._coolant_temperature_k[i]
+            alternator_voltage = self._alternator_voltage_v[i]
+            engine_load = self._engine_load_pct[i]
+            yield EngineSample(
+                time=_from_epoch(self._time[i]),
+                instance=int(self._instance[i]),
+                fuel_rate_lph=None if math.isnan(fuel_rate) else fuel_rate,
+                total_hours_s=None if math.isnan(total_hours) else int(total_hours),
+                oil_pressure_pa=None if math.isnan(oil_pressure) else oil_pressure,
+                oil_temperature_k=None if math.isnan(oil_temperature) else oil_temperature,
+                coolant_temperature_k=None if math.isnan(coolant_temperature) else coolant_temperature,
+                alternator_voltage_v=None if math.isnan(alternator_voltage) else alternator_voltage,
+                engine_load_pct=None if math.isnan(engine_load) else engine_load,
+                warnings=self._warnings.get(i, frozenset()),
+            )
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, EngineArray):
+            return list(self) == list(other)
+        if isinstance(other, list):
+            return list(self) == other
+        return NotImplemented
+
+    def __repr__(self) -> str:
+        return f"EngineArray({list(self)!r})"
 
 
 class AttitudeArray:
