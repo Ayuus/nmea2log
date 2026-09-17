@@ -302,13 +302,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         description="Turn NMEA2000 log files from an Actisense W2K-2 into a sailing logbook (CSV).",
     )
     parser.add_argument(
-        "logfiles",
-        nargs="*",
-        type=Path,
-        help="One or more .ebl log files (SD card log from the W2K-2). If omitted, falls back to "
-        "every .ebl file found under --ebl-dir.",
-    )
-    parser.add_argument(
         "-o", "--output", type=Path, default=Path("logbook.csv"), help="Path to the CSV file (default: logbook.csv)"
     )
     parser.add_argument(
@@ -619,9 +612,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--ebl-dir",
         type=Path,
         default=None,
-        help="Folder to search recursively for .ebl files when no logfiles are given on the "
-        "command line (e.g. the same folder nmea2log-download downloads into). Default: not "
-        "set, or the 'ebl_dir' setting from the config file.",
+        help="Folder to search recursively for .ebl files (e.g. the same folder nmea2log-download "
+        "downloads into). Default: not set, or the 'ebl_dir' setting from the config file.",
     )
     _apply_config_defaults(parser)
     return parser
@@ -813,16 +805,19 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
             "config file) to all be set"
         )
 
-    if not args.logfiles and args.ebl_dir:
-        if not args.ebl_dir.is_dir():
-            parser.error(f"--ebl-dir {args.ebl_dir} is not a directory")
-        args.logfiles = _discover_ebl_files(args.ebl_dir)
-        if not args.logfiles:
-            parser.error(f"no .ebl files found under {args.ebl_dir}")
-        log(f"[info] Found {len(args.logfiles)} .ebl file(s) under {args.ebl_dir}.", file=sys.stderr)
-
+    if not args.ebl_dir:
+        parser.error("--ebl-dir is required (or set ebl_dir in the config file)")
+    if not args.ebl_dir.is_dir():
+        parser.error(f"--ebl-dir {args.ebl_dir} is not a directory")
+    # Already sorted (see _discover_ebl_files's own docstring) -- the resume-cache logic below
+    # (resume_index as a plain cutoff into this list) and every season-wide sample array
+    # build_trips() accumulates (fixes/sogs/attitude/...) both assume file order corresponds to
+    # chronological order -- see android_entry.py's own run_pipeline() for the real-world version
+    # of this same assumption breaking (Kotlin's file listing has no ordering guarantee there).
+    args.logfiles = _discover_ebl_files(args.ebl_dir)
     if not args.logfiles:
-        parser.error("provide one or more logfiles, or set ebl_dir in the config file")
+        parser.error(f"no .ebl files found under {args.ebl_dir}")
+    log(f"[info] Found {len(args.logfiles)} .ebl file(s) under {args.ebl_dir}.", file=sys.stderr)
 
     # Computed from every build_trips() parameter below (plus anything else that changes what a
     # cached trip looks like, e.g. the geocoding language, or the trip-building logic itself --
@@ -1008,7 +1003,7 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
             # _DECODE_PROGRESS_INTERVAL_S) stops the moment the last file is read, leaving nothing on
             # screen to distinguish "still working" from "hung" or "already crashed silently" for
             # however long this phase takes.
-            log(f"[info] Reizen opbouwen uit {len(all_fixes)} GPS-posities...", file=sys.stderr)
+            log(f"[info] Building trips from {len(all_fixes)} GPS position(s)...", file=sys.stderr)
             fresh_trips = build_trips(
                 all_fixes,
                 all_sogs,

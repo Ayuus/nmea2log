@@ -290,6 +290,28 @@ def test_reject_gps_outliers_array_drops_a_single_corrupted_fix():
     assert kept == [good_before, good_after]
 
 
+def test_reject_gps_outliers_array_trusts_a_large_backward_jump_as_a_clock_sync():
+    """A backward jump this large (see _CLOCK_JUMP_THRESHOLD_HOURS) is trusted, not dropped like
+    a single corrupted fix -- otherwise every genuinely good fix that follows a device's pre-sync
+    clock error would also get rejected for "coming before" that wrong, far-future anchor, all
+    the way until real time caught back up to it (found in practice, on a real archive: this
+    silently discarded nearly a whole season -- 2.7 million fixes in, 27 left)."""
+    bad_clock_start = datetime(2026, 7, 15, 9, 0, 0)  # device's own uncorrected clock
+    real_time = datetime(2026, 6, 1, 8, 0, 0)  # the real time, weeks earlier
+    fixes = [
+        PositionFix(bad_clock_start, 46.9000, -2.4000),
+        PositionFix(bad_clock_start + timedelta(seconds=1), 46.9001, -2.4001),
+        PositionFix(real_time, 48.0000, -4.5000),  # the clock-sync correction -- weeks backward
+        PositionFix(real_time + timedelta(seconds=1), 48.0001, -4.5001),  # genuinely good data
+    ]
+
+    kept = _reject_gps_outliers_array(FixArray(fixes))
+
+    # Every reading survives -- none of the real ones look "corrupted" just for coming before
+    # the wrong, pre-sync anchor.
+    assert kept == fixes
+
+
 def test_build_trips_ignores_a_single_gps_glitch_in_distance():
     fixes, sogs, engine_samples = _build_scenario()
     # a single corrupted fix landing mid-trip, far from anywhere near the real track

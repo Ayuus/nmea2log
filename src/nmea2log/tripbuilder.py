@@ -52,7 +52,7 @@ _RPM_BUCKET = 50  # round RPM to the nearest multiple of this before taking the 
 # data until the affected trips aged out of the cache on their own -- on a real device, that's
 # potentially never. Included in config_signature() specifically so a bump here always forces a
 # one-time full rebuild instead.
-TRIP_LOGIC_VERSION = 2
+TRIP_LOGIC_VERSION = 3
 _RPM_STABLE_MINUTES = 2.0  # a run at the typical RPM bucket must last at least this long to
 # count as steady cruising rather than a brief pass-through while accelerating/decelerating
 
@@ -227,6 +227,11 @@ _MAX_PLAUSIBLE_SPEED_KN = 60.0  # generous margin above the fastest speed this a
 # recorded (~22 kn) -- exists purely to catch corrupted position fixes, not to model anything
 # about the boat itself.
 
+_CLOCK_JUMP_THRESHOLD_HOURS = 24.0  # a backward jump at least this large means a device clock
+# that hadn't synced to real time yet, not a single bad reading or ordinary GPS/timestamp jitter
+# (found in practice: real jumps were on the order of weeks; real jitter/duplicates are seconds
+# at most) -- see _reject_gps_outliers_array's own docstring.
+
 
 def _reject_gps_outliers(fixes: List[PositionFix]) -> List[PositionFix]:
     """Drops a position fix that implies an impossible speed from the last *accepted* fix.
@@ -275,16 +280,48 @@ def _reject_gps_outliers_array(fixes: FixArray) -> FixArray:
     rather than building and returning an unrelated new one -- a caller that keeps its own
     reference to this exact object across build_trips()'s whole run (every real caller does, see
     android_entry.py/cli.py) sees the outlier-rejected, sorted data too, and the original, larger
-    columns are freed immediately instead of staying resident for no reason."""
+    columns are freed immediately instead of staying resident for no reason.
+
+    Processes ``fixes`` in its own natural (file-discovery) order, never sorting it first --
+    sorted(range(n), key=...) has to materialize a full list of boxed index *and* key objects for
+    the whole array just to sort it at all, confirmed (via fine-grained checkpoint logging on a
+    real device) to be exactly where a full-archive rebuild was getting OOM-killed. That sort
+    turned out to be solving the wrong problem anyway: confirmed, on the same real archive, that
+    the handful of backward jumps in a real season's data (up to ~465 out of 2.7 million fixes)
+    aren't file-ordering noise at all -- they're a real device logging with a stale/uncorrected
+    clock for a few readings before its first accurate PGN 126992 (System Time) update (every
+    frame's own timestamp is simply whichever System Time reading was last seen -- see
+    ebl_reader.py's own docstring), off by whole weeks in the cases actually seen. Reordering a
+    wrong timestamp into a different position wouldn't have made it a right one; the dt_hours <= 0
+    check below already drops exactly this kind of reading (a fix that doesn't move time forward
+    relative to the last *accepted* one), sorted or not.
+
+    A backward jump of at least _CLOCK_JUMP_THRESHOLD_HOURS is treated as a clock-sync
+    correction, not a bad reading -- confirmed in practice: a first version of this that always
+    rejected any dt_hours <= 0 fix got permanently anchored on the *wrong*, weeks-in-the-future
+    fix once one of these jumps happened, then kept rejecting every genuinely good, correctly-
+    timed fix that followed (they all looked "earlier" than that wrong anchor) until real time
+    caught all the way back up to it -- on a real ~2-month archive with a ~37-day clock-sync
+    jump near its start, that silently threw away nearly the entire season (2.7 million fixes
+    in, 27 left). Past that threshold, the *earlier* reading is far more likely to be the
+    device's own pre-sync clock than the boat teleporting into the future, so this trusts the
+    new, lower reading and resets from there instead."""
     n = len(fixes)
     if n == 0:
         return fixes
-    order = sorted(range(n), key=fixes.time_at)
     accepted = FixArray()
-    prev_i = order[0]
-    accepted.append_raw(fixes.time_at(prev_i), fixes.lat_at(prev_i), fixes.lon_at(prev_i))
-    for i in order[1:]:
+    prev_i = 0
+    accepted.append_raw(fixes.time_at(0), fixes.lat_at(0), fixes.lon_at(0))
+    for i in range(1, n):
         dt_hours = (fixes.time_at(i) - fixes.time_at(prev_i)) / 3600
+        if dt_hours <= -_CLOCK_JUMP_THRESHOLD_HOURS:
+            # A large backward jump -- prev_i's own reading (and whatever anomaly led up to it)
+            # is almost certainly the wrong one, not this one. Trust this reading and reset the
+            # anchor here, instead of rejecting it and staying stuck comparing everything after
+            # it against a wrong, far-future anchor.
+            accepted.append_raw(fixes.time_at(i), fixes.lat_at(i), fixes.lon_at(i))
+            prev_i = i
+            continue
         if dt_hours <= 0:
             continue  # duplicate/out-of-order timestamp -- keep whichever came first
         implied_speed_kn = (
@@ -890,8 +927,32 @@ def _extend_engine_window(
     return min(start, depart_time), max(end, arrive_time)
 
 
+def _bucket_by_instance(samples) -> Dict[int, List]:
+    """Buckets a flat season-wide sample list (engine/RPM/battery/trip-fuel) by its ``.instance``
+    attribute, each bucket sorted by ``.time`` -- computed once per array in build_trips(), so
+    the per-trip "leaf" functions below can bisect each instance's own small time window out of
+    an already-sorted bucket (see ``_window_for_instance``) instead of re-scanning the *entire*
+    season's samples from scratch on every call. Found in practice: once the earlier OOM/sort
+    issues were fixed, this became the next bottleneck -- a single trip could take minutes with
+    ~400k engine + ~1.75M RPM samples each re-scanned by 6+ separate functions."""
+    by_instance: Dict[int, List] = {}
+    for sample in samples:
+        by_instance.setdefault(sample.instance, []).append(sample)
+    for bucket in by_instance.values():
+        bucket.sort(key=lambda s: s.time)
+    return by_instance
+
+
+def _window_for_instance(bucket: List, start: datetime, end: datetime) -> List:
+    """Bisects a single already-time-sorted instance bucket (see ``_bucket_by_instance``) down to
+    just the samples in [start, end] -- O(log n + window size) instead of a full linear scan."""
+    lo = bisect.bisect_left(bucket, start, key=lambda s: s.time)
+    hi = bisect.bisect_right(bucket, end, key=lambda s: s.time)
+    return bucket[lo:hi]
+
+
 def _engine_hours_delta_extended(
-    engine_samples: List[EngineSample],
+    engine_by_instance: Dict[int, List[EngineSample]],
     depart_time: datetime,
     arrive_time: datetime,
     prev_stay: Optional[Stay],
@@ -901,18 +962,12 @@ def _engine_hours_delta_extended(
     """Same core computation as ``_engine_hours_delta``, but widening the window per engine
     instance first (see ``_extend_engine_window``) -- each instance gets its own window since a
     multi-engine boat's engines don't necessarily start/stop together."""
-    by_instance: Dict[int, List[EngineSample]] = {}
-    for sample in engine_samples:
-        if sample.total_hours_s is None:
-            continue
-        by_instance.setdefault(sample.instance, []).append(sample)
-
     result: Dict[int, float] = {}
-    for instance, seq in by_instance.items():
+    for instance, bucket in engine_by_instance.items():
         start, end = _extend_engine_window(
             depart_time, arrive_time, prev_stay, next_stay, on_intervals_by_instance.get(instance, [])
         )
-        window = sorted((s for s in seq if start <= s.time <= end), key=lambda s: s.time)
+        window = [s for s in _window_for_instance(bucket, start, end) if s.total_hours_s is not None]
         if len(window) < 2:
             continue
         delta_s = window[-1].total_hours_s - window[0].total_hours_s
@@ -920,35 +975,23 @@ def _engine_hours_delta_extended(
     return result
 
 
-def _engine_hours_total(samples: List[EngineSample], start: datetime, end: datetime) -> Dict[int, float]:
+def _engine_hours_total(by_instance: Dict[int, List[EngineSample]], start: datetime, end: datetime) -> Dict[int, float]:
     """Absolute engine-hour-meter reading (not a delta) at the end of the window, per engine
     instance -- the engine's own lifetime counter, e.g. for tracking maintenance intervals,
     as opposed to ``_engine_hours_delta``'s "hours run just during this trip"."""
-    by_instance: Dict[int, List[EngineSample]] = {}
-    for sample in samples:
-        if sample.total_hours_s is None:
-            continue
-        by_instance.setdefault(sample.instance, []).append(sample)
-
     result: Dict[int, float] = {}
-    for instance, seq in by_instance.items():
-        window = sorted((s for s in seq if start <= s.time <= end), key=lambda s: s.time)
+    for instance, bucket in by_instance.items():
+        window = [s for s in _window_for_instance(bucket, start, end) if s.total_hours_s is not None]
         if not window:
             continue
         result[instance] = window[-1].total_hours_s / 3600.0
     return result
 
 
-def _fuel_liters(samples: List[EngineSample], start: datetime, end: datetime) -> float:
-    by_instance: Dict[int, List[EngineSample]] = {}
-    for sample in samples:
-        if sample.fuel_rate_lph is None:
-            continue
-        by_instance.setdefault(sample.instance, []).append(sample)
-
+def _fuel_liters(by_instance: Dict[int, List[EngineSample]], start: datetime, end: datetime) -> float:
     total = 0.0
-    for seq in by_instance.values():
-        window = sorted((s for s in seq if start <= s.time <= end), key=lambda s: s.time)
+    for bucket in by_instance.values():
+        window = [s for s in _window_for_instance(bucket, start, end) if s.fuel_rate_lph is not None]
         for a, b in zip(window, window[1:]):
             dt_h = (b.time - a.time).total_seconds() / 3600.0
             if dt_h <= 0 or dt_h > _MAX_INTEGRATION_GAP_H:
@@ -958,7 +1001,7 @@ def _fuel_liters(samples: List[EngineSample], start: datetime, end: datetime) ->
 
 
 def _device_fuel_delta(
-    samples: List[TripFuelSample], start: datetime, end: datetime
+    by_instance: Dict[int, List[TripFuelSample]], start: datetime, end: datetime
 ) -> Optional[float]:
     """Difference between the start and end reading of the engine's own trip meter within the
     time window.
@@ -966,16 +1009,10 @@ def _device_fuel_delta(
     Returns None if this PGN wasn't (sufficiently) available for this trip -- e.g. because the
     device doesn't send it -- instead of a misleading 0.
     """
-    by_instance: Dict[int, List[TripFuelSample]] = {}
-    for sample in samples:
-        if sample.trip_fuel_used_l is None:
-            continue
-        by_instance.setdefault(sample.instance, []).append(sample)
-
     total = 0.0
     found_any = False
-    for seq in by_instance.values():
-        window = sorted((s for s in seq if start <= s.time <= end), key=lambda s: s.time)
+    for bucket in by_instance.values():
+        window = [s for s in _window_for_instance(bucket, start, end) if s.trip_fuel_used_l is not None]
         if len(window) < 2:
             continue
         delta = window[-1].trip_fuel_used_l - window[0].trip_fuel_used_l
@@ -1012,18 +1049,14 @@ def _water_temp_stats(track: List[NavSample]) -> Tuple[Optional[float], Optional
 
 
 def _engine_health(
-    samples: List[EngineSample], start: datetime, end: datetime
+    by_instance: Dict[int, List[EngineSample]], start: datetime, end: datetime
 ) -> Dict[int, EngineHealth]:
-    by_instance: Dict[int, List[EngineSample]] = {}
-    for sample in samples:
-        by_instance.setdefault(sample.instance, []).append(sample)
-
     def _avg(values: List[float]) -> Optional[float]:
         return sum(values) / len(values) if values else None
 
     result: Dict[int, EngineHealth] = {}
-    for instance, seq in by_instance.items():
-        window = [s for s in seq if start <= s.time <= end]
+    for instance, bucket in by_instance.items():
+        window = _window_for_instance(bucket, start, end)
         if not window:
             continue
         oil_pressure = [s.oil_pressure_pa for s in window if s.oil_pressure_pa is not None]
@@ -1033,7 +1066,9 @@ def _engine_health(
         engine_load = [s.engine_load_pct for s in window if s.engine_load_pct is not None]
         warnings: FrozenSet[str] = frozenset().union(*(s.warnings for s in window))
         warning_first_seen: Dict[str, datetime] = {}
-        for sample in sorted(window, key=lambda s: s.time):
+        # window is already time-sorted (see _bucket_by_instance/_window_for_instance) -- no need
+        # to re-sort it again just for this.
+        for sample in window:
             for warning in sample.warnings:
                 warning_first_seen.setdefault(warning, sample.time)
 
@@ -1055,16 +1090,10 @@ def _engine_health(
     return result
 
 
-def _battery_health(samples: List[BatterySample], start: datetime, end: datetime) -> Dict[int, BatteryHealth]:
-    by_instance: Dict[int, List[BatterySample]] = {}
-    for sample in samples:
-        if sample.voltage_v is None:
-            continue
-        by_instance.setdefault(sample.instance, []).append(sample)
-
+def _battery_health(by_instance: Dict[int, List[BatterySample]], start: datetime, end: datetime) -> Dict[int, BatteryHealth]:
     result: Dict[int, BatteryHealth] = {}
-    for instance, seq in by_instance.items():
-        window = [s for s in seq if start <= s.time <= end]
+    for instance, bucket in by_instance.items():
+        window = [s for s in _window_for_instance(bucket, start, end) if s.voltage_v is not None]
         if not window:
             continue
         voltages = [s.voltage_v for s in window]
@@ -1078,36 +1107,29 @@ def _battery_health(samples: List[BatterySample], start: datetime, end: datetime
 
 
 def _rpm_at_time(
-    rpm_samples: List[EngineRpmSample], time: datetime, start: datetime, end: datetime
+    rpm_by_instance: Dict[int, List[EngineRpmSample]], time: datetime, start: datetime, end: datetime
 ) -> Dict[int, float]:
     """The RPM reading closest to ``time`` (e.g. the moment of the trip's max speed), per engine
     instance -- restricted to this trip's own [start, end] window so a gap in RPM reporting right
     at that moment doesn't pick up a reading that actually belongs to a different trip."""
-    by_instance: Dict[int, List[EngineRpmSample]] = {}
-    for sample in rpm_samples:
-        if sample.rpm is None or not (start <= sample.time <= end):
+    result: Dict[int, float] = {}
+    for instance, bucket in rpm_by_instance.items():
+        window = [s for s in _window_for_instance(bucket, start, end) if s.rpm is not None]
+        if not window:
             continue
-        by_instance.setdefault(sample.instance, []).append(sample)
-    return {
-        instance: min(samples, key=lambda s: abs((s.time - time).total_seconds())).rpm
-        for instance, samples in by_instance.items()
-    }
+        result[instance] = min(window, key=lambda s: abs((s.time - time).total_seconds())).rpm
+    return result
 
 
-def _typical_rpm(samples: List[EngineRpmSample], start: datetime, end: datetime) -> Dict[int, float]:
+def _typical_rpm(rpm_by_instance: Dict[int, List[EngineRpmSample]], start: datetime, end: datetime) -> Dict[int, float]:
     """The most commonly occurring engine speed (RPM) during the trip, per engine instance --
     rounded to the nearest ``_RPM_BUCKET`` before counting, so normal small load fluctuations at
     a steady cruising speed don't get spread across too many distinct exact values to ever "win".
     This is a more representative "cruising RPM" than an average (skewed by idle/neutral periods
     and maneuvering) or a maximum (skewed by brief revs)."""
-    by_instance: Dict[int, List[float]] = {}
-    for sample in samples:
-        if sample.rpm is None or not (start <= sample.time <= end):
-            continue
-        by_instance.setdefault(sample.instance, []).append(sample.rpm)
-
     result: Dict[int, float] = {}
-    for instance, values in by_instance.items():
+    for instance, bucket in rpm_by_instance.items():
+        values = [s.rpm for s in _window_for_instance(bucket, start, end) if s.rpm is not None]
         if not values:
             continue
         buckets = Counter(round(v / _RPM_BUCKET) * _RPM_BUCKET for v in values)
@@ -1116,8 +1138,8 @@ def _typical_rpm(samples: List[EngineRpmSample], start: datetime, end: datetime)
 
 
 def _typical_rpm_speed_range(
-    rpm_samples: List[EngineRpmSample],
-    engine_samples: List[EngineSample],
+    rpm_by_instance: Dict[int, List[EngineRpmSample]],
+    engine_by_instance: Dict[int, List[EngineSample]],
     track: List[NavSample],
     start: datetime,
     end: datetime,
@@ -1143,22 +1165,21 @@ def _typical_rpm_speed_range(
         return {}
     times = [s.time for s in track]
 
-    by_instance: Dict[int, List[EngineRpmSample]] = {}
-    for sample in rpm_samples:
-        if sample.rpm is None or not (start <= sample.time <= end):
-            continue
-        by_instance.setdefault(sample.instance, []).append(sample)
+    by_instance: Dict[int, List[EngineRpmSample]] = {
+        instance: [s for s in _window_for_instance(bucket, start, end) if s.rpm is not None]
+        for instance, bucket in rpm_by_instance.items()
+    }
 
-    fuel_by_instance: Dict[int, List[EngineSample]] = {}
-    for sample in engine_samples:
-        if sample.fuel_rate_lph is None or not (start <= sample.time <= end):
-            continue
-        fuel_by_instance.setdefault(sample.instance, []).append(sample)
+    fuel_by_instance: Dict[int, List[EngineSample]] = {
+        instance: [s for s in _window_for_instance(bucket, start, end) if s.fuel_rate_lph is not None]
+        for instance, bucket in engine_by_instance.items()
+    }
 
     min_duration = timedelta(minutes=_RPM_STABLE_MINUTES)
     result: Dict[int, Tuple[float, float, float, Optional[float]]] = {}
     for instance, samples in by_instance.items():
-        samples = sorted(samples, key=lambda s: s.time)
+        # Already time-sorted (see _bucket_by_instance/_window_for_instance) -- no need to
+        # re-sort it again just for this.
         buckets = [round(s.rpm / _RPM_BUCKET) * _RPM_BUCKET for s in samples]
         counts = Counter(buckets)
         if not counts:
@@ -1323,11 +1344,6 @@ def build_trips(
     if max_gap_minutes is None:
         max_gap_minutes = min_stop_minutes
 
-    # Checkpoints through here (not per-trip below -- a real season is typically a few dozen
-    # trips at most, fast either way) -- found in practice: this whole function used to run
-    # completely silent, on a phone's much slower CPU, over however many merged NavSample points
-    # a full multi-year archive produces, with nothing to tell "still working" apart from "hung"
-    # or "crashed silently" for however long it took.
     samples = _merge_nav_samples(fixes, sogs, depth_samples, water_temp_samples)
     if len(samples) < 2:
         return []
@@ -1347,6 +1363,16 @@ def build_trips(
     # ...), not yet genuinely at rest, regardless of what the instantaneous SOG says.
     on_intervals_by_instance = _engine_on_intervals_by_instance(engine_samples)
     on_intervals = _engine_on_intervals(engine_samples)
+
+    # Bucketed+sorted once here rather than inside each per-trip "leaf" function below (see
+    # _bucket_by_instance) -- otherwise every one of them re-scans the *entire* season's engine/
+    # RPM/battery/trip-fuel samples from scratch, once per trip, which is exactly what made this
+    # phase slow in practice once the earlier OOM/sort issues were fixed (found in practice: a
+    # single trip taking minutes with ~400k engine + ~1.75M RPM samples for a full season).
+    engine_by_instance = _bucket_by_instance(engine_samples)
+    rpm_by_instance = _bucket_by_instance(rpm_samples)
+    battery_by_instance = _bucket_by_instance(battery_samples)
+    trip_fuel_by_instance = _bucket_by_instance(trip_fuel_samples)
 
     runs = _classify_runs(samples, speed_threshold_ms)
     runs = _merge_short_stops(samples, runs, min_stop, max_gap)
@@ -1373,6 +1399,8 @@ def build_trips(
     # geocode-cache clear fixes it on the very next run, no full rebuild required.
     placeholder_geocoder = NoGeocoder()
     stays: List[Optional[Stay]] = []
+    total_stays = sum(1 for label, _ in runs if label == "stationary")
+    stays_done = 0
     for label, group in runs:
         if label != "stationary":
             stays.append(None)
@@ -1381,8 +1409,12 @@ def build_trips(
         lat, lon = _settled_position(track, speed_threshold_ms, on_intervals, lock_radius_m)
         place = placeholder_geocoder.place_name(lat, lon)
         stays.append(Stay(track[0].time, track[-1].time, lat, lon, place))
+        stays_done += 1
+        log(f"[info] ......stay {stays_done}/{total_stays} processed")
 
     trips: List[TripLeg] = []
+    total_trips = sum(1 for label, _ in runs if label == "moving")
+    trips_done = 0
     for idx, (label, group) in enumerate(runs):
         if label != "moving":
             continue
@@ -1405,7 +1437,7 @@ def build_trips(
         )
         avg_speed_kn, max_speed_kn, max_speed_at = _speed_stats_kn(track)
         max_speed_rpm = (
-            _rpm_at_time(rpm_samples, max_speed_at, depart_time, arrive_time) if max_speed_at else {}
+            _rpm_at_time(rpm_by_instance, max_speed_at, depart_time, arrive_time) if max_speed_at else {}
         )
         min_depth_m, min_depth_lat, min_depth_lon = _min_depth(track)
         avg_water_temp_c, min_water_temp_c, max_water_temp_c = _water_temp_stats(track)
@@ -1427,18 +1459,18 @@ def build_trips(
                 distance_nm=distance_nm,
                 avg_speed_kn=avg_speed_kn,
                 max_speed_kn=max_speed_kn,
-                fuel_liters=_fuel_liters(engine_samples, depart_time, arrive_time),
-                fuel_liters_device=_device_fuel_delta(trip_fuel_samples, depart_time, arrive_time),
+                fuel_liters=_fuel_liters(engine_by_instance, depart_time, arrive_time),
+                fuel_liters_device=_device_fuel_delta(trip_fuel_by_instance, depart_time, arrive_time),
                 engine_hours=_engine_hours_delta_extended(
-                    engine_samples, depart_time, arrive_time, prev_stay, next_stay, on_intervals_by_instance
+                    engine_by_instance, depart_time, arrive_time, prev_stay, next_stay, on_intervals_by_instance
                 ),
-                engine_hours_total=_engine_hours_total(engine_samples, depart_time, arrive_time),
-                engine_health=_engine_health(engine_samples, depart_time, arrive_time),
-                typical_rpm=_typical_rpm(rpm_samples, depart_time, arrive_time),
+                engine_hours_total=_engine_hours_total(engine_by_instance, depart_time, arrive_time),
+                engine_health=_engine_health(engine_by_instance, depart_time, arrive_time),
+                typical_rpm=_typical_rpm(rpm_by_instance, depart_time, arrive_time),
                 typical_rpm_speed_kn=_typical_rpm_speed_range(
-                    rpm_samples, engine_samples, track, depart_time, arrive_time
+                    rpm_by_instance, engine_by_instance, track, depart_time, arrive_time
                 ),
-                battery_health=_battery_health(battery_samples, depart_time, arrive_time),
+                battery_health=_battery_health(battery_by_instance, depart_time, arrive_time),
                 min_depth_m=min_depth_m,
                 min_depth_lat=min_depth_lat,
                 min_depth_lon=min_depth_lon,
@@ -1456,6 +1488,8 @@ def build_trips(
                 max_speed_rpm=max_speed_rpm,
             )
         )
+        trips_done += 1
+        log(f"[info] ......trip {trips_done}/{total_trips} processed")
     return [trip for trip in trips if trip.distance_nm >= min_trip_distance_nm]
 
 

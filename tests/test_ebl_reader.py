@@ -218,6 +218,36 @@ def test_iter_frames_time_updates_between_system_time_messages(tmp_path: Path):
     assert frames[1].time == t2
 
 
+def test_iter_frames_prefers_the_system_time_source_with_more_messages(tmp_path: Path):
+    """More than one device sending PGN 126992 at once (found in practice, on a real boat: two,
+    whose clocks disagreed by ~1s) no longer means the decoded time steps back and forth between
+    them -- once one source has sent more of these than any other, its own readings are the ones
+    trusted going forward, and a less-prevalent source's own (possibly inconsistent) reading is
+    simply ignored rather than immediately overriding it."""
+    t_a1 = datetime(2026, 7, 29, 9, 0, 0)
+    t_a2 = datetime(2026, 7, 29, 9, 0, 1)
+    t_b1 = datetime(2026, 7, 29, 9, 0, 0, 500000)  # source 11's own clock -- mid-way between A's two
+    t_a3 = datetime(2026, 7, 29, 9, 0, 2)
+    position_payload = struct.pack("<ii", 1000000, 2000000)
+    position_record = _bst95_record(_encode_can_id(priority=2, pgn=129025, source=5), position_payload)
+
+    data = bytearray()
+    data += _frame_bytes(_system_time_record(t_a1, source=10))
+    data += _frame_bytes(_system_time_record(t_a2, source=10))  # source 10 now leads 2-0
+    data += _frame_bytes(position_record)
+    data += _frame_bytes(_system_time_record(t_b1, source=11))  # source 11 still trails -- ignored
+    data += _frame_bytes(position_record)
+    data += _frame_bytes(_system_time_record(t_a3, source=10))
+    data += _frame_bytes(position_record)
+
+    path = tmp_path / "test.ebl"
+    path.write_bytes(bytes(data))
+
+    frames = list(iter_frames(path))
+
+    assert [f.time for f in frames] == [t_a2, t_a2, t_a3]
+
+
 def test_iter_frames_carries_time_across_files_via_time_state(tmp_path: Path):
     """Regression test: a file without its own System Time message (e.g. anchored for a long
     time with GPS/plotter idle, but autopilot/gyro still coming in) must not be silently

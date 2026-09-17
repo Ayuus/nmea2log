@@ -42,6 +42,12 @@ from .model import (
 
 _EPOCH = datetime(1970, 1, 1)
 
+_CLOCK_JUMP_THRESHOLD_S = 24 * 3600.0  # a backward jump at least this large means a device clock
+# that hadn't synced to real time yet, not ordinary jitter/duplicate timestamps -- same threshold
+# and reasoning as tripbuilder.py's own _CLOCK_JUMP_THRESHOLD_HOURS (kept as a separate constant
+# here, in seconds, rather than imported, to avoid fix_array.py importing back from the module
+# that already imports it).
+
 
 def _to_epoch(dt: datetime) -> float:
     return (dt - _EPOCH).total_seconds()
@@ -49,6 +55,22 @@ def _to_epoch(dt: datetime) -> float:
 
 def _from_epoch(seconds: float) -> datetime:
     return _EPOCH + timedelta(seconds=seconds)
+
+
+def _is_sorted(time_column: "array.array[float]") -> bool:
+    """Cheap O(n)-time, O(1)-extra-memory check for whether a time column is already in
+    non-decreasing order -- used to skip sorted_by_time()'s own sort+copy entirely when it would
+    be a no-op. Confirmed, in practice, to matter: sorted(range(n), key=...) (the actual sort,
+    when needed) has to materialize a full list of boxed index *and* key objects for the whole
+    array to sort it at all -- on a real ~2 million-row season-wide array, this was found (via
+    fine-grained checkpoint logging on a real device) to be exactly where a full-archive rebuild
+    was getting OOM-killed. A season's data is typically already in (or very close to) time order
+    to begin with (each source file's own records are chronological; only the *file discovery*
+    order can differ from that -- see AttitudeArray/SogArray's own sorted_by_time docstrings) --
+    this plain linear scan, using array.array's own fast C-level indexing, costs only a handful of
+    float comparisons per element and never boxes anything beyond what a single comparison needs
+    at a time, regardless of how large the array is."""
+    return all(time_column[i] <= time_column[i + 1] for i in range(len(time_column) - 1))
 
 
 class FixArray:
@@ -188,15 +210,42 @@ class SogArray:
         one) for the same reason FixArray.replace_columns_with exists: a caller that keeps its own
         reference to this exact object across build_trips()'s whole run (every real caller does,
         see android_entry.py/cli.py's all_sogs) would otherwise also keep the original, unsorted
-        columns resident the entire time, alongside this sorted copy, for no reason."""
-        order = sorted(range(len(self)), key=self.time_at)
+        columns resident the entire time, alongside this sorted copy, for no reason.
+
+        A no-op when already sorted -- see _is_sorted's own docstring. Otherwise, drops whichever
+        rows cause a small backward jump rather than sorting them into place -- confirmed, on a
+        real archive, that the backward jumps actually seen here aren't file-ordering noise but a
+        device logging with a stale/uncorrected clock for a few readings before its first
+        accurate PGN 126992 (System Time) update (every frame's own timestamp is simply whichever
+        System Time reading was last seen -- see ebl_reader.py's own docstring), off by whole
+        weeks in the cases actually seen; reordering a wrong reading into a different position
+        wouldn't have made it a right one. A single forward pass -- keep a row only if its time
+        doesn't go backward relative to the last *kept* row -- both fixes that and is exactly why
+        the result ends up sorted without ever needing sorted(range(n), key=...)'s own full list
+        of boxed index *and* key objects (confirmed, via fine-grained checkpoint logging on a real
+        device, to be where a full-archive rebuild was actually getting OOM-killed).
+
+        A jump of at least _CLOCK_JUMP_THRESHOLD_S is trusted and reset onto, not dropped --
+        confirmed in practice: an earlier version that dropped every backward-going row
+        regardless of size got permanently anchored on the wrong, weeks-in-the-future row once
+        one of these clock-sync jumps happened, then kept dropping every genuinely good,
+        correctly-timed row after it (they all looked "earlier" than that wrong anchor) until
+        real time caught all the way back up to it -- on a real archive with such a jump near
+        its start, that silently threw away nearly the entire season."""
+        if _is_sorted(self._time):
+            return self
         new_time = array.array("d")
         new_sog_ms = array.array("d")
         new_cog_deg = array.array("d")
-        for i in order:
-            new_time.append(self._time[i])
+        last_time = None
+        for i in range(len(self)):
+            t = self._time[i]
+            if last_time is not None and t < last_time and last_time - t < _CLOCK_JUMP_THRESHOLD_S:
+                continue  # small backward jitter/duplicate -- drop it
+            new_time.append(t)
             new_sog_ms.append(self._sog_ms[i])
             new_cog_deg.append(self._cog_deg[i])
+            last_time = t
         self._time, self._sog_ms, self._cog_deg = new_time, new_sog_ms, new_cog_deg
         return self
 
@@ -572,15 +621,30 @@ class AttitudeArray:
         Mutates and returns this same object rather than building and returning an unrelated new
         one -- see SogArray.sorted_by_time's own docstring for why (a caller's own reference to
         this exact object, held across build_trips()'s whole run, would otherwise keep the
-        original, unsorted columns resident the entire time too, alongside this sorted copy)."""
-        order = sorted(range(len(self)), key=self.time_at)
+        original, unsorted columns resident the entire time too, alongside this sorted copy).
+
+        A no-op when already sorted -- see _is_sorted's own docstring. Otherwise, drops whichever
+        rows cause a small backward jump rather than sorting them into place, and trusts/resets
+        onto a jump of at least _CLOCK_JUMP_THRESHOLD_S instead of dropping it too -- see
+        SogArray's own sorted_by_time docstring for the full reasoning (confirmed on a real
+        archive: attitude is the largest season-wide sample count of all -- ~37 million rows,
+        more than 13x the GPS fix count -- so this is exactly where sorted(range(n), key=...)'s
+        own full list of boxed index *and* key objects was actually getting a full-archive
+        rebuild OOM-killed, confirmed via fine-grained checkpoint logging on a real device)."""
+        if _is_sorted(self._time):
+            return self
         new_time = array.array("d")
         new_pitch_deg = array.array("d")
         new_roll_deg = array.array("d")
-        for i in order:
-            new_time.append(self._time[i])
+        last_time = None
+        for i in range(len(self)):
+            t = self._time[i]
+            if last_time is not None and t < last_time and last_time - t < _CLOCK_JUMP_THRESHOLD_S:
+                continue  # small backward jitter/duplicate -- drop it
+            new_time.append(t)
             new_pitch_deg.append(self._pitch_deg[i])
             new_roll_deg.append(self._roll_deg[i])
+            last_time = t
         self._time, self._pitch_deg, self._roll_deg = new_time, new_pitch_deg, new_roll_deg
         return self
 

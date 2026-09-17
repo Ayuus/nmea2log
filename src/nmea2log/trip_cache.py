@@ -53,9 +53,9 @@ def _resolved(path: Path) -> str:
 
 def find_resume_index(logfiles: Sequence[Path], resume_from_file: str) -> Optional[int]:
     """Index into ``logfiles`` matching the file a cached run recorded as its resume point, or
-    None if it can't be found (the file was moved, deleted, or --ebl-dir/--logfiles now points
-    somewhere else entirely) -- the caller must then treat the whole cache as unusable rather
-    than guess which files it actually covers."""
+    None if it can't be found (the file was moved, deleted, or --ebl-dir now points somewhere else
+    entirely) -- the caller must then treat the whole cache as unusable rather than guess which
+    files it actually covers."""
     for index, path in enumerate(logfiles):
         if _resolved(path) == resume_from_file:
             return index

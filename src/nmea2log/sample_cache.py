@@ -31,7 +31,7 @@ from .log import log
 # being served after an upgrade that should have changed its contents -- every entry stamped with
 # an older/newer version is treated as absent and simply gets overwritten the next time that file
 # is put() again.
-CACHE_FORMAT_VERSION = 3
+CACHE_FORMAT_VERSION = 4
 
 # Raw pickled samples are highly repetitive (many similar-shaped dataclass instances), so zlib
 # compresses them roughly 10x for very little time cost.

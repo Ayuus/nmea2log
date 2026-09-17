@@ -210,7 +210,7 @@ def test_discover_ebl_files_empty_dir(tmp_path: Path):
     assert _discover_ebl_files(tmp_path) == []
 
 
-def test_ebl_dir_config_default_applies_when_no_logfiles_given(tmp_path, monkeypatch):
+def test_ebl_dir_config_default_applies_when_not_given_on_the_command_line(tmp_path, monkeypatch):
     config_path = tmp_path / "nmea2log.ini"
     config_path.write_text(f"[nmea2log]\nebl_dir = {tmp_path}\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
@@ -359,7 +359,7 @@ def test_main_prefers_rest_upload_over_sftp_when_both_are_configured(tmp_path, m
 
     exit_code = main(
         [
-            str(ebl_path), "-o", str(tmp_path / "logbook.csv"), "--no-geocode",
+            "--ebl-dir", str(tmp_path), "-o", str(tmp_path / "logbook.csv"), "--no-geocode",
             "--upload-rest", "--upload-rest-url", "https://example.org/wp-json/nmea2log/v1/logbook",
             "--upload-rest-user", "alice", "--upload-rest-app-password", "abcd efgh",
             "--upload", "--upload-host", "example.com", "--upload-user", "me",
@@ -404,7 +404,7 @@ def test_main_reuses_cached_samples_on_a_second_run(tmp_path, monkeypatch, capsy
 
     cache_file = tmp_path / "cache.pkl"
     common_args = [
-        str(ebl_path), "-o", str(tmp_path / "logbook.csv"), "--no-geocode",
+        "--ebl-dir", str(tmp_path), "-o", str(tmp_path / "logbook.csv"), "--no-geocode",
         "--sample-cache-file", str(cache_file),
     ]
 
@@ -459,7 +459,7 @@ def _run_with_one_trip(tmp_path: Path, monkeypatch, extra_args=()):
         "nmea2log.cli._iter_frames_for_path", lambda path, state: iter([])
     )
     output = tmp_path / "logbook.csv"
-    main([str(ebl_path), "-o", str(output), "--no-geocode", "--no-sample-cache", *extra_args])
+    main(["--ebl-dir", str(tmp_path), "-o", str(output), "--no-geocode", "--no-sample-cache", *extra_args])
     return output
 
 
@@ -559,7 +559,7 @@ def test_main_refuses_to_run_while_another_instance_holds_the_lock(tmp_path: Pat
     (tmp_path / ".nmea2log.lock").write_text("4242", encoding="utf-8")
 
     with pytest.raises(SystemExit):
-        main([str(ebl_path), "-o", str(tmp_path / "logbook.csv"), "--no-geocode"])
+        main(["--ebl-dir", str(tmp_path), "-o", str(tmp_path / "logbook.csv"), "--no-geocode"])
 
     err = capsys.readouterr().err
     assert "another nmea2log run" in err
@@ -608,9 +608,11 @@ def _make_trip_cache_fixture(tmp_path: Path):
     stay3_fixes, stay3_sogs = _stay(range(126, 138), 52.60, 5.05)
     f4_fixes, f4_sogs = move3_fixes + stay3_fixes, move3_sogs + stay3_sogs
 
+    # Not written to disk here -- unlike when this project took --ebl-dir *and* explicit logfiles
+    # (now removed, --ebl-dir only), a test that only wants a subset of these files visible for a
+    # given main() call has to control exactly which ones exist under its --ebl-dir at that point;
+    # see _write() below and each test's own use of it.
     paths = {name: tmp_path / f"{name}.ebl" for name in ("f0", "f1", "f2", "f3", "f4")}
-    for path in paths.values():
-        path.write_bytes(b"x" * 100)
 
     samples_by_name = {
         "f0": ({10: f0_fixes}, {10: f0_sogs}, [], [], {}, {}, {}, [], {}),
@@ -620,6 +622,12 @@ def _make_trip_cache_fixture(tmp_path: Path):
         "f4": ({10: f4_fixes}, {10: f4_sogs}, [], [], {}, {}, {}, [], {}),
     }
     return paths, samples_by_name
+
+
+def _write(*paths: Path) -> None:
+    for path in paths:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"x" * 100)
 
 
 def _stub_samples_by_path(monkeypatch, paths, samples_by_name, call_log):
@@ -650,22 +658,23 @@ def test_main_trip_cache_skips_decoding_already_settled_files_on_a_later_run(tmp
     _stub_samples_by_path(monkeypatch, paths, samples_by_name, call_log)
 
     common_args = [
+        "--ebl-dir", str(tmp_path),
         "-o", str(tmp_path / "logbook.csv"), "--no-geocode", "--no-weather", "--no-marine",
         "--no-sample-cache", "--lock-radius-m", "-1",
         "--trip-cache-file", str(tmp_path / "trips.pkl"),
     ]
-    run1_files = [paths["f0"], paths["f1"], paths["f2"], paths["f3"]]
+    _write(paths["f0"], paths["f1"], paths["f2"], paths["f3"])
 
-    exit_code = main([str(p) for p in run1_files] + common_args)
+    exit_code = main(common_args)
 
     assert exit_code == 0
     assert call_log == ["f0", "f1", "f2", "f3"]  # nothing cached yet -- everything decoded
     assert "[info] 2 trip(s) found" in capsys.readouterr().err
 
     call_log.clear()
-    run2_files = run1_files + [paths["f4"]]
+    _write(paths["f4"])  # the "new file appended" this test is named for
 
-    exit_code = main([str(p) for p in run2_files] + common_args)
+    exit_code = main(common_args)
 
     assert exit_code == 0
     captured = capsys.readouterr()
@@ -721,9 +730,9 @@ def _make_mid_transit_resume_fixture(tmp_path: Path):
     stay3_fixes, stay3_sogs = _stay(range(126, 138), 52.60, 5.05)
     f4_fixes, f4_sogs = move3_fixes + stay3_fixes, move3_sogs + stay3_sogs
 
+    # Not written to disk here -- see _make_trip_cache_fixture's own matching comment; each test
+    # using this fixture controls exactly which files exist under its --ebl-dir via _write().
     paths = {name: tmp_path / f"{name}.ebl" for name in ("f0", "f1", "f2", "f3", "f4")}
-    for path in paths.values():
-        path.write_bytes(b"x" * 100)
 
     samples_by_name = {
         "f0": ({10: f0_fixes}, {10: f0_sogs}, [], [], {}, {}, {}, [], {}),
@@ -748,21 +757,22 @@ def test_main_trip_cache_widens_the_window_when_it_resumed_mid_transit(tmp_path,
     _stub_samples_by_path(monkeypatch, paths, samples_by_name, call_log)
 
     common_args = [
+        "--ebl-dir", str(tmp_path),
         "-o", str(tmp_path / "logbook.csv"), "--no-geocode", "--no-weather", "--no-marine",
         "--no-sample-cache", "--lock-radius-m", "-1", "--min-leg-distance-nm", "0.2",
         "--trip-cache-file", str(tmp_path / "trips.pkl"),
     ]
-    run1_files = [paths["f0"], paths["f1"], paths["f2"], paths["f3"]]
+    _write(paths["f0"], paths["f1"], paths["f2"], paths["f3"])
 
-    exit_code = main([str(p) for p in run1_files] + common_args)
+    exit_code = main(common_args)
 
     assert exit_code == 0
     assert "[info] 2 trip(s) found" in capsys.readouterr().err
 
     call_log.clear()
-    run2_files = run1_files + [paths["f4"]]
+    _write(paths["f4"])
 
-    exit_code = main([str(p) for p in run2_files] + common_args)
+    exit_code = main(common_args)
 
     assert exit_code == 0
     captured = capsys.readouterr()
@@ -788,16 +798,17 @@ def test_main_trip_cache_widen_retries_more_than_once_when_needed(tmp_path, monk
     _stub_samples_by_path(monkeypatch, paths, samples_by_name, call_log)
 
     common_args = [
+        "--ebl-dir", str(tmp_path),
         "-o", str(tmp_path / "logbook.csv"), "--no-geocode", "--no-weather", "--no-marine",
         "--no-sample-cache", "--lock-radius-m", "-1", "--min-leg-distance-nm", "0.2",
         "--trip-cache-file", str(tmp_path / "trips.pkl"),
     ]
-    run1_files = [paths["f0"], paths["f1"], paths["f2"], paths["f3"]]
-    main([str(p) for p in run1_files] + common_args)
+    _write(paths["f0"], paths["f1"], paths["f2"], paths["f3"])
+    main(common_args)
     capsys.readouterr()
 
-    run2_files = run1_files + [paths["f4"]]
-    exit_code = main([str(p) for p in run2_files] + common_args)
+    _write(paths["f4"])
+    exit_code = main(common_args)
 
     assert exit_code == 0
     captured = capsys.readouterr()
@@ -816,9 +827,9 @@ def test_main_trip_cache_is_invalidated_by_a_changed_threshold(tmp_path, monkeyp
     _stub_samples_by_path(monkeypatch, paths, samples_by_name, call_log)
 
     trip_cache_file = tmp_path / "trips.pkl"
-    run1_files = [paths["f0"], paths["f1"], paths["f2"], paths["f3"]]
+    _write(paths["f0"], paths["f1"], paths["f2"], paths["f3"])
     main(
-        [str(p) for p in run1_files]
+        ["--ebl-dir", str(tmp_path)]
         + ["-o", str(tmp_path / "logbook.csv"), "--no-geocode", "--no-weather", "--no-marine",
            "--no-sample-cache", "--lock-radius-m", "-1",
            "--trip-cache-file", str(trip_cache_file)]
@@ -827,7 +838,7 @@ def test_main_trip_cache_is_invalidated_by_a_changed_threshold(tmp_path, monkeyp
     capsys.readouterr()
 
     exit_code = main(
-        [str(p) for p in run1_files]
+        ["--ebl-dir", str(tmp_path)]
         + ["-o", str(tmp_path / "logbook.csv"), "--no-geocode", "--no-weather", "--no-marine",
            "--no-sample-cache", "--lock-radius-m", "-1",
            "--trip-cache-file", str(trip_cache_file), "--speed-threshold-kn", "0.8"]
@@ -851,9 +862,9 @@ def test_main_trip_cache_is_invalidated_by_a_trip_logic_version_bump(tmp_path, m
     _stub_samples_by_path(monkeypatch, paths, samples_by_name, call_log)
 
     trip_cache_file = tmp_path / "trips.pkl"
-    run1_files = [paths["f0"], paths["f1"], paths["f2"], paths["f3"]]
+    _write(paths["f0"], paths["f1"], paths["f2"], paths["f3"])
     main(
-        [str(p) for p in run1_files]
+        ["--ebl-dir", str(tmp_path)]
         + ["-o", str(tmp_path / "logbook.csv"), "--no-geocode", "--no-weather", "--no-marine",
            "--no-sample-cache", "--lock-radius-m", "-1",
            "--trip-cache-file", str(trip_cache_file)]
@@ -863,7 +874,7 @@ def test_main_trip_cache_is_invalidated_by_a_trip_logic_version_bump(tmp_path, m
 
     monkeypatch.setattr("nmea2log.cli.TRIP_LOGIC_VERSION", -1)
     exit_code = main(
-        [str(p) for p in run1_files]
+        ["--ebl-dir", str(tmp_path)]
         + ["-o", str(tmp_path / "logbook.csv"), "--no-geocode", "--no-weather", "--no-marine",
            "--no-sample-cache", "--lock-radius-m", "-1",
            "--trip-cache-file", str(trip_cache_file)]
@@ -875,17 +886,23 @@ def test_main_trip_cache_is_invalidated_by_a_trip_logic_version_bump(tmp_path, m
 
 def test_main_trip_cache_falls_back_when_the_resume_file_is_gone(tmp_path, monkeypatch, capsys):
     """If the file a cached run recorded as its resume point can no longer be found among the
-    given logfiles (moved, deleted, or --ebl-dir/logfiles now points somewhere else), the cache
-    must not be guessed at -- it's logged and the run falls back to treating every given file as
-    needing to be decoded, exactly like there was no cache at all."""
-    paths, samples_by_name = _make_trip_cache_fixture(tmp_path)
+    files --ebl-dir now discovers (moved, deleted, or --ebl-dir now points somewhere else), the
+    cache must not be guessed at -- it's logged and the run falls back to treating every given
+    file as needing to be decoded, exactly like there was no cache at all."""
+    _, samples_by_name = _make_trip_cache_fixture(tmp_path)
+    # A genuinely different --ebl-dir per run (rather than the flat paths _make_trip_cache_fixture
+    # itself returns) -- run2 must see *only* f4, disjoint from run1's f0..f3, to exercise "the
+    # resume file is nowhere to be found any more" rather than just "not decoded this time".
+    run1_dir, run2_dir = tmp_path / "run1", tmp_path / "run2"
+    paths = {name: run1_dir / f"{name}.ebl" for name in ("f0", "f1", "f2", "f3")}
+    paths["f4"] = run2_dir / "f4.ebl"
     call_log: list = []
     _stub_samples_by_path(monkeypatch, paths, samples_by_name, call_log)
 
     trip_cache_file = tmp_path / "trips.pkl"
-    run1_files = [paths["f0"], paths["f1"], paths["f2"], paths["f3"]]
+    _write(paths["f0"], paths["f1"], paths["f2"], paths["f3"])
     main(
-        [str(p) for p in run1_files]
+        ["--ebl-dir", str(run1_dir)]
         + ["-o", str(tmp_path / "logbook.csv"), "--no-geocode", "--no-weather", "--no-marine",
            "--no-sample-cache", "--lock-radius-m", "-1",
            "--trip-cache-file", str(trip_cache_file)]
@@ -894,8 +911,9 @@ def test_main_trip_cache_falls_back_when_the_resume_file_is_gone(tmp_path, monke
     capsys.readouterr()
 
     # A disjoint file set -- none of these were the run's own recorded resume file.
+    _write(paths["f4"])
     main(
-        [str(paths["f4"])]
+        ["--ebl-dir", str(run2_dir)]
         + ["-o", str(tmp_path / "logbook.csv"), "--no-geocode", "--no-weather", "--no-marine",
            "--no-sample-cache", "--lock-radius-m", "-1",
            "--trip-cache-file", str(trip_cache_file)]

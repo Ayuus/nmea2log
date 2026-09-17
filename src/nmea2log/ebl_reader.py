@@ -27,6 +27,11 @@ Two properties of the format that shape the reader below:
    stays valid across file boundaries, instead of an entire file being silently discarded just
    because it happens not to contain a 126992 message itself.
 
+   More than one device on the bus can send PGN 126992 at once (found in practice: two, whose
+   clocks disagreed by ~1s) -- see ``_update_time_state`` for how the reading actually used is
+   picked (whichever source has sent the most so far this session), rather than just whichever
+   source's message happened to arrive last.
+
 Validated against real SD card logs from a W2K-2 with a Yanmar 4LV195Z engine: a complete cold
 engine start (fuel rate, oil pressure build-up, warm-up, hour meter, even the "Preheat
 Indicator" warning during preheating) came out physically plausible and internally consistent
@@ -175,18 +180,46 @@ def _reassemble_fast_packet(
     return None
 
 
+def _update_time_state(time_state: Dict[str, object], source: int, decoded_time: datetime) -> None:
+    """Updates ``time_state["current"]`` from a newly-decoded PGN 126992 (System Time) reading,
+    but only if ``source`` is (or has just become) the most prevalent source of these readings
+    seen so far this session -- not unconditionally, the way this used to just take whichever
+    source's message happened to arrive last.
+
+    Found in practice, on a real boat: more than one device on the N2K bus can send PGN 126992 at
+    once (here: two, one second apart from each other) -- this PGN carries no field distinguishing
+    a GPS-verified reading from a device's own less-authoritative clock, so there's no way to tell
+    which one is "right" from a single message alone. Blindly taking whichever one arrived last
+    made the decoded time step backward by ~1s every time the two sources' messages happened to
+    interleave -- confirmed to be the direct cause of small backward-jump violations later found
+    in the season-wide fixes/sogs/attitude arrays (see fix_array.py's own sorted_by_time methods).
+    Cumulative message counts, kept in ``time_state`` itself (so they carry over between files the
+    same way ``time_state["current"]`` already does), converge on the same choice
+    _select_primary_gps_source() already makes for position fixes from the same kind of
+    multi-source ambiguity -- "whichever source sends the most" -- computed online instead of
+    needing a second pass over the whole archive first to find that answer."""
+    counts = time_state.setdefault("source_counts", {})
+    counts[source] = counts.get(source, 0) + 1
+    preferred_source = time_state.get("time_source")
+    if preferred_source is None or counts[source] >= counts.get(preferred_source, 0):
+        time_state["time_source"] = source
+        time_state["current"] = decoded_time
+
+
 def iter_frames(
     path: Union[str, Path],
-    time_state: Optional[Dict[str, Optional[datetime]]] = None,
+    time_state: Optional[Dict[str, object]] = None,
     wanted_pgns: Optional[FrozenSet[int]] = None,
 ) -> Iterator[Frame]:
     """Reads an EBL log file and yields decoded Frames from it, in file order.
 
     Requires a PGN 126992 (System Time) message to get an absolute time reference; frames
-    before that are skipped. ``time_state`` is a mutable dict (key ``"current"``) that tracks
-    the last known time; pass the same dict to consecutive files from the same session so the
-    time reference is preserved across file boundaries (see the module docstring above).
-    Default (``None``) starts each file with a clean slate, as before.
+    before that are skipped. ``time_state`` is a mutable dict (key ``"current"``, plus
+    ``"source_counts"``/``"time_source"`` -- see ``_update_time_state``) that tracks the last
+    known time; pass the same dict to consecutive files from the same session so the time
+    reference (and each source's own running message count) is preserved across file boundaries
+    (see the module docstring above). Default (``None``) starts each file with a clean slate, as
+    before.
 
     ``wanted_pgns``: if given, frames whose PGN isn't in this set are dropped right after
     decoding the CAN ID, before the (comparatively expensive) Fast Packet reassembly and Frame
@@ -221,7 +254,7 @@ def iter_frames(
         if pgn == PGN_SYSTEM_TIME:
             decoded_time = decode_system_time(payload)
             if decoded_time is not None:
-                time_state["current"] = decoded_time
+                _update_time_state(time_state, source, decoded_time)
             continue
 
         current_time = time_state.get("current")

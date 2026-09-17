@@ -120,7 +120,25 @@ def run_pipeline(
     if min_stop_minutes is not None:
         args.min_stop_minutes = min_stop_minutes
 
-    logfiles = [Path(p) for p in ebl_paths]
+    # Sorted here, unconditionally -- unlike cli.py's own logfiles (either given explicitly, in
+    # whatever order the user listed them on the command line, or discovered via
+    # _discover_ebl_files(), which already sorts), ebl_paths here comes straight from Kotlin's own
+    # file listing (MainActivity's local file scan for the offline-build path, or
+    # _discover_ebl_files() again for the W2K-2 sync path -- already sorted there, but sorting
+    # again is a no-op). Found in practice, on a real device: Kotlin's own listing is not
+    # guaranteed to be chronological (File.walkTopDown() makes no ordering promise), which doesn't
+    # just affect decode order cosmetically -- every season-wide sample array accumulated below
+    # (fixes/sogs/attitude/...) is built by appending each file's own records in this same
+    # sequence, so an out-of-order logfiles list means out-of-order data, forcing every one of
+    # those arrays to pay for their own defensive re-sort later (see
+    # tripbuilder.py's _reject_gps_outliers_array/SogArray.sorted_by_time/
+    # AttitudeArray.sorted_by_time) -- confirmed, via fine-grained
+    # checkpoint logging on a real device with a real ~2.7M-position archive, to be exactly where a
+    # full-archive rebuild was getting OOM-killed. Sorting the (~2000, not ~2 million) file paths
+    # themselves, once, up front, is what actually keeps every one of those arrays already sorted
+    # by construction, making that defensive re-sort a genuine no-op instead of a safety net that
+    # always ends up paying its own real cost.
+    logfiles = sorted(Path(p) for p in ebl_paths)
     if not logfiles:
         return {"ok": False, "error": "No .ebl files given."}
 
@@ -260,11 +278,21 @@ def run_pipeline(
         # run having silently died one file short.
         log(f"[info] ...decoded {len(logfiles)}/{len(logfiles)} logfile(s) so far")
 
-        all_fixes, all_sogs, _primary_gps_source = _select_primary_gps_source(fixes_by_source, sogs_by_source)
+        all_fixes, all_sogs, primary_gps_source = _select_primary_gps_source(fixes_by_source, sogs_by_source)
         all_depth = _dominant_source_only(depth_by_source)
         all_water_temp = _dominant_source_only(water_temp_by_source)
         all_battery = _dominant_source_only(battery_by_source)
         all_attitude = _dominant_source_only(attitude_by_source)
+
+        # Same message as cli.py's own _run() -- missing here before (asked for explicitly: the
+        # Android app should behave the same as the desktop CLI, not a silently reduced feature
+        # set). Only shown when there's an actual choice to explain -- a single-source boat has
+        # nothing to report here.
+        if len(fixes_by_source) > 1:
+            log(
+                f"[info] Multiple position sources found ({sorted(fixes_by_source)}); "
+                f"using source {primary_gps_source} as the primary GPS (most messages)."
+            )
 
         # The four *_by_source dicts above are dead weight from here on: each all_* variable
         # already holds its own direct reference to the one source array it needs (see
@@ -294,7 +322,7 @@ def run_pipeline(
             # _DECODE_PROGRESS_INTERVAL_S) stops the moment the last file is read, leaving nothing on
             # screen (or in nmea2log.log) to tell "still working" apart from "hung" or "already
             # crashed silently" for however long this phase takes on a phone's much slower CPU.
-            log(f"[info] Reizen opbouwen uit {len(all_fixes)} GPS-posities...")
+            log(f"[info] Building trips from {len(all_fixes)} GPS position(s)...")
             fresh_trips = build_trips(
                 all_fixes,
                 all_sogs,
@@ -411,7 +439,7 @@ def run_pipeline(
         geocoder=geocoder,
         latest_position=latest_position,
     )
-    log(f"[ok] Logboek geschreven: {html_path} ({len(trips)} reis/reizen)")
+    log(f"[ok] Logbook written: {html_path} ({len(trips)} trip(s))")
 
     return {"ok": True, "trip_count": len(trips), "html_path": str(html_path)}
 
