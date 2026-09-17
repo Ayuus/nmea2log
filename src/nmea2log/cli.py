@@ -54,7 +54,7 @@ from .pgn_decode import (
     decode_water_depth,
 )
 from .trip_ids import assign_trip_ids
-from .tripbuilder import TRIP_LOGIC_VERSION, build_trips, resolve_trip_places
+from .tripbuilder import TRIP_LOGIC_VERSION, build_trips_chunked, resolve_trip_places
 from .upload import UploadError, upload_file, upload_via_rest
 
 _T = TypeVar("_T")
@@ -996,7 +996,7 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
             # screen to distinguish "still working" from "hung" or "already crashed silently" for
             # however long this phase takes.
             log(f"[info] Reizen opbouwen uit {len(all_fixes)} GPS-posities...", file=sys.stderr)
-            fresh_trips = build_trips(
+            fresh_trips = build_trips_chunked(
                 all_fixes,
                 all_sogs,
                 all_engine,

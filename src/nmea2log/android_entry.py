@@ -38,7 +38,7 @@ from .marine import MarineFetcher
 from .sample_cache import SampleCache
 from .trip_cache import TripCache, choose_resume_index, config_signature, find_resume_index
 from .trip_ids import assign_trip_ids
-from .tripbuilder import TRIP_LOGIC_VERSION, build_trips, resolve_trip_places
+from .tripbuilder import TRIP_LOGIC_VERSION, build_trips_chunked, resolve_trip_places
 from .weather import WeatherFetcher
 
 
@@ -284,7 +284,7 @@ def run_pipeline(
             # screen (or in nmea2log.log) to tell "still working" apart from "hung" or "already
             # crashed silently" for however long this phase takes on a phone's much slower CPU.
             log(f"[info] Reizen opbouwen uit {len(all_fixes)} GPS-posities...")
-            fresh_trips = build_trips(
+            fresh_trips = build_trips_chunked(
                 all_fixes,
                 all_sogs,
                 all_engine,
