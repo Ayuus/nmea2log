@@ -323,11 +323,12 @@ function nmea2log_readers_render(): void {
         'meta_key' => NMEA2LOG_BOAT_META_KEY,
         'meta_value' => $my_slug,
     ]);
+    $boat_name = nmea2log_boat_display_name_for_user(get_current_user_id());
     ?>
     <div class="wrap">
-        <h1>Mijn lezers</h1>
+        <h1>Lezers <strong><?= esc_html($boat_name) ?></strong></h1>
         <?php echo $message; ?>
-        <p>Lezers van jouw logboek (<code><?= esc_html($my_slug) ?></code>):</p>
+        <p>Lezers van jouw logboek:</p>
         <table class="widefat striped">
             <thead><tr><th>E-mail</th><th></th></tr></thead>
             <tbody>
