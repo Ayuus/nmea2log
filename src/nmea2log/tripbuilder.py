@@ -11,6 +11,7 @@ time -- so explicitly not via a tank sensor.
 from __future__ import annotations
 
 import bisect
+import gc
 import math
 import statistics
 from collections import Counter
@@ -1210,6 +1211,19 @@ def build_trips(
     # a full multi-year archive produces, with nothing to tell "still working" apart from "hung"
     # or "crashed silently" for however long it took.
     samples = _merge_nav_samples(fixes, sogs, depth_samples, water_temp_samples)
+    # fixes/sogs/depth_samples/water_temp_samples are never read again below this point -- on a
+    # real ~2.7 million-fix archive (a full season), this function was still getting killed by
+    # the OS on a memory-constrained Android device even after _merge_nav_samples() itself was
+    # already optimized (see that function's own doc comment on the SOG fix) -- confirmed in
+    # practice: it now dies specifically right after this line, building trips from the merged
+    # samples, which only makes sense if the FixArray/SogArray these came from (each easily
+    # tens of MB of compact array.array storage for this many fixes) were still resident the
+    # whole time on top of the newly-built samples list, not freed once no longer needed. `del`
+    # plus an explicit collect (rather than just letting them fall out of scope at function
+    # return) returns that memory to the allocator immediately, before -- not after -- the rest
+    # of this function's own, separate peak usage.
+    del fixes, sogs, depth_samples, water_temp_samples
+    gc.collect()
     if len(samples) < 2:
         return []
     log(f"[info] ...{len(samples)} navigation samples merged, classifying trips...")
