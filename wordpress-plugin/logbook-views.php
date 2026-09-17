@@ -1,6 +1,6 @@
 <?php
 /**
- * Admin-only viewer for views.log (see logboek-index.php, which appends one line per
+ * Admin-only viewer for views.log (see logbook-index.php, which appends one line per
  * successful logbook view). Deploy once, next to index.php (see its own doc comment on why this
  * no longer needs a per-boat URL since 1.6.0). Add ?boot=<slug> to view a specific boat's log --
  * defaults to nmea2log_effective_slug(), same as index.php.
@@ -70,7 +70,7 @@ header('Content-Type: text/html; charset=utf-8');
 <tbody>
 <?php foreach ($lines as $line): ?>
 <?php
-    // Each line is "YYYY-MM-DD HH:MM:SS username" (see logboek-index.php) -- split on the
+    // Each line is "YYYY-MM-DD HH:MM:SS username" (see logbook-index.php) -- split on the
     // first run of whitespace after the fixed-width timestamp, so a username containing a space
     // still comes through whole instead of getting truncated at its own first space.
     $timestamp = substr($line, 0, 19);

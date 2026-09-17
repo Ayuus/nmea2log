@@ -1,10 +1,13 @@
 <?php
 /**
- * Gatekeeper for the nmea2log HTML logbook. Deploy once, anywhere under www/ (e.g.
- * www/logboek/index.php) -- since 1.6.0 this no longer needs to live at a URL matching any
- * particular boat's own slug: nmea2log_effective_slug() (see nmea2log-remarks.php) resolves
- * *which* boat's logbook to show from who's actually logged in, so one shared page serves every
- * boat on the site.
+ * Gatekeeper for the nmea2log HTML logbook. Since 1.6.0 this no longer needs to live at a URL
+ * matching any particular boat's own slug to work: nmea2log_effective_slug() (see
+ * nmea2log-remarks.php) resolves *which* boat's logbook to show from who's actually logged in,
+ * regardless of where this file itself is deployed. Even so, since 1.7.0 the installation
+ * instructions have every boat's own copy deployed at www/<slug>/index.php (its own slug, see
+ * nmea2log_render_boat_field()) -- purely so each boat gets its own predictable URL, since the
+ * invite email (see nmea2log_readers_render()) derives it from the slug alone rather than from
+ * any separately configured setting.
  *
  * The generated logbook.html itself is uploaded (via the nmea2log --upload feature) to
  * nmea2log_logbook_path() (see nmea2log-remarks.php) -- outside the web-served www/ directory, so

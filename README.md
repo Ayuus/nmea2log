@@ -209,7 +209,7 @@ download_dir = Actisense
 ; Boat name, shown at the top of the HTML logbook.
 boat_name = Zeevalk
 ; Same folder as download_dir above, so `nmea2log` with no arguments finds the files on its own
-; after downloading -- no more selecting or dragging files by hand.
+; after downloading -- no need to pass --ebl-dir every time.
 ebl_dir = Actisense
 ```
 
@@ -240,8 +240,6 @@ Once configured (see above), day-to-day use is one double-click, no terminal nee
   under `ebl_dir` into `logbook.html`. If the boat isn't reachable (no wifi), it prints a message
   and just processes whatever's already local instead of getting stuck — nothing to babysit. Add
   `--csv`/`--gpx` (e.g. by editing the shortcut/command) if you also want those files.
-  Drag a single log file onto it instead to skip both the download and the `ebl_dir` search, and
-  process just that one file.
 
 The rest of this section explains what this does underneath, and the full command-line options,
 for other platforms or more control.
@@ -259,15 +257,19 @@ nmea2log-download
 The command only downloads what's still missing or incomplete (compared by file size), so
 running it again after a later sail only fetches the new files.
 
-Then process the downloaded files as usual:
+Then process the downloaded files:
 
 ```bash
-nmea2log Actisense/EBL000000/*.ebl Actisense/EBL000001/*.ebl -o logbook.csv
+nmea2log
 ```
 
-Or, simpler: run `nmea2log` with no arguments at all. It then searches the `ebl_dir` folder from
-`nmea2log.ini` recursively for `.ebl` files — set once, so after downloading you never have to
-select or drag files by hand again.
+With no arguments at all, it searches the `ebl_dir` folder from `nmea2log.ini` recursively for
+`.ebl` files — set once, so after downloading you never have to select files by hand. Pass
+`--ebl-dir` instead to search a different folder for one run without changing the config file:
+
+```bash
+nmea2log --ebl-dir Actisense -o logbook.csv
+```
 
 This EBL path is reverse-engineered (see "Assumptions & limitations") and has since been
 validated against real SD card logs — when in doubt, always check that the outcome feels
@@ -293,15 +295,17 @@ The preferred way to publish: pass `--remarks-api-url` to add a "Remarks" button
 (save/cancel) to each trip, backed by a small WordPress plugin
 (`wordpress-plugin/nmea2log-remarks.php`) instead of a database or server of this tool's own.
 This also login-gates the whole logbook, not just remarks: the uploaded file goes to a `private/`
-directory outside the public web root, and `wordpress-plugin/logboek-index.php` (deployed as
-e.g. `www/logboek/index.php`) checks the visitor is both logged in and specifically allowed to
+directory outside the public web root, and `wordpress-plugin/logbook-index.php` (deployed as
+e.g. `www/logbook/index.php`) checks the visitor is both logged in and specifically allowed to
 view the logbook, redirecting to the WordPress login page (not logged in) or showing a plain
 access-denied message (logged in as some unrelated account, e.g. a webshop customer) otherwise.
 
 Multiple boats can share one WordPress site: which logbook a person sees (or a Logbook Writer
 edits/uploads) is resolved from *who's logged in*, via a "boat" field on their own user profile --
-not from the URL, so the gatekeeper page below is deployed exactly once no matter how many boats
-use the site.
+not from the URL, so any deployment of the gatekeeper page below shows the right boat to the right
+visitor regardless of where it lives. Even so, each boat gets its own deployment anyway (step 4
+below), at a fixed URL derived from its own boat slug alone -- purely so each boat has its own
+memorable URL and its invite emails need no separate URL configured anywhere.
 
 **Installing the plugin** (one-time setup on the WordPress site):
 
@@ -311,20 +315,28 @@ use the site.
    an existing site (webshop customers, existing contributors, ...): "Logbook Writer" (can view,
    save remarks, and upload/publish) and "Logbook Reader" (can only view). A site Administrator
    can always do both, without needing either role.
-2. Optional: pick a site-wide default `<slug>` in wp-admin → Instellingen → nmea2log, used for
-   anyone with no boat of their own (mainly an Administrator). Defaults to `logboek` if left
-   blank. (Or, if you'd rather not store it in the database at all, add
-   `define('NMEA2LOG_SLUG', 'your-boat');` to `wp-config.php` instead -- that takes priority and
-   disables the field there.)
-3. Create each boat owner's account, in wp-admin → Users, with the "Logbook Writer" role, and set
-   their own `<slug>` (a per-boat identifier -- letters/digits/hyphens) in the "nmea2log" section
-   on their Edit User profile screen. A Writer can then invite/remove their *own* boat's readers
-   themselves, from "Mijn lezers" in the wp-admin sidebar -- no further Administrator involvement
-   needed per reader.
-4. Upload `wordpress-plugin/logboek-index.php` as `index.php` and `wordpress-plugin/logboek-
-   views.php` as `views.php` into one shared location under `www/` (e.g. `www/logboek/`) -- both
-   resolve the right boat per visitor at request time, so there's nothing inside either file
-   itself to adjust for your own layout, and nothing to repeat per boat.
+2. Optional: for anyone with no boat of their own (mainly an Administrator), the default is
+   `logboek` -- to change it, add `define('NMEA2LOG_SLUG', 'your-boat');` to `wp-config.php`.
+   There's no settings page for this; every real per-boat setting lives on that boat's own
+   Writer profile instead (step 3).
+3. Create each boat owner's account, in wp-admin → Users, with the "Logbook Writer" role, and fill
+   in **Bootnaam** (e.g. "Little Endian") in the "nmea2log" section on their Edit User profile
+   screen -- that's the only thing to set; the URL slug (`<slug>` below, e.g. `little_endian`) is
+   derived from it automatically (lowercased, underscore-separated -- see
+   `nmea2log_slug_from_boat_name()`), shown read-only right under the field once saved. A Writer
+   can then invite/remove their *own* boat's readers themselves, from "Mijn lezers" in the
+   wp-admin sidebar -- no further
+   Administrator involvement needed per reader: inviting one (Writer picks the reader's email *and*
+   username; the account is created immediately) emails the reader a link to set their own
+   password, via WordPress's own password-reset mechanism (the same one behind "lost your
+   password" on the login page).
+4. For each boat's `<slug>` (from step 3), upload `wordpress-plugin/logbook-index.php` as
+   `www/<slug>/index.php` and `wordpress-plugin/logbook-views.php` as `www/<slug>/views.php`. The
+   invite email a Writer sends links to exactly this fixed location, derived from their own boat
+   name alone (see `nmea2log_logbook_url_for_user()`) -- nothing else to configure. Deploying
+   the same pair of files again under each boat's own `<slug>` is deliberate repetition (unlike
+   the shared, boat-agnostic content of the files themselves): it's what gives every boat its own
+   predictable URL without a settings field to keep in sync.
 5. On each Writer's own profile page (wp-admin → Users → Profile → Application Passwords),
    generate a new Application Password -- a long, auto-generated credential scoped to this one
    integration, not the account's real login password. Copy it now; WordPress only shows it once.
@@ -406,7 +418,7 @@ nmea2log --upload --upload-host ssh.example.transip.nl --upload-user my-user \
 | `--upload-host` / `--upload-user` / `--upload-remote-path` / `--upload-key-file` / `--upload-port` | SFTP connection details (only with `--upload`; default port 22) |
 | `--remarks-api-url` | URL of a WordPress REST endpoint storing per-trip remarks (see "Per-trip remarks" above). Default: disabled |
 | `--engine-count N` | Number of physical engines. With `1`, any extra engine instance in the data is ignored as noise (same idea as the GPS source-dominance filtering) |
-| `--ebl-dir DIR` | Folder to search recursively for `.ebl` files when no logfiles are given. Default: not set, or the `ebl_dir` setting from the config file |
+| `--ebl-dir DIR` | Folder to search recursively for `.ebl` files (required, unless set via the config file). Default: not set, or the `ebl_dir` setting from the config file |
 | `--battery-warning-voltage V` | Flags a trip's battery voltage as low in the 'Warnings' column if it drops below this at any point (default 12.2 V; a common threshold for a 12V lead-acid battery -- adjust for a 24V system or a different chemistry) |
 
 All NMEA2000 times are UTC; in the CSV, the HTML logbook, and the GPX track names this is

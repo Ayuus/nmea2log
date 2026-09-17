@@ -2,7 +2,7 @@
 rem Copy this file to nmea2log-local.bat (gitignored, never committed) and fill in your own
 rem values -- called automatically by nmea2log.bat/nmea2log-no-download.bat if it exists.
 
-rem Opens a browser to this URL after each run. Match the <slug> to whatever you configured in
-rem wp-admin -> Instellingen -> nmea2log (or NMEA2LOG_SLUG in wp-config.php) -- see the "Per-trip
-rem remarks, login-gated, via WordPress" section in README.md.
+rem Opens a browser to this URL after each run. Match the <slug> to your own boat's "Bootnaam"
+rem field (wp-admin -> Users -> your profile) -- see the "Per-trip remarks, login-gated, via
+rem WordPress" section in README.md.
 set "VIEW_URL=https://your-site.example/your-slug/"
