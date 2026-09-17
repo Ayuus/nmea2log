@@ -23,9 +23,10 @@ codebase is a naive UTC value; encoding/decoding here must round-trip it exactly
 from __future__ import annotations
 
 import array
+import bisect
 import math
 from datetime import datetime, timedelta
-from typing import Iterable, Iterator, List, Optional, Union
+from typing import Iterable, Iterator, List, Optional, Tuple, Union
 
 from .model import AttitudeSample, BatterySample, DepthSample, PositionFix, SogSample, WaterTempSample
 
@@ -355,3 +356,92 @@ class AttitudeArray:
             result._pitch_deg.append(self._pitch_deg[i])
             result._roll_deg.append(self._roll_deg[i])
         return result
+
+
+class NavSampleArray:
+    """Columnar storage for tripbuilder.py's own merged nav-sample stream (time + position + speed
+    + depth + water-temp + course, one row per accepted GPS fix) -- the single biggest per-season
+    Python-object cost left once fixes/sogs themselves are already stored this way (see this
+    module's own docstring). build_trips() never keeps more than one of these resident at a time,
+    but that one instance spans the *entire* archive being processed, for as long as its whole run
+    classification/merging pipeline takes -- exactly FixArray's own reasoning, just one layer
+    downstream (this is what a real ~2.7M-position archive's build_trips() call was found, in
+    practice, to hold as its single biggest cost -- millions of individually-boxed NavSample
+    objects, each alive for the whole run).
+
+    Deliberately does NOT expose a NavSample-returning __getitem__/__iter__ the way FixArray does
+    for PositionFix -- NavSample lives in tripbuilder.py, which already imports this module (so
+    this module importing it back would be circular), and more importantly tripbuilder.py's own
+    run-classification/merging pipeline is built specifically to avoid ever materializing a full
+    NavSample per row while operating on a season's worth of them (see that module's own
+    Group/_group_index_pairs/_materialize helpers) -- only a single trip's or stay's own, already-
+    small selection of rows ever gets turned back into real NavSample objects, right before the
+    per-trip statistics functions that need real attribute access."""
+
+    __slots__ = ("_time", "_lat", "_lon", "_sog_ms", "_depth_m", "_water_temp_c", "_cog_deg")
+
+    def __init__(self) -> None:
+        self._time: "array.array[float]" = array.array("d")
+        self._lat: "array.array[float]" = array.array("d")
+        self._lon: "array.array[float]" = array.array("d")
+        self._sog_ms: "array.array[float]" = array.array("d")
+        self._depth_m: "array.array[float]" = array.array("d")
+        self._water_temp_c: "array.array[float]" = array.array("d")
+        self._cog_deg: "array.array[float]" = array.array("d")
+
+    def append_raw(
+        self,
+        epoch_seconds: float,
+        lat: float,
+        lon: float,
+        sog_ms: float,
+        depth_m: Optional[float],
+        water_temp_c: Optional[float],
+        cog_deg: Optional[float],
+    ) -> None:
+        self._time.append(epoch_seconds)
+        self._lat.append(lat)
+        self._lon.append(lon)
+        self._sog_ms.append(sog_ms)
+        self._depth_m.append(depth_m if depth_m is not None else math.nan)
+        self._water_temp_c.append(water_temp_c if water_temp_c is not None else math.nan)
+        self._cog_deg.append(cog_deg if cog_deg is not None else math.nan)
+
+    def time_at(self, i: int) -> float:
+        return self._time[i]
+
+    def datetime_at(self, i: int) -> datetime:
+        return _from_epoch(self._time[i])
+
+    def lat_at(self, i: int) -> float:
+        return self._lat[i]
+
+    def lon_at(self, i: int) -> float:
+        return self._lon[i]
+
+    def sog_at(self, i: int) -> float:
+        return self._sog_ms[i]
+
+    def depth_at(self, i: int) -> Optional[float]:
+        depth = self._depth_m[i]
+        return None if math.isnan(depth) else depth
+
+    def water_temp_at(self, i: int) -> Optional[float]:
+        temp = self._water_temp_c[i]
+        return None if math.isnan(temp) else temp
+
+    def cog_at(self, i: int) -> Optional[float]:
+        cog = self._cog_deg[i]
+        return None if math.isnan(cog) else cog
+
+    def index_range_for_time(self, start: datetime, end: datetime) -> Optional[Tuple[int, int]]:
+        """First..last index (as a half-open range) whose time falls in [start, end] inclusive,
+        via bisect -- relies on rows being appended in non-decreasing time order (always true in
+        practice: build_trips()'s only caller, _merge_nav_samples, iterates an already
+        outlier-rejected-and-sorted FixArray). Returns None if nothing falls in that window."""
+        lo = bisect.bisect_left(self._time, _to_epoch(start))
+        hi = bisect.bisect_right(self._time, _to_epoch(end))
+        return (lo, hi) if hi > lo else None
+
+    def __len__(self) -> int:
+        return len(self._time)

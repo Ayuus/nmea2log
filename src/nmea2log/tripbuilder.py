@@ -16,10 +16,9 @@ import statistics
 from collections import Counter
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
-from itertools import groupby
-from typing import Dict, FrozenSet, List, Optional, Tuple
+from typing import Dict, FrozenSet, Iterator, List, Optional, Tuple
 
-from .fix_array import AttitudeArray, FixArray, SogArray
+from .fix_array import AttitudeArray, FixArray, NavSampleArray, SogArray
 from .geocode import NoGeocoder
 from .log import log
 from .model import (
@@ -75,6 +74,72 @@ class NavSample:
     depth_m: Optional[float] = None
     water_temp_c: Optional[float] = None
     cog_deg: Optional[float] = None
+
+
+# A "run" (a maximal stretch classified 'stationary' or 'moving', see _classify_runs) used to be
+# represented as a List[NavSample] -- one boxed Python object per GPS fix, kept alive for
+# build_trips()'s entire run. On a real multi-year archive (millions of fixes) that is the single
+# biggest memory cost left in the whole pipeline (see NavSampleArray's own docstring in
+# fix_array.py) -- confirmed in practice: this is what actually got the Android app OOM-killed by
+# the OS on a full, from-scratch archive rebuild.
+#
+# A Group instead holds (start, end) half-open index ranges into a single, season-wide
+# NavSampleArray -- normally just one range (a run is a contiguous slice of the array), except
+# after _merge_negligible_trips splices a later, non-adjacent run's samples onto an earlier trip's
+# own track (see that function's own docstring), where a Group ends up holding more than one
+# range, in time order. Because Group is a plain list of lightweight (int, int) tuples, every
+# existing list operation the old List[NavSample]-based code relied on (concatenation, .extend(),
+# slicing, indexing group[0]/group[-1]) keeps working completely unchanged -- only code that used
+# to read an element's own .time/.lat/... attributes needs a samples.xxx_at(i) lookup instead.
+#
+# Only right before a "leaf" per-trip statistics function that needs real attribute access (e.g.
+# _settled_position, _speed_stats_kn, _track_reaching_markers) does a Group actually get turned
+# back into a real List[NavSample], via _materialize() below -- always a single trip's or stay's
+# own, already-small selection of samples, never the whole season, so that stays cheap regardless
+# of how large the underlying archive is. Those leaf functions themselves are entirely unchanged.
+Group = List[Tuple[int, int]]
+
+
+def _group_start_time(samples: NavSampleArray, group: Group) -> datetime:
+    return samples.datetime_at(group[0][0])
+
+
+def _group_end_time(samples: NavSampleArray, group: Group) -> datetime:
+    return samples.datetime_at(group[-1][1] - 1)
+
+
+def _group_index_pairs(group: Group) -> Iterator[Tuple[int, int]]:
+    """Yields consecutive (i, j) index pairs across a group's ranges, in the same order
+    zip(flat, flat[1:]) over the group's fully-materialized samples would produce -- including the
+    boundary pair between two ranges spliced together by _merge_negligible_trips -- without ever
+    materializing that flattened sequence itself."""
+    prev: Optional[int] = None
+    for start, end in group:
+        if prev is not None:
+            yield prev, start
+        for i in range(start, end - 1):
+            yield i, i + 1
+        prev = end - 1
+
+
+def _materialize(samples: NavSampleArray, group: Group) -> List[NavSample]:
+    """The one place a group's samples get turned back into real NavSample objects -- see Group's
+    own docstring above."""
+    result: List[NavSample] = []
+    for start, end in group:
+        for i in range(start, end):
+            result.append(
+                NavSample(
+                    samples.datetime_at(i),
+                    samples.lat_at(i),
+                    samples.lon_at(i),
+                    samples.sog_at(i),
+                    samples.depth_at(i),
+                    samples.water_temp_at(i),
+                    samples.cog_at(i),
+                )
+            )
+    return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,21 +297,25 @@ def _merge_nav_samples(
     sogs: SogArray,
     depths: Optional[List[DepthSample]] = None,
     water_temps: Optional[List[WaterTempSample]] = None,
-) -> List[NavSample]:
+) -> NavSampleArray:
     """Combines position, speed, depth, and water temperature readings chronologically; all are
     forward-filled.
 
     fixes/sogs are FixArray/SogArray (see fix_array.py) rather than plain lists -- always, by the
     time this is called from build_trips() (the only caller), which wraps whatever it was given
-    into those types up front. A season's worth of either can be millions of samples, and this is
-    the one place a PositionFix/SogSample object gets constructed per fix at all (NavSample below
-    is what the rest of the algorithm actually works with from here on). SOG in particular used
-    to go through a plain sorted(sogs, key=lambda s: s.time) here, materializing a full season's
-    worth of SogSample objects that then stayed resident for this whole function's run -- found
-    in practice, on a real ~2 million-fix archive, this function is where the phone's decode-
-    through-publish pipeline was actually dying (confirmed via the checkpoint logging around
-    build_trips(), see that function's own comment): SOG is typically similar cardinality to
-    position fixes, so that materialization alone was a real, multi-hundred-MB cost on top of
+    into those types up front. A season's worth of either can be millions of samples. Returns a
+    NavSampleArray (see fix_array.py) rather than a List[NavSample] for the same reason: a real
+    multi-year archive holds millions of merged samples, resident for build_trips()'s entire run
+    (confirmed in practice as the single biggest memory cost left in the whole pipeline, see
+    NavSampleArray's own docstring) -- appending raw columns here means no NavSample object ever
+    gets boxed per fix at all any more; only a single trip's or stay's own, already-small selection
+    of rows gets turned back into real NavSample objects later, via _materialize(). SOG in
+    particular used to go through a plain sorted(sogs, key=lambda s: s.time) here, materializing a
+    full season's worth of SogSample objects that then stayed resident for this whole function's
+    run -- found in practice, on a real ~2 million-fix archive, this function is where the phone's
+    decode-through-publish pipeline was actually dying (confirmed via the checkpoint logging
+    around build_trips(), see that function's own comment): SOG is typically similar cardinality
+    to position fixes, so that materialization alone was a real, multi-hundred-MB cost on top of
     everything else already resident at that point."""
     fixes = _reject_gps_outliers_array(fixes)
     # Already in time order -- _reject_gps_outliers_array() processes its input in sorted order
@@ -255,7 +324,7 @@ def _merge_nav_samples(
     sogs = sogs.sorted_by_time()
     depths_sorted = sorted(depths, key=lambda s: s.time) if depths else []
     water_temps_sorted = sorted(water_temps, key=lambda s: s.time) if water_temps else []
-    samples: List[NavSample] = []
+    samples = NavSampleArray()
     sog_idx = 0
     depth_idx = 0
     water_temp_idx = 0
@@ -276,22 +345,30 @@ def _merge_nav_samples(
         while water_temp_idx < len(water_temps_sorted) and water_temps_sorted[water_temp_idx].time <= fix_time:
             last_water_temp = water_temps_sorted[water_temp_idx].temp_c
             water_temp_idx += 1
-        samples.append(
-            NavSample(fix_time, fixes.lat_at(i), fixes.lon_at(i), last_sog, last_depth, last_water_temp, last_cog)
-        )
+        samples.append_raw(fix_epoch, fixes.lat_at(i), fixes.lon_at(i), last_sog, last_depth, last_water_temp, last_cog)
     return samples
 
 
-def _classify_runs(
-    samples: List[NavSample], speed_threshold_ms: float
-) -> List[Tuple[str, List[NavSample]]]:
-    labelled = [("stationary" if s.sog_ms < speed_threshold_ms else "moving", s) for s in samples]
-    return [(label, [s for _, s in group]) for label, group in groupby(labelled, key=lambda t: t[0])]
+def _classify_runs(samples: NavSampleArray, speed_threshold_ms: float) -> List[Tuple[str, Group]]:
+    n = len(samples)
+    if n == 0:
+        return []
+    runs: List[Tuple[str, Group]] = []
+    run_label = "stationary" if samples.sog_at(0) < speed_threshold_ms else "moving"
+    run_start = 0
+    for i in range(1, n):
+        label = "stationary" if samples.sog_at(i) < speed_threshold_ms else "moving"
+        if label != run_label:
+            runs.append((run_label, [(run_start, i)]))
+            run_label = label
+            run_start = i
+    runs.append((run_label, [(run_start, n)]))
+    return runs
 
 
 def _merge_short_stops(
-    runs: List[Tuple[str, List[NavSample]]], min_stop: timedelta, max_gap: timedelta
-) -> List[Tuple[str, List[NavSample]]]:
+    samples: NavSampleArray, runs: List[Tuple[str, Group]], min_stop: timedelta, max_gap: timedelta
+) -> List[Tuple[str, Group]]:
     """Stationary periods shorter than the threshold normally don't count as a port visit and
     get folded into the trip -- EXCEPT when the period is adjacent to a data gap of at least
     ``max_gap``: the measured duration is then artificially short (cut off by the gap, not
@@ -302,9 +379,13 @@ def _merge_short_stops(
     started)."""
     relabelled = []
     for idx, (label, group) in enumerate(runs):
-        if label == "stationary" and (group[-1].time - group[0].time) < min_stop:
-            gap_before = idx > 0 and (group[0].time - runs[idx - 1][1][-1].time) >= max_gap
-            gap_after = idx + 1 < len(runs) and (runs[idx + 1][1][0].time - group[-1].time) >= max_gap
+        if label == "stationary" and (_group_end_time(samples, group) - _group_start_time(samples, group)) < min_stop:
+            gap_before = idx > 0 and (
+                _group_start_time(samples, group) - _group_end_time(samples, runs[idx - 1][1])
+            ) >= max_gap
+            gap_after = idx + 1 < len(runs) and (
+                _group_start_time(samples, runs[idx + 1][1]) - _group_end_time(samples, group)
+            ) >= max_gap
             if not (gap_before or gap_after):
                 label = "moving"
         relabelled.append((label, group))
@@ -312,10 +393,10 @@ def _merge_short_stops(
     return _merge_adjacent(relabelled)
 
 
-def _merge_adjacent(runs: List[Tuple[str, List[NavSample]]]) -> List[Tuple[str, List[NavSample]]]:
+def _merge_adjacent(runs: List[Tuple[str, Group]]) -> List[Tuple[str, Group]]:
     """Joins consecutive runs that ended up with the same label after relabelling (e.g. a
     "stationary" run just turned back into "moving") into a single run."""
-    merged: List[Tuple[str, List[NavSample]]] = []
+    merged: List[Tuple[str, Group]] = []
     for label, group in runs:
         if merged and merged[-1][0] == label:
             merged[-1] = (label, merged[-1][1] + group)
@@ -324,11 +405,22 @@ def _merge_adjacent(runs: List[Tuple[str, List[NavSample]]]) -> List[Tuple[str, 
     return merged
 
 
-def _spatial_spread_m(group: List[NavSample]) -> float:
+def _spatial_spread_m(samples: NavSampleArray, group: Group) -> float:
     """Max distance (meters) from the group's centroid to any point in it."""
-    lat = sum(s.lat for s in group) / len(group)
-    lon = sum(s.lon for s in group) / len(group)
-    return max(_haversine_nm(lat, lon, s.lat, s.lon) * 1852.0 for s in group)
+    total_lat = total_lon = 0.0
+    count = 0
+    for start, end in group:
+        for i in range(start, end):
+            total_lat += samples.lat_at(i)
+            total_lon += samples.lon_at(i)
+            count += 1
+    lat = total_lat / count
+    lon = total_lon / count
+    return max(
+        _haversine_nm(lat, lon, samples.lat_at(i), samples.lon_at(i)) * 1852.0
+        for start, end in group
+        for i in range(start, end)
+    )
 
 
 def _settled_position(
@@ -482,12 +574,12 @@ def _engine_off_span(
 
 
 def _reclassify_locks(
-    runs: List[Tuple[str, List[NavSample]]],
-    samples: List[NavSample],
+    samples: NavSampleArray,
+    runs: List[Tuple[str, Group]],
     on_intervals: List[Tuple[datetime, datetime]],
     lock_radius_m: float,
     lock_max_duration: timedelta,
-) -> List[Tuple[str, List[NavSample]]]:
+) -> List[Tuple[str, Group]]:
     """A stop is treated as a lock, opening bridge, or similarly brief operational pause -- folded
     back into the trip instead of splitting it into two -- if the engine was off no longer than
     ``lock_max_duration`` and the boat barely moved (within ``lock_radius_m`` of its own
@@ -515,17 +607,18 @@ def _reclassify_locks(
     relabelled = []
     for idx, (label, group) in enumerate(runs):
         if label == "stationary" and idx > 0:
-            span = _engine_off_span(on_intervals, group[0].time, group[-1].time)
+            span = _engine_off_span(on_intervals, _group_start_time(samples, group), _group_end_time(samples, group))
             if span is not None:
                 off_start, off_end = span
                 if off_end - off_start <= lock_max_duration:
-                    span_samples = [s for s in samples if off_start <= s.time <= off_end] or group
-                    if _spatial_spread_m(span_samples) <= lock_radius_m:
+                    span_range = samples.index_range_for_time(off_start, off_end)
+                    span_group: Group = [span_range] if span_range else group
+                    if _spatial_spread_m(samples, span_group) <= lock_radius_m:
                         label = "moving"
             elif idx + 1 < len(runs):
                 if (
-                    group[-1].time - group[0].time <= lock_max_duration
-                    and _spatial_spread_m(group) <= lock_radius_m
+                    _group_end_time(samples, group) - _group_start_time(samples, group) <= lock_max_duration
+                    and _spatial_spread_m(samples, group) <= lock_radius_m
                 ):
                     label = "moving"
         relabelled.append((label, group))
@@ -533,8 +626,8 @@ def _reclassify_locks(
 
 
 def _split_runs_on_gaps(
-    runs: List[Tuple[str, List[NavSample]]], max_gap: timedelta
-) -> List[Tuple[str, List[NavSample]]]:
+    samples: NavSampleArray, runs: List[Tuple[str, Group]], max_gap: timedelta
+) -> List[Tuple[str, Group]]:
     """Any run can silently swallow a large data gap if the classification happens to be the same
     on both sides of it -- there's then no differently-labeled sample in between for
     ``_classify_runs`` to split on, even though we have no idea what happened during the gap.
@@ -560,31 +653,39 @@ def _split_runs_on_gaps(
     failure. Simply splitting into two separate stationary runs (no synthetic point needed -- both
     sides already are "stationary") is enough; the existing between-runs gap check then keeps them
     from being merged back into one stay."""
-    result: List[Tuple[str, List[NavSample]]] = []
+    max_gap_s = max_gap.total_seconds()
+    result: List[Tuple[str, Group]] = []
     for label, group in runs:
-        segment: List[NavSample] = [group[0]]
-        for prev, curr in zip(group, group[1:]):
-            if curr.time - prev.time >= max_gap:
-                result.append((label, segment))
+        # At this point every group is still a single contiguous span of array indices (possibly
+        # spread across more than one adjacent tuple, e.g. after _merge_adjacent) -- the splicing
+        # that can make a group non-contiguous only happens later, in _merge_negligible_trips --
+        # so scanning the plain index range [lo, hi) for internal gaps is enough here.
+        lo, hi = group[0][0], group[-1][1]
+        seg_start = lo
+        for i in range(lo, hi - 1):
+            if samples.time_at(i + 1) - samples.time_at(i) >= max_gap_s:
+                result.append((label, [(seg_start, i + 1)]))
                 if label == "moving":
-                    result.append(("stationary", [prev]))
-                segment = [curr]
-            else:
-                segment.append(curr)
-        result.append((label, segment))
+                    result.append(("stationary", [(i, i + 1)]))
+                seg_start = i + 1
+        result.append((label, [(seg_start, hi)]))
     return result
 
 
-def _trip_distance_nm(group: List[NavSample]) -> float:
-    return sum(_haversine_nm(a.lat, a.lon, b.lat, b.lon) for a, b in zip(group, group[1:]))
+def _trip_distance_nm(samples: NavSampleArray, group: Group) -> float:
+    return sum(
+        _haversine_nm(samples.lat_at(i), samples.lon_at(i), samples.lat_at(j), samples.lon_at(j))
+        for i, j in _group_index_pairs(group)
+    )
 
 
 def _merge_negligible_trips(
-    runs: List[Tuple[str, List[NavSample]]],
+    samples: NavSampleArray,
+    runs: List[Tuple[str, Group]],
     min_leg_distance_nm: float,
     max_gap: timedelta,
     lock_radius_m: Optional[float] = None,
-) -> List[Tuple[str, List[NavSample]]]:
+) -> List[Tuple[str, Group]]:
     """A "moving" run covering less than ``min_leg_distance_nm`` doesn't get to end a trip and
     start a new stay on its own -- it's GPS/speed noise or a brief manoeuvre (e.g. nudging a few
     meters along the quay with the engine, or repositioning within the same harbour -- found in
@@ -639,16 +740,16 @@ def _merge_negligible_trips(
     (An earlier version of this fix also tracked, per merged stay, which of its samples belonged
     to the *final* sub-stay after such a splice, and averaged the arrival position over only
     those -- on real data that turned out to change nothing. Removed again as dead complexity.)"""
-    result: List[Tuple[str, List[NavSample]]] = []
-    last_moving_group: Optional[List[NavSample]] = None
+    result: List[Tuple[str, Group]] = []
+    last_moving_group: Optional[Group] = None
     prev_end_time: Optional[datetime] = None
     for label, group in runs:
-        if prev_end_time is not None and group[0].time - prev_end_time >= max_gap:
+        if prev_end_time is not None and _group_start_time(samples, group) - prev_end_time >= max_gap:
             last_moving_group = None  # a real data gap -- never splice/merge across it
-        prev_end_time = group[-1].time
+        prev_end_time = _group_end_time(samples, group)
 
-        is_negligible = _trip_distance_nm(group) < min_leg_distance_nm or (
-            lock_radius_m is not None and _spatial_spread_m(group) <= lock_radius_m
+        is_negligible = _trip_distance_nm(samples, group) < min_leg_distance_nm or (
+            lock_radius_m is not None and _spatial_spread_m(samples, group) <= lock_radius_m
         )
         if label == "moving" and is_negligible:
             if last_moving_group is not None:
@@ -659,7 +760,7 @@ def _merge_negligible_trips(
             label == "stationary"
             and result
             and result[-1][0] == "stationary"
-            and group[0].time - result[-1][1][-1].time < max_gap
+            and _group_start_time(samples, group) - _group_end_time(samples, result[-1][1]) < max_gap
         ):
             prev_group = result[-1][1]
             prev_group.extend(group)
@@ -1230,16 +1331,16 @@ def build_trips(
     on_intervals = _engine_on_intervals(engine_samples)
 
     runs = _classify_runs(samples, speed_threshold_ms)
-    runs = _merge_short_stops(runs, min_stop, max_gap)
+    runs = _merge_short_stops(samples, runs, min_stop, max_gap)
     if lock_radius_m is not None and lock_max_duration_minutes is not None:
         lock_max_duration = timedelta(minutes=lock_max_duration_minutes)
-        runs = _reclassify_locks(runs, samples, on_intervals, lock_radius_m, lock_max_duration)
+        runs = _reclassify_locks(samples, runs, on_intervals, lock_radius_m, lock_max_duration)
         runs = _merge_adjacent(runs)
-    runs = _split_runs_on_gaps(runs, max_gap)
+    runs = _split_runs_on_gaps(samples, runs, max_gap)
     effective_min_leg_distance_nm = (
         min_leg_distance_nm if min_leg_distance_nm is not None else min_trip_distance_nm
     )
-    runs = _merge_negligible_trips(runs, effective_min_leg_distance_nm, max_gap, lock_radius_m)
+    runs = _merge_negligible_trips(samples, runs, effective_min_leg_distance_nm, max_gap, lock_radius_m)
     log(f"[info] ...{len(runs)} run(s) classified, computing per-trip statistics...")
 
     # A cheap, offline placeholder -- never the real geocoder. Actually resolving place names
@@ -1258,9 +1359,10 @@ def build_trips(
         if label != "stationary":
             stays.append(None)
             continue
-        lat, lon = _settled_position(group, speed_threshold_ms, on_intervals, lock_radius_m)
+        track = _materialize(samples, group)
+        lat, lon = _settled_position(track, speed_threshold_ms, on_intervals, lock_radius_m)
         place = placeholder_geocoder.place_name(lat, lon)
-        stays.append(Stay(group[0].time, group[-1].time, lat, lon, place))
+        stays.append(Stay(track[0].time, track[-1].time, lat, lon, place))
 
     trips: List[TripLeg] = []
     for idx, (label, group) in enumerate(runs):
@@ -1269,24 +1371,26 @@ def build_trips(
         prev_stay = stays[idx - 1] if idx > 0 else None
         next_stay = stays[idx + 1] if idx + 1 < len(stays) else None
 
-        depart_time = prev_stay.end if prev_stay else group[0].time
-        arrive_time = next_stay.start if next_stay else group[-1].time
+        track = _materialize(samples, group)
+
+        depart_time = prev_stay.end if prev_stay else track[0].time
+        arrive_time = next_stay.start if next_stay else track[-1].time
         depart_place = prev_stay.place if prev_stay else "Unknown (start outside log file)"
         arrive_place = next_stay.place if next_stay else "Unknown (end outside log file)"
-        depart_lat = prev_stay.lat if prev_stay else group[0].lat
-        depart_lon = prev_stay.lon if prev_stay else group[0].lon
-        arrive_lat = next_stay.lat if next_stay else group[-1].lat
-        arrive_lon = next_stay.lon if next_stay else group[-1].lon
+        depart_lat = prev_stay.lat if prev_stay else track[0].lat
+        depart_lon = prev_stay.lon if prev_stay else track[0].lon
+        arrive_lat = next_stay.lat if next_stay else track[-1].lat
+        arrive_lon = next_stay.lon if next_stay else track[-1].lon
 
         distance_nm = sum(
-            _haversine_nm(a.lat, a.lon, b.lat, b.lon) for a, b in zip(group, group[1:])
+            _haversine_nm(a.lat, a.lon, b.lat, b.lon) for a, b in zip(track, track[1:])
         )
-        avg_speed_kn, max_speed_kn, max_speed_at = _speed_stats_kn(group)
+        avg_speed_kn, max_speed_kn, max_speed_at = _speed_stats_kn(track)
         max_speed_rpm = (
             _rpm_at_time(rpm_samples, max_speed_at, depart_time, arrive_time) if max_speed_at else {}
         )
-        min_depth_m, min_depth_lat, min_depth_lon = _min_depth(group)
-        avg_water_temp_c, min_water_temp_c, max_water_temp_c = _water_temp_stats(group)
+        min_depth_m, min_depth_lat, min_depth_lon = _min_depth(track)
+        avg_water_temp_c, min_water_temp_c, max_water_temp_c = _water_temp_stats(track)
         roll_variation_deg, pitch_variation_deg, roll_range_deg, pitch_range_deg = _motion_variation(
             attitude_samples, depart_time, arrive_time
         )
@@ -1301,7 +1405,7 @@ def build_trips(
                 depart_lon=depart_lon,
                 arrive_lat=arrive_lat,
                 arrive_lon=arrive_lon,
-                duration=_moving_duration(group, max_gap),
+                duration=_moving_duration(track, max_gap),
                 distance_nm=distance_nm,
                 avg_speed_kn=avg_speed_kn,
                 max_speed_kn=max_speed_kn,
@@ -1314,7 +1418,7 @@ def build_trips(
                 engine_health=_engine_health(engine_samples, depart_time, arrive_time),
                 typical_rpm=_typical_rpm(rpm_samples, depart_time, arrive_time),
                 typical_rpm_speed_kn=_typical_rpm_speed_range(
-                    rpm_samples, engine_samples, group, depart_time, arrive_time
+                    rpm_samples, engine_samples, track, depart_time, arrive_time
                 ),
                 battery_health=_battery_health(battery_samples, depart_time, arrive_time),
                 min_depth_m=min_depth_m,
@@ -1328,7 +1432,7 @@ def build_trips(
                 roll_range_deg=roll_range_deg,
                 pitch_range_deg=pitch_range_deg,
                 track=_track_reaching_markers(
-                    group, depart_time, depart_lat, depart_lon, arrive_time, arrive_lat, arrive_lon
+                    track, depart_time, depart_lat, depart_lon, arrive_time, arrive_lat, arrive_lon
                 ),
                 max_speed_at=max_speed_at,
                 max_speed_rpm=max_speed_rpm,
