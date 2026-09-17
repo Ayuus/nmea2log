@@ -11,7 +11,6 @@ time -- so explicitly not via a tank sensor.
 from __future__ import annotations
 
 import bisect
-import gc
 import math
 import statistics
 from collections import Counter
@@ -20,7 +19,7 @@ from datetime import datetime, timedelta
 from itertools import groupby
 from typing import Dict, FrozenSet, List, Optional, Tuple
 
-from .fix_array import AttitudeArray, FixArray, SogArray, _from_epoch, _to_epoch
+from .fix_array import AttitudeArray, FixArray, SogArray
 from .geocode import NoGeocoder
 from .log import log
 from .model import (
@@ -1211,19 +1210,6 @@ def build_trips(
     # a full multi-year archive produces, with nothing to tell "still working" apart from "hung"
     # or "crashed silently" for however long it took.
     samples = _merge_nav_samples(fixes, sogs, depth_samples, water_temp_samples)
-    # fixes/sogs/depth_samples/water_temp_samples are never read again below this point -- on a
-    # real ~2.7 million-fix archive (a full season), this function was still getting killed by
-    # the OS on a memory-constrained Android device even after _merge_nav_samples() itself was
-    # already optimized (see that function's own doc comment on the SOG fix) -- confirmed in
-    # practice: it now dies specifically right after this line, building trips from the merged
-    # samples, which only makes sense if the FixArray/SogArray these came from (each easily
-    # tens of MB of compact array.array storage for this many fixes) were still resident the
-    # whole time on top of the newly-built samples list, not freed once no longer needed. `del`
-    # plus an explicit collect (rather than just letting them fall out of scope at function
-    # return) returns that memory to the allocator immediately, before -- not after -- the rest
-    # of this function's own, separate peak usage.
-    del fixes, sogs, depth_samples, water_temp_samples
-    gc.collect()
     if len(samples) < 2:
         return []
     log(f"[info] ...{len(samples)} navigation samples merged, classifying trips...")
@@ -1349,174 +1335,6 @@ def build_trips(
             )
         )
     return [trip for trip in trips if trip.distance_nm >= min_trip_distance_nm]
-
-
-# A cold-start build of a full season (no settled trips cached yet at all -- the normal
-# incremental case reprocesses only a small "resume window", see cli.py/android_entry.py's own
-# resume_index handling) can be millions of merged NavSample objects, which build_trips() holds
-# fully in memory for its whole run. On a memory-constrained Android device this has caused a
-# real, reproducible OS-level OOM kill (confirmed live: process silently SIGKILLed right after
-# "Reizen opbouwen uit 2715470 GPS-posities...", no Java or Python exception, nothing left to
-# catch it) even after freeing every input array right after merging them (see build_trips()'s
-# own del/gc.collect() below _merge_nav_samples()) -- the NavSample objects themselves, not the
-# FixArray/SogArray they were built from, are the dominant remaining cost.
-#
-# The trip-detection algorithm below build_trips() (run classification, lock/negligible-trip
-# merging, gap-splitting, ...) is delicate, real-bug-fixing logic (see its own many "found in
-# practice" comments) that actively splices samples across non-contiguous runs -- rewriting it
-# to work on compact array data instead of List[NavSample] groups was judged too high-risk to do
-# safely here. build_trips_chunked() below takes the lower-risk route instead: build_trips()
-# itself is completely unchanged, and this new function calls it repeatedly, once per time
-# window, so only one window's worth of NavSample objects is ever resident at once.
-_CHUNK_DAYS = 30.0
-# A real trip that takes longer than this to complete would have its true departure and/or
-# arrival fall outside a chunk's own query window and could be mishandled (missing from the
-# logbook, or shown with an "Unknown (start/end outside log file)" port that's actually known) --
-# every real trip seen on real data so far is well under a day, so this margin is generous, not
-# tight, but it is still an assumption future data could violate. Also has to stay well above
-# min_stop_minutes (default 10 minutes), not just above a trip's own duration -- found in
-# practice (see test_build_trips_chunked_matches_build_trips_when_forced_to_chunk's own doc
-# comment): a real stay landing near a chunk boundary can have its *visible* span inside one
-# chunk's own narrower local window truncated to under min_stop_minutes even when the overlap
-# comfortably covers the adjacent trip's whole duration, which then misclassifies it as part of
-# the trip instead of a real stay. Days vs. minutes here is a three-orders-of-magnitude margin
-# over both real trip durations and any reasonable min_stop_minutes, so this is a real
-# theoretical edge case, not a practical one, at the size this constant is actually set to.
-_CHUNK_OVERLAP = timedelta(days=5.0)
-# Below this many fixes, build_trips() itself comfortably fits in memory (measured: real syncs
-# and every existing unit test are always far smaller than this) -- chunking below this size
-# would only add overhead (repeated build_trips() startup, boundary bookkeeping) for no benefit,
-# so build_trips_chunked() just forwards straight to build_trips() unchanged in that case.
-_CHUNK_THRESHOLD_FIXES = 200_000
-
-
-def _filter_samples_by_time(samples: Optional[list], start: datetime, end: datetime) -> list:
-    """Plain linear-scan time-window filter for the sample types that aren't stored as one of
-    fix_array.py's columnar arrays (engine/trip-fuel/depth/water-temp/battery/rpm samples) --
-    unlike GPS fixes/SOG/attitude, none of these come anywhere close to millions-of-rows
-    cardinality on a real archive (see _merge_nav_samples' own doc comment on which sample types
-    actually reach that scale), so a plain filter here was never the memory problem and doesn't
-    need array-backed storage or bisect to stay cheap."""
-    if not samples:
-        return []
-    return [s for s in samples if start <= s.time < end]
-
-
-def build_trips_chunked(
-    fixes: FixArray | List[PositionFix],
-    sogs: SogArray | List[SogSample],
-    engine_samples: List[EngineSample],
-    trip_fuel_samples: Optional[List[TripFuelSample]] = None,
-    depth_samples: Optional[List[DepthSample]] = None,
-    water_temp_samples: Optional[List[WaterTempSample]] = None,
-    battery_samples: Optional[List[BatterySample]] = None,
-    rpm_samples: Optional[List[EngineRpmSample]] = None,
-    attitude_samples: Optional[List[AttitudeSample]] = None,
-    *,
-    speed_threshold_kn: float = 0.5,
-    min_stop_minutes: float = 10.0,
-    max_gap_minutes: Optional[float] = None,
-    min_trip_distance_nm: float = 0.1,
-    min_leg_distance_nm: Optional[float] = None,
-    lock_radius_m: Optional[float] = None,
-    lock_max_duration_minutes: Optional[float] = None,
-) -> List[TripLeg]:
-    """Same parameters, same result as build_trips() -- see that function's own docstring for
-    all of them -- but for a large archive, processes it one ``_CHUNK_DAYS``-wide time window at
-    a time (each widened by ``_CHUNK_OVERLAP`` on both sides, so a trip near a window boundary is
-    always fully contained in at least one window) instead of holding the whole thing in memory
-    at once. See the module-level comment right above this function for the full reasoning.
-
-    A trip is kept from whichever window's own *core* (non-overlap) span its arrival falls into
-    -- exactly one window's core span ever contains a given moment, so this can't double-count or
-    drop a trip near a boundary, as long as the trip's own duration fits within the overlap
-    margin (see _CHUNK_OVERLAP)."""
-    if not isinstance(fixes, FixArray):
-        fixes = FixArray(fixes)
-    if not isinstance(sogs, SogArray):
-        sogs = SogArray(sogs)
-
-    if len(fixes) < 2 or len(fixes) <= _CHUNK_THRESHOLD_FIXES:
-        return build_trips(
-            fixes,
-            sogs,
-            engine_samples,
-            trip_fuel_samples,
-            depth_samples,
-            water_temp_samples,
-            battery_samples,
-            rpm_samples,
-            attitude_samples,
-            speed_threshold_kn=speed_threshold_kn,
-            min_stop_minutes=min_stop_minutes,
-            max_gap_minutes=max_gap_minutes,
-            min_trip_distance_nm=min_trip_distance_nm,
-            min_leg_distance_nm=min_leg_distance_nm,
-            lock_radius_m=lock_radius_m,
-            lock_max_duration_minutes=lock_max_duration_minutes,
-        )
-
-    if attitude_samples is not None and not isinstance(attitude_samples, AttitudeArray):
-        attitude_samples = AttitudeArray(attitude_samples)
-
-    # Every slice_by_time() call below (on fixes/sogs/attitude_samples alike) needs its own
-    # array time-sorted first -- see FixArray.slice_by_time()'s own doc comment for why that
-    # can't be assumed of the input as given, confirmed in practice on a real device.
-    fixes = fixes.sorted_by_time()
-    sogs = sogs.sorted_by_time()
-    if attitude_samples is not None:
-        attitude_samples = attitude_samples.sorted_by_time()
-
-    data_start = _from_epoch(fixes.time_at(0))
-    data_end = _from_epoch(fixes.time_at(len(fixes) - 1))
-
-    log(
-        f"[info] ...archive spans {(data_end - data_start).days + 1} day(s), processing in "
-        f"{_CHUNK_DAYS:.0f}-day chunks to limit peak memory"
-    )
-
-    all_trips: List[TripLeg] = []
-    chunk_start = data_start
-    chunk_span = timedelta(days=_CHUNK_DAYS)
-    while chunk_start <= data_end:
-        chunk_end = chunk_start + chunk_span
-        query_start = chunk_start - _CHUNK_OVERLAP
-        query_end = chunk_end + _CHUNK_OVERLAP
-        query_start_epoch = _to_epoch(query_start)
-        query_end_epoch = _to_epoch(query_end)
-
-        chunk_fixes = fixes.slice_by_time(query_start_epoch, query_end_epoch)
-        if len(chunk_fixes) >= 2:
-            chunk_trips = build_trips(
-                chunk_fixes,
-                sogs.slice_by_time(query_start_epoch, query_end_epoch),
-                _filter_samples_by_time(engine_samples, query_start, query_end),
-                _filter_samples_by_time(trip_fuel_samples, query_start, query_end),
-                _filter_samples_by_time(depth_samples, query_start, query_end),
-                _filter_samples_by_time(water_temp_samples, query_start, query_end),
-                _filter_samples_by_time(battery_samples, query_start, query_end),
-                _filter_samples_by_time(rpm_samples, query_start, query_end),
-                attitude_samples.slice_by_time(query_start_epoch, query_end_epoch)
-                if attitude_samples is not None
-                else None,
-                speed_threshold_kn=speed_threshold_kn,
-                min_stop_minutes=min_stop_minutes,
-                max_gap_minutes=max_gap_minutes,
-                min_trip_distance_nm=min_trip_distance_nm,
-                min_leg_distance_nm=min_leg_distance_nm,
-                lock_radius_m=lock_radius_m,
-                lock_max_duration_minutes=lock_max_duration_minutes,
-            )
-            # Only this window's own core span "owns" a trip landing in it -- a trip whose
-            # arrival falls in the overlap margin belongs to (and is fully rebuilt by) the
-            # adjacent window whose core span actually covers that moment instead.
-            all_trips.extend(t for t in chunk_trips if chunk_start <= t.arrive_time < chunk_end)
-            del chunk_trips
-        del chunk_fixes
-        gc.collect()
-        chunk_start = chunk_end
-
-    return all_trips
 
 
 def resolve_trip_places(trips: List[TripLeg], geocoder: object) -> List[TripLeg]:
