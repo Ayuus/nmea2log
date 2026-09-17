@@ -269,7 +269,13 @@ def _reject_gps_outliers_array(fixes: FixArray) -> FixArray:
     own direct unit test asserting an exact List[PositionFix] in, List[PositionFix] out contract,
     and duplicating ~15 lines here is a lot cheaper than risking that carefully-tuned, real-bug-
     fixing logic (see its own docstring) on a rewrite. See test_reject_gps_outliers_array_* for
-    this version's own coverage of the same real-world corrupted-fix scenario."""
+    this version's own coverage of the same real-world corrupted-fix scenario.
+
+    Mutates and returns the same ``fixes`` object it was given (see FixArray.replace_columns_with)
+    rather than building and returning an unrelated new one -- a caller that keeps its own
+    reference to this exact object across build_trips()'s whole run (every real caller does, see
+    android_entry.py/cli.py) sees the outlier-rejected, sorted data too, and the original, larger
+    columns are freed immediately instead of staying resident for no reason."""
     n = len(fixes)
     if n == 0:
         return fixes
@@ -289,7 +295,13 @@ def _reject_gps_outliers_array(fixes: FixArray) -> FixArray:
             continue
         accepted.append_raw(fixes.time_at(i), fixes.lat_at(i), fixes.lon_at(i))
         prev_i = i
-    return accepted
+    # Written back into `fixes`' own columns (see FixArray.replace_columns_with's own docstring)
+    # rather than simply `return accepted` -- the caller passed `fixes` in by reference and, on
+    # every real caller (cli.py/android_entry.py), still holds its own separate reference to the
+    # exact same object for build_trips()'s entire run; returning a distinct new FixArray would
+    # leave the original, larger columns resident and unreachable-but-not-freed the whole time.
+    fixes.replace_columns_with(accepted)
+    return fixes
 
 
 def _merge_nav_samples(

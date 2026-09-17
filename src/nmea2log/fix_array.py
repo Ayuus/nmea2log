@@ -92,6 +92,20 @@ class FixArray:
     def datetime_at(self, i: int) -> datetime:
         return _from_epoch(self._time[i])
 
+    def replace_columns_with(self, other: "FixArray") -> None:
+        """Swaps this array's own columns for another FixArray's, in place -- used by
+        tripbuilder.py's _reject_gps_outliers_array() so a season-wide FixArray a caller already
+        holds a reference to (e.g. android_entry.py's all_fixes, alive for build_trips()'s
+        *entire* run) gets its outlier-rejected/sorted data written back into the very same
+        object, instead of a second, separate FixArray staying resident alongside the original
+        for no reason -- the caller's own reference means the *original*, larger columns would
+        otherwise never actually be freed until the whole call returns, even once nothing inside
+        build_trips() itself still needs them (confirmed in practice, via a live RSS trace on a
+        real ~2.7M-position archive: this was a real, measurable share of build_trips()'s own
+        peak). ``other`` is left empty (0 rows) -- not meant to be used again afterward."""
+        self._time, self._lat, self._lon = other._time, other._lat, other._lon
+        other._time, other._lat, other._lon = array.array("d"), array.array("d"), array.array("d")
+
     def __len__(self) -> int:
         return len(self._lat)
 
@@ -168,14 +182,23 @@ class SogArray:
         _merge_nav_samples() (see tripbuilder.py) so a season's worth of SOG samples (typically
         similar cardinality to position fixes -- millions, on a real multi-year archive) never
         has to be materialized into a plain list of SogSample objects just to sort it, the same
-        problem FixArray's own outlier-rejection pass already solved for position fixes."""
+        problem FixArray's own outlier-rejection pass already solved for position fixes.
+
+        Mutates and returns this same object (rather than building and returning an unrelated new
+        one) for the same reason FixArray.replace_columns_with exists: a caller that keeps its own
+        reference to this exact object across build_trips()'s whole run (every real caller does,
+        see android_entry.py/cli.py's all_sogs) would otherwise also keep the original, unsorted
+        columns resident the entire time, alongside this sorted copy, for no reason."""
         order = sorted(range(len(self)), key=self.time_at)
-        result = SogArray()
+        new_time = array.array("d")
+        new_sog_ms = array.array("d")
+        new_cog_deg = array.array("d")
         for i in order:
-            result._time.append(self._time[i])
-            result._sog_ms.append(self._sog_ms[i])
-            result._cog_deg.append(self._cog_deg[i])
-        return result
+            new_time.append(self._time[i])
+            new_sog_ms.append(self._sog_ms[i])
+            new_cog_deg.append(self._cog_deg[i])
+        self._time, self._sog_ms, self._cog_deg = new_time, new_sog_ms, new_cog_deg
+        return self
 
 
 class DepthArray:
@@ -544,14 +567,22 @@ class AttitudeArray:
 
     def sorted_by_time(self) -> "AttitudeArray":
         """Equivalent of sorted(attitude_samples, key=lambda s: s.time) -- build_trips() sorts
-        attitude samples once up front (see its own docstring on _motion_variation)."""
+        attitude samples once up front (see its own docstring on _motion_variation).
+
+        Mutates and returns this same object rather than building and returning an unrelated new
+        one -- see SogArray.sorted_by_time's own docstring for why (a caller's own reference to
+        this exact object, held across build_trips()'s whole run, would otherwise keep the
+        original, unsorted columns resident the entire time too, alongside this sorted copy)."""
         order = sorted(range(len(self)), key=self.time_at)
-        result = AttitudeArray()
+        new_time = array.array("d")
+        new_pitch_deg = array.array("d")
+        new_roll_deg = array.array("d")
         for i in order:
-            result._time.append(self._time[i])
-            result._pitch_deg.append(self._pitch_deg[i])
-            result._roll_deg.append(self._roll_deg[i])
-        return result
+            new_time.append(self._time[i])
+            new_pitch_deg.append(self._pitch_deg[i])
+            new_roll_deg.append(self._roll_deg[i])
+        self._time, self._pitch_deg, self._roll_deg = new_time, new_pitch_deg, new_roll_deg
+        return self
 
 
 class NavSampleArray:
