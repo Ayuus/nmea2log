@@ -13,11 +13,13 @@ from nmea2log.model import (
     TripFuelSample,
     WaterTempSample,
 )
+from nmea2log import tripbuilder
 from nmea2log.fix_array import FixArray
 from nmea2log.tripbuilder import (
     _reject_gps_outliers,
     _reject_gps_outliers_array,
     build_trips,
+    build_trips_chunked,
     resolve_trip_places,
 )
 
@@ -1668,3 +1670,118 @@ def test_engine_hours_extension_splits_a_shared_stay_instead_of_double_counting(
     # accounting for the full 36-minute on-interval exactly once, not twice (18 + 18 = 36).
     assert trip_a.engine_hours[0] == pytest.approx(18 / 60, abs=0.01)
     assert trip_b.engine_hours[0] == pytest.approx(18 / 60, abs=0.01)
+
+
+def _build_multi_trip_scenario():
+    """Three separate trips (A -> B -> C -> D), each 10 min stationary + 20 min moving + 10 min
+    stationary, chained back-to-back, plus a closing stay at the last port -- used to test
+    build_trips_chunked() against build_trips() on data spanning multiple chunk windows,
+    including chunk boundaries that land in the middle of a trip's own moving span."""
+    fixes = []
+    sogs = []
+    engine_samples = []
+    positions = [(52.30, 4.90), (52.35, 4.93), (52.40, 4.96), (52.45, 4.99)]
+    m = 0
+    for leg in range(3):
+        start_lat, start_lon = positions[leg]
+        end_lat, end_lon = positions[leg + 1]
+        # 12, not 10, minutes of stationary samples -- min_stop_minutes=10 below needs the
+        # *elapsed time* between the first and last sample of a stay to clear 10 minutes, and 10
+        # samples one minute apart only spans 9 minutes end to end (found while writing this
+        # test: exactly 10 fell just short, and the whole scenario collapsed into one giant
+        # "moving" run instead of the intended 3 separate trips -- same margin _build_scenario()
+        # above already uses for the same reason).
+        for _ in range(12):
+            fixes.append(PositionFix(_dt(m), start_lat, start_lon))
+            sogs.append(SogSample(_dt(m), 0.0))
+            engine_samples.append(EngineSample(_dt(m), 0, 0.5, 3600 * 100 + m * 60))
+            m += 1
+        for i in range(20):
+            frac = i / 19
+            fixes.append(
+                PositionFix(
+                    _dt(m), start_lat + (end_lat - start_lat) * frac, start_lon + (end_lon - start_lon) * frac
+                )
+            )
+            sogs.append(SogSample(_dt(m), 3.0))
+            engine_samples.append(EngineSample(_dt(m), 0, 8.0, 3600 * 100 + m * 60))
+            m += 1
+    for _ in range(12):
+        fixes.append(PositionFix(_dt(m), *positions[-1]))
+        sogs.append(SogSample(_dt(m), 0.0))
+        engine_samples.append(EngineSample(_dt(m), 0, 0.5, 3600 * 100 + m * 60))
+        m += 1
+    return fixes, sogs, engine_samples
+
+
+def test_build_trips_chunked_matches_build_trips_below_the_chunking_threshold():
+    """The common case (every real sync short of a cold-start full-season rebuild, and every
+    other test in this file): small enough that build_trips_chunked() should just forward
+    straight to build_trips(), unchanged."""
+    fixes, sogs, engine_samples = _build_scenario()
+
+    direct = build_trips(fixes, sogs, engine_samples, speed_threshold_kn=0.5, min_stop_minutes=10)
+    chunked = build_trips_chunked(fixes, sogs, engine_samples, speed_threshold_kn=0.5, min_stop_minutes=10)
+
+    assert chunked == direct
+
+
+def test_build_trips_chunked_matches_build_trips_when_forced_to_chunk(monkeypatch):
+    """Forces chunking on a small fixture (real chunking only ever kicks in on a multi-million-
+    fix archive, far too large for a fast unit test) by shrinking the chunk size/threshold down
+    to a scale this scenario actually spans, with boundaries landing mid-trip -- exercises the
+    same overlap-based stitching this function relies on for the real, much larger case.
+
+    Overlap here (45 min) is a large multiple of both this scenario's own trip durations (~30
+    min) and min_stop_minutes (10) -- matching, in proportion, how generously the real
+    _CHUNK_OVERLAP (5 days) covers a real trip (hours) and the real default min_stop_minutes.
+    Found in practice while writing this test: an overlap only a little larger than a stay's own
+    duration can still truncate that stay's *visible* span, inside one chunk's own local window,
+    to under min_stop_minutes -- which then gets it relabelled from a real stay into part of the
+    trip itself (a real edge case in the chunking approach, not a test bug), same as it would for
+    a genuinely too-short stop. The real overlap's enormous margin over real stay/trip durations
+    makes that a non-issue in practice; this test's own margin needs to match that proportion to
+    actually exercise the boundary-stitching logic instead of that unrelated effect."""
+    monkeypatch.setattr(tripbuilder, "_CHUNK_THRESHOLD_FIXES", 1)
+    monkeypatch.setattr(tripbuilder, "_CHUNK_DAYS", 20 / 1440)
+    monkeypatch.setattr(tripbuilder, "_CHUNK_OVERLAP", timedelta(minutes=45))
+
+    fixes, sogs, engine_samples = _build_multi_trip_scenario()
+
+    direct = build_trips(fixes, sogs, engine_samples, speed_threshold_kn=0.5, min_stop_minutes=10)
+    chunked = build_trips_chunked(fixes, sogs, engine_samples, speed_threshold_kn=0.5, min_stop_minutes=10)
+
+    assert len(direct) == 3  # sanity check on the scenario itself, independent of chunking
+    assert chunked == direct
+
+
+def test_build_trips_chunked_returns_nothing_for_too_little_data():
+    fixes = [PositionFix(_dt(0), 52.30, 4.90)]
+    sogs = [SogSample(_dt(0), 0.0)]
+
+    assert build_trips_chunked(fixes, sogs, []) == []
+
+
+def test_build_trips_chunked_handles_unsorted_input(monkeypatch):
+    """Regression test: found live, on a real device -- android_entry.py builds its fixes/sogs
+    from files discovered via Kotlin's File.walkTopDown(), which makes no ordering guarantee at
+    all (unlike cli.py's own sorted glob()), and a real archive this way came back internally out
+    of order by nearly three weeks (an "archive spans -19 day(s)" log line was the first sign).
+    build_trips() itself has always tolerated unsorted input (see _reject_gps_outliers_array's
+    own sort), but build_trips_chunked()'s bisect-based slice_by_time() needs its own explicit
+    sort first -- this shuffles the input to make sure that actually happens."""
+    monkeypatch.setattr(tripbuilder, "_CHUNK_THRESHOLD_FIXES", 1)
+    monkeypatch.setattr(tripbuilder, "_CHUNK_DAYS", 20 / 1440)
+    monkeypatch.setattr(tripbuilder, "_CHUNK_OVERLAP", timedelta(minutes=45))
+
+    fixes, sogs, engine_samples = _build_multi_trip_scenario()
+    direct = build_trips(fixes, sogs, engine_samples, speed_threshold_kn=0.5, min_stop_minutes=10)
+
+    shuffled_fixes = fixes[::-1]
+    shuffled_sogs = sogs[::-1]
+    chunked = build_trips_chunked(
+        shuffled_fixes, shuffled_sogs, engine_samples, speed_threshold_kn=0.5, min_stop_minutes=10
+    )
+
+    assert len(direct) == 3  # sanity check on the scenario itself, independent of chunking
+    assert chunked == direct

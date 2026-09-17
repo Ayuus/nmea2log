@@ -23,6 +23,7 @@ codebase is a naive UTC value; encoding/decoding here must round-trip it exactly
 from __future__ import annotations
 
 import array
+import bisect
 import math
 from datetime import datetime, timedelta
 from typing import Iterable, Iterator, List, Optional, Union
@@ -103,6 +104,38 @@ class FixArray:
     def __repr__(self) -> str:
         return f"FixArray({list(self)!r})"
 
+    def slice_by_time(self, start_epoch: float, end_epoch: float) -> "FixArray":
+        """Fixes with start_epoch <= time < end_epoch, as a new FixArray -- used by
+        build_trips_chunked() to carve a time window's worth of a season out of the full archive
+        without ever materializing the fixes outside that window as PositionFix objects just to
+        filter them. Requires self to already be time-sorted -- call sorted_by_time() first if
+        that's not already guaranteed (found in practice: NOT true of every real caller --
+        android_entry.py builds this from files discovered via Kotlin's File.walkTopDown(), which
+        makes no ordering guarantee at all, unlike cli.py's own sorted glob() -- a real archive
+        this way came back internally out of order by nearly three weeks). Uses bisect, not a
+        linear scan, since a season can be millions of fixes."""
+        lo = bisect.bisect_left(self._time, start_epoch)
+        hi = bisect.bisect_left(self._time, end_epoch)
+        result = FixArray()
+        result._time = self._time[lo:hi]
+        result._lat = self._lat[lo:hi]
+        result._lon = self._lon[lo:hi]
+        return result
+
+    def sorted_by_time(self) -> "FixArray":
+        """Array-native equivalent of sorted(fixes, key=lambda f: f.time) -- build_trips_chunked()
+        calls this once up front (see its own doc comment on why input order can't be trusted),
+        so a season's worth of fixes never has to be materialized into a plain list of
+        PositionFix objects just to sort it, the same problem SogArray.sorted_by_time() already
+        solved for SOG."""
+        order = sorted(range(len(self)), key=self.time_at)
+        result = FixArray()
+        for i in order:
+            result._time.append(self._time[i])
+            result._lat.append(self._lat[i])
+            result._lon.append(self._lon[i])
+        return result
+
 
 class SogArray:
     """Same idea as FixArray, for SogSample. cog_deg is Optional in SogSample -- stored as NaN
@@ -164,6 +197,17 @@ class SogArray:
             result._time.append(self._time[i])
             result._sog_ms.append(self._sog_ms[i])
             result._cog_deg.append(self._cog_deg[i])
+        return result
+
+    def slice_by_time(self, start_epoch: float, end_epoch: float) -> "SogArray":
+        """Same idea as FixArray.slice_by_time() -- requires self to already be time-sorted (call
+        sorted_by_time() first if that's not already guaranteed)."""
+        lo = bisect.bisect_left(self._time, start_epoch)
+        hi = bisect.bisect_left(self._time, end_epoch)
+        result = SogArray()
+        result._time = self._time[lo:hi]
+        result._sog_ms = self._sog_ms[lo:hi]
+        result._cog_deg = self._cog_deg[lo:hi]
         return result
 
 
@@ -344,6 +388,14 @@ class AttitudeArray:
 
     def __repr__(self) -> str:
         return f"AttitudeArray({list(self)!r})"
+
+    def slice_by_time(self, start_epoch: float, end_epoch: float) -> "AttitudeArray":
+        """Same idea as FixArray.slice_by_time() -- requires self to already be time-sorted (call
+        sorted_by_time() first if that's not already guaranteed). Built on this class's own
+        slice-supporting __getitem__ rather than duplicating it column by column."""
+        lo = bisect.bisect_left(self._time, start_epoch)
+        hi = bisect.bisect_left(self._time, end_epoch)
+        return self[lo:hi]
 
     def sorted_by_time(self) -> "AttitudeArray":
         """Equivalent of sorted(attitude_samples, key=lambda s: s.time) -- build_trips() sorts
