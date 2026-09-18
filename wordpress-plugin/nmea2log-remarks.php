@@ -137,6 +137,15 @@ function nmea2log_render_boat_field(WP_User $user): void {
     }
     $current_name = get_user_meta($user->ID, NMEA2LOG_BOAT_NAME_META_KEY, true);
     $current_slug = get_user_meta($user->ID, NMEA2LOG_BOAT_META_KEY, true);
+    // A user who already had a "Boot" slug from before this field existed (or from any other
+    // path that set NMEA2LOG_BOAT_META_KEY directly) must never see this field blank when they
+    // in fact already have a boat assigned -- saving the profile for any unrelated reason (e.g.
+    // generating an Application Password) submits whatever this field currently shows, and
+    // nmea2log_save_boat_field() treats an empty submission as "clear the assignment". Found in
+    // practice: exactly this wiped an existing Writer's boat slug (and, with it, access to their
+    // own already-saved remarks/logbook, both keyed by slug) the first time they saved their
+    // profile after this field was introduced, before ever having typed a name into it.
+    $display_value = $current_name !== '' ? $current_name : ($current_slug !== '' ? ucwords(str_replace(['-', '_'], ' ', $current_slug)) : '');
     ?>
     <h2>nmea2log</h2>
     <table class="form-table">
@@ -145,7 +154,7 @@ function nmea2log_render_boat_field(WP_User $user): void {
             <td>
                 <input
                     type="text" name="nmea2log_boat_name" id="nmea2log_boat_name"
-                    value="<?= esc_attr($current_name) ?>" class="regular-text"
+                    value="<?= esc_attr($display_value) ?>" class="regular-text"
                     placeholder="(standaardboot)"
                 >
                 <p class="description">
