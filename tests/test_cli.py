@@ -11,7 +11,7 @@ from nmea2log.cli import (
     _discover_ebl_files,
     _dominant_source_only,
     _filter_to_dominant_engine,
-    _merge_by_source,
+    _merge_array_by_source,
     _release_lock,
     _select_primary_gps_source,
     build_arg_parser,
@@ -35,10 +35,10 @@ def test_dominant_source_only_empty():
     assert _dominant_source_only({}) == []
 
 
-def test_merge_by_source_combines_across_calls():
+def test_merge_array_by_source_combines_across_calls():
     target: dict = {}
-    _merge_by_source(target, {10: [1, 2], 11: [3]})
-    _merge_by_source(target, {10: [4], 12: [5]})
+    _merge_array_by_source(target, {10: [1, 2], 11: [3]}, list)
+    _merge_array_by_source(target, {10: [4], 12: [5]}, list)
 
     assert target == {10: [1, 2, 4], 11: [3], 12: [5]}
 
@@ -49,9 +49,9 @@ def test_dominant_source_only_after_merge_reflects_full_session():
     randomly "win" in one of the files and still cause false jumps."""
     target: dict = {}
     # file 1: source 10 slightly in the minority
-    _merge_by_source(target, {10: [1, 2], 11: [1, 2, 3]})
+    _merge_array_by_source(target, {10: [1, 2], 11: [1, 2, 3]}, list)
     # file 2: source 10 clearly in the majority -> source 10 wins over the whole session
-    _merge_by_source(target, {10: [3, 4, 5, 6, 7], 11: [4]})
+    _merge_array_by_source(target, {10: [3, 4, 5, 6, 7], 11: [4]}, list)
 
     result = _dominant_source_only(target)
 

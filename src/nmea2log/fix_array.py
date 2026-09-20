@@ -24,10 +24,12 @@ from __future__ import annotations
 
 import array
 import bisect
+import itertools
 import math
 from datetime import datetime, timedelta
 from typing import Dict, FrozenSet, Iterable, Iterator, List, Optional, Tuple, Union
 
+from .log import log
 from .model import (
     AttitudeSample,
     BatterySample,
@@ -42,11 +44,11 @@ from .model import (
 
 _EPOCH = datetime(1970, 1, 1)
 
-_CLOCK_JUMP_THRESHOLD_S = 24 * 3600.0  # a backward jump at least this large means a device clock
-# that hadn't synced to real time yet, not ordinary jitter/duplicate timestamps -- same threshold
-# and reasoning as tripbuilder.py's own _CLOCK_JUMP_THRESHOLD_HOURS (kept as a separate constant
-# here, in seconds, rather than imported, to avoid fix_array.py importing back from the module
-# that already imports it).
+# A backward jump at least this large means a device clock that hadn't synced to real time yet,
+# not ordinary jitter/duplicate timestamps (found in practice: real jumps were on the order of
+# weeks; real jitter/duplicates are seconds at most). Shared with tripbuilder.py's own outlier
+# rejection -- see SogArray/AttitudeArray.drop_time_regressions and _reject_gps_outliers_array.
+_CLOCK_JUMP_THRESHOLD_S = 24 * 3600.0
 
 
 def _to_epoch(dt: datetime) -> float:
@@ -59,21 +61,144 @@ def _from_epoch(seconds: float) -> datetime:
 
 def _is_sorted(time_column: "array.array[float]") -> bool:
     """Cheap O(n)-time, O(1)-extra-memory check for whether a time column is already in
-    non-decreasing order -- used to skip sorted_by_time()'s own sort+copy entirely when it would
+    non-decreasing order -- used to skip drop_time_regressions()'s own sort+copy entirely when it would
     be a no-op. Confirmed, in practice, to matter: sorted(range(n), key=...) (the actual sort,
     when needed) has to materialize a full list of boxed index *and* key objects for the whole
     array to sort it at all -- on a real ~2 million-row season-wide array, this was found (via
     fine-grained checkpoint logging on a real device) to be exactly where a full-archive rebuild
     was getting OOM-killed. A season's data is typically already in (or very close to) time order
     to begin with (each source file's own records are chronological; only the *file discovery*
-    order can differ from that -- see AttitudeArray/SogArray's own sorted_by_time docstrings) --
+    order can differ from that -- see AttitudeArray/SogArray's own drop_time_regressions docstrings) --
     this plain linear scan, using array.array's own fast C-level indexing, costs only a handful of
     float comparisons per element and never boxes anything beyond what a single comparison needs
     at a time, regardless of how large the array is."""
     return all(time_column[i] <= time_column[i + 1] for i in range(len(time_column) - 1))
 
 
-class FixArray:
+def _log_time_anomaly(label: str, dropped: int, max_backward_s: float, first_epoch: Optional[float], clock_resets: int) -> None:
+    """Called whenever a time column turned out *not* to be in order -- which, with the decoder
+    picking one consistent System Time source (see ebl_reader.py), should never happen on real
+    data any more. Loud on purpose (its own ``[anomaly]`` tag, not ``[warning]``: the Android app
+    treats every ``[warning]`` line as a lost-connection notice): silently repairing this is
+    exactly what hid the real cause of the earlier OOM crashes (a second device broadcasting a
+    wrong clock), so an unexpected reappearance should be visible, not swallowed."""
+    parts = []
+    if dropped:
+        parts.append(
+            f"dropped {dropped} row(s) that went backward in time (largest jump {max_backward_s:.1f}s"
+            + (f", first at {_from_epoch(first_epoch)}" if first_epoch is not None else "")
+            + ")"
+        )
+    if clock_resets:
+        parts.append(f"accepted {clock_resets} large backward jump(s) as a clock reset")
+    log(
+        f"[anomaly] {label}: " + "; ".join(parts) + " -- the source data is not in time order. "
+        "This should not happen and needs investigating (a second device broadcasting a "
+        "different clock was the cause last time); the affected rows were repaired, not trusted."
+    )
+
+
+class _SampleArray:
+    """Shared, non-hot-path plumbing for the array.array-backed collections below -- every one of
+    them keeps a ``_time`` column (float seconds, see the module docstring) alongside its own
+    value columns, and behaves like a plain list of its sample type for equality/repr/len.
+    Deliberately *not* also sharing ``append``/``__iter__``: those run once per sample (tens of
+    millions of times for a real season's attitude data), so each subclass keeps its own,
+    straight-line version instead of a generic, per-column dispatch loop."""
+
+    __slots__ = ()
+
+    _time: "array.array[float]"
+
+    def extend(self, samples: Iterable) -> None:
+        for sample in samples:
+            self.append(sample)
+
+    def time_at(self, i: int) -> float:
+        return self._time[i]
+
+    def __len__(self) -> int:
+        return len(self._time)
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, (type(self), list)):
+            return list(self) == list(other)
+        return NotImplemented
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}({list(self)!r})"
+
+
+class _SortableSampleArray(_SampleArray):
+    """A _SampleArray that build_trips() needs in time order (speed and attitude samples)."""
+
+    __slots__ = ()
+
+    _LABEL = "samples"  # what the [anomaly] line calls this collection; overridden per subclass
+
+    def drop_time_regressions(self):
+        """Enforces non-decreasing time (despite what an earlier name of this suggested, it never
+        sorts) -- the data should already be in order, so anything it has to drop or accept is
+        reported via _log_time_anomaly. Array-native equivalent of what
+        sorted(samples, key=lambda s: s.time) would otherwise have needed -- used by
+        build_trips()/_merge_nav_samples() (see tripbuilder.py) so a season's worth of these
+        samples (SOG: similar cardinality to position fixes, millions on a real multi-year
+        archive; attitude: ~37 million rows, more than 13x the GPS fix count) never has to be
+        materialized into a plain list of sample objects just to sort it, the same problem
+        FixArray's own outlier-rejection pass already solved for position fixes.
+
+        Mutates and returns this same object (rather than building and returning an unrelated new
+        one) for the same reason FixArray.replace_columns_with exists: a caller that keeps its own
+        reference to this exact object across build_trips()'s whole run (every real caller does,
+        see android_entry.py/cli.py) would otherwise also keep the original, unsorted columns
+        resident the entire time, alongside this sorted copy, for no reason.
+
+        A no-op when already sorted -- see _is_sorted's own docstring. Otherwise, drops whichever
+        rows cause a small backward jump rather than sorting them into place -- confirmed, on a
+        real archive, that the backward jumps actually seen here aren't file-ordering noise but a
+        device logging with a stale/uncorrected clock for a few readings before its first
+        accurate PGN 126992 (System Time) update (every frame's own timestamp is simply whichever
+        System Time reading was last seen -- see ebl_reader.py's own docstring), off by whole
+        weeks in the cases actually seen; reordering a wrong reading into a different position
+        wouldn't have made it a right one. A single forward pass -- keep a row only if its time
+        doesn't go backward relative to the last *kept* row -- both fixes that and is exactly why
+        the result ends up sorted without ever needing sorted(range(n), key=...)'s own full list
+        of boxed index *and* key objects (confirmed, via fine-grained checkpoint logging on a real
+        device, to be where a full-archive rebuild was actually getting OOM-killed).
+
+        A jump of at least _CLOCK_JUMP_THRESHOLD_S is trusted and reset onto, not dropped --
+        confirmed in practice: an earlier version that dropped every backward-going row
+        regardless of size got permanently anchored on the wrong, weeks-in-the-future row once
+        one of these clock-sync jumps happened, then kept dropping every genuinely good,
+        correctly-timed row after it (they all looked "earlier" than that wrong anchor) until
+        real time caught all the way back up to it -- on a real archive with such a jump near
+        its start, that silently threw away nearly the entire season."""
+        if _is_sorted(self._time):
+            return self
+        keep = bytearray(len(self._time))
+        last_time = None
+        dropped = clock_resets = 0
+        max_backward_s = 0.0
+        first_dropped_at: Optional[float] = None
+        for i, t in enumerate(self._time):
+            if last_time is not None and t < last_time:
+                if last_time - t < _CLOCK_JUMP_THRESHOLD_S:
+                    dropped += 1  # small backward jitter/duplicate -- drop it
+                    max_backward_s = max(max_backward_s, last_time - t)
+                    if first_dropped_at is None:
+                        first_dropped_at = t
+                    continue
+                clock_resets += 1
+            keep[i] = 1
+            last_time = t
+        _log_time_anomaly(self._LABEL, dropped, max_backward_s, first_dropped_at, clock_resets)
+        for column_name in self.__slots__:
+            column = getattr(self, column_name)
+            setattr(self, column_name, array.array("d", itertools.compress(column, keep)))
+        return self
+
+
+class FixArray(_SampleArray):
     """Ordered collection of PositionFix values, stored as three parallel array.array('d')
     columns (time, lat, lon) instead of one object per fix. Supports enough of a plain
     List[PositionFix]'s interface (len, iteration, equality against a list) to be a drop-in
@@ -98,13 +223,6 @@ class FixArray:
         self._lat.append(lat)
         self._lon.append(lon)
 
-    def extend(self, fixes: Iterable[PositionFix]) -> None:
-        for fix in fixes:
-            self.append(fix)
-
-    def time_at(self, i: int) -> float:
-        return self._time[i]
-
     def lat_at(self, i: int) -> float:
         return self._lat[i]
 
@@ -128,9 +246,6 @@ class FixArray:
         self._time, self._lat, self._lon = other._time, other._lat, other._lon
         other._time, other._lat, other._lon = array.array("d"), array.array("d"), array.array("d")
 
-    def __len__(self) -> int:
-        return len(self._lat)
-
     def __getitem__(self, i: int) -> PositionFix:
         # array.array already supports negative indices natively -- e.g. all_fixes[-1] for "the
         # most recent fix in the whole dataset" (see cli.py/android_entry.py).
@@ -140,22 +255,14 @@ class FixArray:
         for t, lat, lon in zip(self._time, self._lat, self._lon):
             yield PositionFix(_from_epoch(t), lat, lon)
 
-    def __eq__(self, other: object) -> bool:
-        if isinstance(other, FixArray):
-            return list(self) == list(other)
-        if isinstance(other, list):
-            return list(self) == other
-        return NotImplemented
-
-    def __repr__(self) -> str:
-        return f"FixArray({list(self)!r})"
 
 
-class SogArray:
+class SogArray(_SortableSampleArray):
     """Same idea as FixArray, for SogSample. cog_deg is Optional in SogSample -- stored as NaN
     when absent, since it's already a float field and NaN never legitimately occurs otherwise."""
 
     __slots__ = ("_time", "_sog_ms", "_cog_deg")
+    _LABEL = "Speed (SOG) samples"
 
     def __init__(self, sogs: Iterable[SogSample] = ()) -> None:
         self._time: "array.array[float]" = array.array("d")
@@ -168,13 +275,6 @@ class SogArray:
         self._sog_ms.append(sog.sog_ms)
         self._cog_deg.append(sog.cog_deg if sog.cog_deg is not None else math.nan)
 
-    def extend(self, sogs: Iterable[SogSample]) -> None:
-        for sog in sogs:
-            self.append(sog)
-
-    def time_at(self, i: int) -> float:
-        return self._time[i]
-
     def sog_at(self, i: int) -> float:
         return self._sog_ms[i]
 
@@ -182,75 +282,13 @@ class SogArray:
         cog = self._cog_deg[i]
         return None if math.isnan(cog) else cog
 
-    def __len__(self) -> int:
-        return len(self._sog_ms)
-
     def __iter__(self) -> Iterator[SogSample]:
         for t, sog_ms, cog in zip(self._time, self._sog_ms, self._cog_deg):
             yield SogSample(_from_epoch(t), sog_ms, None if math.isnan(cog) else cog)
 
-    def __eq__(self, other: object) -> bool:
-        if isinstance(other, SogArray):
-            return list(self) == list(other)
-        if isinstance(other, list):
-            return list(self) == other
-        return NotImplemented
-
-    def __repr__(self) -> str:
-        return f"SogArray({list(self)!r})"
-
-    def sorted_by_time(self) -> "SogArray":
-        """Array-native equivalent of sorted(sogs, key=lambda s: s.time) -- used by
-        _merge_nav_samples() (see tripbuilder.py) so a season's worth of SOG samples (typically
-        similar cardinality to position fixes -- millions, on a real multi-year archive) never
-        has to be materialized into a plain list of SogSample objects just to sort it, the same
-        problem FixArray's own outlier-rejection pass already solved for position fixes.
-
-        Mutates and returns this same object (rather than building and returning an unrelated new
-        one) for the same reason FixArray.replace_columns_with exists: a caller that keeps its own
-        reference to this exact object across build_trips()'s whole run (every real caller does,
-        see android_entry.py/cli.py's all_sogs) would otherwise also keep the original, unsorted
-        columns resident the entire time, alongside this sorted copy, for no reason.
-
-        A no-op when already sorted -- see _is_sorted's own docstring. Otherwise, drops whichever
-        rows cause a small backward jump rather than sorting them into place -- confirmed, on a
-        real archive, that the backward jumps actually seen here aren't file-ordering noise but a
-        device logging with a stale/uncorrected clock for a few readings before its first
-        accurate PGN 126992 (System Time) update (every frame's own timestamp is simply whichever
-        System Time reading was last seen -- see ebl_reader.py's own docstring), off by whole
-        weeks in the cases actually seen; reordering a wrong reading into a different position
-        wouldn't have made it a right one. A single forward pass -- keep a row only if its time
-        doesn't go backward relative to the last *kept* row -- both fixes that and is exactly why
-        the result ends up sorted without ever needing sorted(range(n), key=...)'s own full list
-        of boxed index *and* key objects (confirmed, via fine-grained checkpoint logging on a real
-        device, to be where a full-archive rebuild was actually getting OOM-killed).
-
-        A jump of at least _CLOCK_JUMP_THRESHOLD_S is trusted and reset onto, not dropped --
-        confirmed in practice: an earlier version that dropped every backward-going row
-        regardless of size got permanently anchored on the wrong, weeks-in-the-future row once
-        one of these clock-sync jumps happened, then kept dropping every genuinely good,
-        correctly-timed row after it (they all looked "earlier" than that wrong anchor) until
-        real time caught all the way back up to it -- on a real archive with such a jump near
-        its start, that silently threw away nearly the entire season."""
-        if _is_sorted(self._time):
-            return self
-        new_time = array.array("d")
-        new_sog_ms = array.array("d")
-        new_cog_deg = array.array("d")
-        last_time = None
-        for i in range(len(self)):
-            t = self._time[i]
-            if last_time is not None and t < last_time and last_time - t < _CLOCK_JUMP_THRESHOLD_S:
-                continue  # small backward jitter/duplicate -- drop it
-            new_time.append(t)
-            new_sog_ms.append(self._sog_ms[i])
-            new_cog_deg.append(self._cog_deg[i])
-            last_time = t
-        self._time, self._sog_ms, self._cog_deg = new_time, new_sog_ms, new_cog_deg
-        return self
 
 
-class DepthArray:
+class DepthArray(_SampleArray):
     """Same idea as FixArray, for DepthSample. depth_m is Optional -- stored as NaN when absent."""
 
     __slots__ = ("_time", "_depth_m")
@@ -264,29 +302,13 @@ class DepthArray:
         self._time.append(_to_epoch(sample.time))
         self._depth_m.append(sample.depth_m if sample.depth_m is not None else math.nan)
 
-    def extend(self, samples: Iterable[DepthSample]) -> None:
-        for sample in samples:
-            self.append(sample)
-
-    def __len__(self) -> int:
-        return len(self._depth_m)
-
     def __iter__(self) -> Iterator[DepthSample]:
         for t, depth_m in zip(self._time, self._depth_m):
             yield DepthSample(_from_epoch(t), None if math.isnan(depth_m) else depth_m)
 
-    def __eq__(self, other: object) -> bool:
-        if isinstance(other, DepthArray):
-            return list(self) == list(other)
-        if isinstance(other, list):
-            return list(self) == other
-        return NotImplemented
-
-    def __repr__(self) -> str:
-        return f"DepthArray({list(self)!r})"
 
 
-class WaterTempArray:
+class WaterTempArray(_SampleArray):
     """Same idea as FixArray, for WaterTempSample. temp_c is Optional -- stored as NaN when
     absent."""
 
@@ -301,29 +323,13 @@ class WaterTempArray:
         self._time.append(_to_epoch(sample.time))
         self._temp_c.append(sample.temp_c if sample.temp_c is not None else math.nan)
 
-    def extend(self, samples: Iterable[WaterTempSample]) -> None:
-        for sample in samples:
-            self.append(sample)
-
-    def __len__(self) -> int:
-        return len(self._temp_c)
-
     def __iter__(self) -> Iterator[WaterTempSample]:
         for t, temp_c in zip(self._time, self._temp_c):
             yield WaterTempSample(_from_epoch(t), None if math.isnan(temp_c) else temp_c)
 
-    def __eq__(self, other: object) -> bool:
-        if isinstance(other, WaterTempArray):
-            return list(self) == list(other)
-        if isinstance(other, list):
-            return list(self) == other
-        return NotImplemented
-
-    def __repr__(self) -> str:
-        return f"WaterTempArray({list(self)!r})"
 
 
-class BatteryArray:
+class BatteryArray(_SampleArray):
     """Same idea as FixArray, for BatterySample. instance is stored as a float column too (array
     only has one element type per column) -- always a small non-negative integer in practice, so
     the round-trip through float is exact."""
@@ -341,29 +347,13 @@ class BatteryArray:
         self._instance.append(sample.instance)
         self._voltage_v.append(sample.voltage_v if sample.voltage_v is not None else math.nan)
 
-    def extend(self, samples: Iterable[BatterySample]) -> None:
-        for sample in samples:
-            self.append(sample)
-
-    def __len__(self) -> int:
-        return len(self._voltage_v)
-
     def __iter__(self) -> Iterator[BatterySample]:
         for t, instance, voltage_v in zip(self._time, self._instance, self._voltage_v):
             yield BatterySample(_from_epoch(t), int(instance), None if math.isnan(voltage_v) else voltage_v)
 
-    def __eq__(self, other: object) -> bool:
-        if isinstance(other, BatteryArray):
-            return list(self) == list(other)
-        if isinstance(other, list):
-            return list(self) == other
-        return NotImplemented
-
-    def __repr__(self) -> str:
-        return f"BatteryArray({list(self)!r})"
 
 
-class RpmArray:
+class RpmArray(_SampleArray):
     """Same idea as FixArray, for EngineRpmSample (PGN 127488, engine speed) -- on a real
     full-season archive this is comparable in cardinality to GPS fixes (an NMEA2000 engine
     typically reports RPM at least once a second whenever running: confirmed in practice on a
@@ -387,29 +377,13 @@ class RpmArray:
         self._instance.append(sample.instance)
         self._rpm.append(sample.rpm if sample.rpm is not None else math.nan)
 
-    def extend(self, samples: Iterable[EngineRpmSample]) -> None:
-        for sample in samples:
-            self.append(sample)
-
-    def __len__(self) -> int:
-        return len(self._time)
-
     def __iter__(self) -> Iterator[EngineRpmSample]:
         for t, instance, rpm in zip(self._time, self._instance, self._rpm):
             yield EngineRpmSample(_from_epoch(t), int(instance), None if math.isnan(rpm) else rpm)
 
-    def __eq__(self, other: object) -> bool:
-        if isinstance(other, RpmArray):
-            return list(self) == list(other)
-        if isinstance(other, list):
-            return list(self) == other
-        return NotImplemented
-
-    def __repr__(self) -> str:
-        return f"RpmArray({list(self)!r})"
 
 
-class TripFuelArray:
+class TripFuelArray(_SampleArray):
     """Same idea as FixArray, for TripFuelSample (PGN 127497, the engine's own trip fuel meter)."""
 
     __slots__ = ("_time", "_instance", "_trip_fuel_used_l")
@@ -427,29 +401,13 @@ class TripFuelArray:
             sample.trip_fuel_used_l if sample.trip_fuel_used_l is not None else math.nan
         )
 
-    def extend(self, samples: Iterable[TripFuelSample]) -> None:
-        for sample in samples:
-            self.append(sample)
-
-    def __len__(self) -> int:
-        return len(self._time)
-
     def __iter__(self) -> Iterator[TripFuelSample]:
         for t, instance, trip_fuel in zip(self._time, self._instance, self._trip_fuel_used_l):
             yield TripFuelSample(_from_epoch(t), int(instance), None if math.isnan(trip_fuel) else trip_fuel)
 
-    def __eq__(self, other: object) -> bool:
-        if isinstance(other, TripFuelArray):
-            return list(self) == list(other)
-        if isinstance(other, list):
-            return list(self) == other
-        return NotImplemented
-
-    def __repr__(self) -> str:
-        return f"TripFuelArray({list(self)!r})"
 
 
-class EngineArray:
+class EngineArray(_SampleArray):
     """Same idea as FixArray, for EngineSample -- the season-wide list of raw engine PGN
     readings (fuel rate, hour meter, oil/coolant temperature, alternator voltage, engine load)
     build_trips() holds resident for its entire run (every per-trip engine statistics function
@@ -509,13 +467,6 @@ class EngineArray:
         if sample.warnings:
             self._warnings[i] = sample.warnings
 
-    def extend(self, samples: Iterable[EngineSample]) -> None:
-        for sample in samples:
-            self.append(sample)
-
-    def __len__(self) -> int:
-        return len(self._time)
-
     def __iter__(self) -> Iterator[EngineSample]:
         for i in range(len(self)):
             fuel_rate = self._fuel_rate_lph[i]
@@ -538,18 +489,9 @@ class EngineArray:
                 warnings=self._warnings.get(i, frozenset()),
             )
 
-    def __eq__(self, other: object) -> bool:
-        if isinstance(other, EngineArray):
-            return list(self) == list(other)
-        if isinstance(other, list):
-            return list(self) == other
-        return NotImplemented
-
-    def __repr__(self) -> str:
-        return f"EngineArray({list(self)!r})"
 
 
-class AttitudeArray:
+class AttitudeArray(_SortableSampleArray):
     """Same idea as FixArray, for AttitudeSample. pitch_deg/roll_deg are Optional -- stored as
     NaN when absent.
 
@@ -561,6 +503,7 @@ class AttitudeArray:
     trip was real, measured cost (see that function's own docstring)."""
 
     __slots__ = ("_time", "_pitch_deg", "_roll_deg")
+    _LABEL = "Attitude samples"
 
     def __init__(self, samples: Iterable[AttitudeSample] = ()) -> None:
         self._time: "array.array[float]" = array.array("d")
@@ -572,16 +515,6 @@ class AttitudeArray:
         self._time.append(_to_epoch(sample.time))
         self._pitch_deg.append(sample.pitch_deg if sample.pitch_deg is not None else math.nan)
         self._roll_deg.append(sample.roll_deg if sample.roll_deg is not None else math.nan)
-
-    def extend(self, samples: Iterable[AttitudeSample]) -> None:
-        for sample in samples:
-            self.append(sample)
-
-    def time_at(self, i: int) -> float:
-        return self._time[i]
-
-    def __len__(self) -> int:
-        return len(self._time)
 
     def __getitem__(self, key: Union[int, slice]) -> Union[AttitudeSample, "AttitudeArray"]:
         if isinstance(key, slice):
@@ -604,49 +537,6 @@ class AttitudeArray:
                 _from_epoch(t), None if math.isnan(pitch) else pitch, None if math.isnan(roll) else roll
             )
 
-    def __eq__(self, other: object) -> bool:
-        if isinstance(other, AttitudeArray):
-            return list(self) == list(other)
-        if isinstance(other, list):
-            return list(self) == other
-        return NotImplemented
-
-    def __repr__(self) -> str:
-        return f"AttitudeArray({list(self)!r})"
-
-    def sorted_by_time(self) -> "AttitudeArray":
-        """Equivalent of sorted(attitude_samples, key=lambda s: s.time) -- build_trips() sorts
-        attitude samples once up front (see its own docstring on _motion_variation).
-
-        Mutates and returns this same object rather than building and returning an unrelated new
-        one -- see SogArray.sorted_by_time's own docstring for why (a caller's own reference to
-        this exact object, held across build_trips()'s whole run, would otherwise keep the
-        original, unsorted columns resident the entire time too, alongside this sorted copy).
-
-        A no-op when already sorted -- see _is_sorted's own docstring. Otherwise, drops whichever
-        rows cause a small backward jump rather than sorting them into place, and trusts/resets
-        onto a jump of at least _CLOCK_JUMP_THRESHOLD_S instead of dropping it too -- see
-        SogArray's own sorted_by_time docstring for the full reasoning (confirmed on a real
-        archive: attitude is the largest season-wide sample count of all -- ~37 million rows,
-        more than 13x the GPS fix count -- so this is exactly where sorted(range(n), key=...)'s
-        own full list of boxed index *and* key objects was actually getting a full-archive
-        rebuild OOM-killed, confirmed via fine-grained checkpoint logging on a real device)."""
-        if _is_sorted(self._time):
-            return self
-        new_time = array.array("d")
-        new_pitch_deg = array.array("d")
-        new_roll_deg = array.array("d")
-        last_time = None
-        for i in range(len(self)):
-            t = self._time[i]
-            if last_time is not None and t < last_time and last_time - t < _CLOCK_JUMP_THRESHOLD_S:
-                continue  # small backward jitter/duplicate -- drop it
-            new_time.append(t)
-            new_pitch_deg.append(self._pitch_deg[i])
-            new_roll_deg.append(self._roll_deg[i])
-            last_time = t
-        self._time, self._pitch_deg, self._roll_deg = new_time, new_pitch_deg, new_roll_deg
-        return self
 
 
 class NavSampleArray:

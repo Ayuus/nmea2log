@@ -119,19 +119,15 @@ def _dominant_source_only(by_source: Dict[int, List[_T]]) -> List[_T]:
     return by_source[dominant_source]
 
 
-def _merge_by_source(target: Dict[int, List[_T]], addition: Dict[int, List[_T]]) -> None:
-    for source, items in addition.items():
-        target.setdefault(source, []).extend(items)
-
-
 def _merge_array_by_source(target: Dict[int, _ArrayT], addition: Dict[int, list], factory: Callable[[], _ArrayT]) -> None:
-    """Same idea as _merge_by_source() above, but accumulating into one of the array.array-backed
-    types from fix_array.py instead of a plain list -- see that module's own docstring for why:
-    a season's worth of these held as Python objects instead of array.array columns is what
-    actually got the Android app OOM-killed by the phone's OS. Used for every sample type that
-    has a season-wide accumulator (position, speed, depth, water temperature, battery, attitude);
-    the couple of lower-level, per-file-only lists (e.g. inside _collect_samples()) stay plain
-    lists -- their size is bounded by one file, not the whole archive, so it isn't worth it there."""
+    """Accumulates one file's per-source samples into a season-wide, per-source collection --
+    one of the array.array-backed types from fix_array.py rather than a plain list; see that
+    module's own docstring for why: a season's worth of these held as Python objects instead of
+    array.array columns is what actually got the Android app OOM-killed by the phone's OS. Used
+    for every sample type that has a season-wide accumulator (position, speed, depth, water
+    temperature, battery, attitude); the couple of lower-level, per-file-only lists (e.g. inside
+    _collect_samples()) stay plain lists -- their size is bounded by one file, not the whole
+    archive, so it isn't worth it there."""
     for source, items in addition.items():
         if source not in target:
             target[source] = factory()

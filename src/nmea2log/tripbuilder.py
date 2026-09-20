@@ -18,7 +18,17 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Dict, FrozenSet, Iterator, List, Optional, Tuple
 
-from .fix_array import AttitudeArray, EngineArray, FixArray, NavSampleArray, RpmArray, SogArray, TripFuelArray
+from .fix_array import (
+    _CLOCK_JUMP_THRESHOLD_S,
+    AttitudeArray,
+    EngineArray,
+    FixArray,
+    NavSampleArray,
+    RpmArray,
+    SogArray,
+    TripFuelArray,
+    _log_time_anomaly,
+)
 from .geocode import NoGeocoder
 from .log import log
 from .model import (
@@ -227,13 +237,10 @@ _MAX_PLAUSIBLE_SPEED_KN = 60.0  # generous margin above the fastest speed this a
 # recorded (~22 kn) -- exists purely to catch corrupted position fixes, not to model anything
 # about the boat itself.
 
-_CLOCK_JUMP_THRESHOLD_HOURS = 24.0  # a backward jump at least this large means a device clock
-# that hadn't synced to real time yet, not a single bad reading or ordinary GPS/timestamp jitter
-# (found in practice: real jumps were on the order of weeks; real jitter/duplicates are seconds
-# at most) -- see _reject_gps_outliers_array's own docstring.
+_CLOCK_JUMP_THRESHOLD_HOURS = _CLOCK_JUMP_THRESHOLD_S / 3600.0  # see fix_array.py
 
 
-def _reject_gps_outliers(fixes: List[PositionFix]) -> List[PositionFix]:
+def _reject_gps_outliers_array(fixes: FixArray) -> FixArray:
     """Drops a position fix that implies an impossible speed from the last *accepted* fix.
 
     Confirmed in practice, byte-for-byte: a real .ebl file contained a well-formed record (valid
@@ -248,33 +255,10 @@ def _reject_gps_outliers(fixes: List[PositionFix]) -> List[PositionFix]:
     data at all where the affected one does (found in practice) -- dropping a corrupted fix costs
     far less than dropping whole trips.
 
-    Comparing against the last *accepted* fix, not simply the previous one in the list, is what
-    lets a single bad fix get dropped without also rejecting the good fix right after it."""
-    if not fixes:
-        return fixes
-    sorted_fixes = sorted(fixes, key=lambda f: f.time)
-    accepted = [sorted_fixes[0]]
-    for fix in sorted_fixes[1:]:
-        prev = accepted[-1]
-        dt_hours = (fix.time - prev.time).total_seconds() / 3600
-        if dt_hours <= 0:
-            continue  # duplicate/out-of-order timestamp -- keep whichever came first
-        implied_speed_kn = _haversine_nm(prev.lat, prev.lon, fix.lat, fix.lon) / dt_hours
-        if implied_speed_kn > _MAX_PLAUSIBLE_SPEED_KN:
-            continue
-        accepted.append(fix)
-    return accepted
-
-
-def _reject_gps_outliers_array(fixes: FixArray) -> FixArray:
-    """Same algorithm as _reject_gps_outliers() above, operating on a FixArray instead of a
-    List[PositionFix] -- used by _merge_nav_samples() for the real season-wide data, so a run
-    never has to materialize a full PositionFix object per fix just to filter them. Kept as a
-    separate function rather than making _reject_gps_outliers() itself generic: that one has its
-    own direct unit test asserting an exact List[PositionFix] in, List[PositionFix] out contract,
-    and duplicating ~15 lines here is a lot cheaper than risking that carefully-tuned, real-bug-
-    fixing logic (see its own docstring) on a rewrite. See test_reject_gps_outliers_array_* for
-    this version's own coverage of the same real-world corrupted-fix scenario.
+    Comparing against the last *accepted* fix, not simply the previous one, is what lets a single
+    bad fix get dropped without also rejecting the good fix right after it. Operates directly on
+    the FixArray's columns, so a run never has to materialize a full PositionFix object per fix
+    just to filter them.
 
     Mutates and returns the same ``fixes`` object it was given (see FixArray.replace_columns_with)
     rather than building and returning an unrelated new one -- a caller that keeps its own
@@ -312,6 +296,9 @@ def _reject_gps_outliers_array(fixes: FixArray) -> FixArray:
     accepted = FixArray()
     prev_i = 0
     accepted.append_raw(fixes.time_at(0), fixes.lat_at(0), fixes.lon_at(0))
+    backward_dropped = clock_resets = implausible_dropped = 0
+    max_backward_s = 0.0
+    first_backward_at: Optional[float] = None
     for i in range(1, n):
         dt_hours = (fixes.time_at(i) - fixes.time_at(prev_i)) / 3600
         if dt_hours <= -_CLOCK_JUMP_THRESHOLD_HOURS:
@@ -319,19 +306,36 @@ def _reject_gps_outliers_array(fixes: FixArray) -> FixArray:
             # is almost certainly the wrong one, not this one. Trust this reading and reset the
             # anchor here, instead of rejecting it and staying stuck comparing everything after
             # it against a wrong, far-future anchor.
+            clock_resets += 1
             accepted.append_raw(fixes.time_at(i), fixes.lat_at(i), fixes.lon_at(i))
             prev_i = i
             continue
         if dt_hours <= 0:
+            # Equal timestamps are routine (every frame between two PGN 126992 updates shares the
+            # same time) and quietly dropped; only a genuine step backward is worth reporting.
+            if dt_hours < 0:
+                backward_dropped += 1
+                max_backward_s = max(max_backward_s, -dt_hours * 3600)
+                if first_backward_at is None:
+                    first_backward_at = fixes.time_at(i)
             continue  # duplicate/out-of-order timestamp -- keep whichever came first
         implied_speed_kn = (
             _haversine_nm(fixes.lat_at(prev_i), fixes.lon_at(prev_i), fixes.lat_at(i), fixes.lon_at(i))
             / dt_hours
         )
         if implied_speed_kn > _MAX_PLAUSIBLE_SPEED_KN:
+            implausible_dropped += 1
             continue
         accepted.append_raw(fixes.time_at(i), fixes.lat_at(i), fixes.lon_at(i))
         prev_i = i
+    if backward_dropped or clock_resets:
+        _log_time_anomaly("Position fixes", backward_dropped, max_backward_s, first_backward_at, clock_resets)
+    if implausible_dropped:
+        log(
+            f"[anomaly] Position fixes: dropped {implausible_dropped} fix(es) implying more than "
+            f"{_MAX_PLAUSIBLE_SPEED_KN:.0f} kn from the previous accepted one -- a GPS position "
+            f"jump or corrupted position data in the source, worth a look if it keeps happening."
+        )
     # Written back into `fixes`' own columns (see FixArray.replace_columns_with's own docstring)
     # rather than simply `return accepted` -- the caller passed `fixes` in by reference and, on
     # every real caller (cli.py/android_entry.py), still holds its own separate reference to the
@@ -370,7 +374,7 @@ def _merge_nav_samples(
     # Already in time order -- _reject_gps_outliers_array() processes its input in sorted order
     # and never reorders what it keeps, so no second sort is needed here (the original
     # list-based version technically re-sorted an already-sorted list every single run).
-    sogs = sogs.sorted_by_time()
+    sogs = sogs.drop_time_regressions()
     depths_sorted = sorted(depths, key=lambda s: s.time) if depths else []
     water_temps_sorted = sorted(water_temps, key=lambda s: s.time) if water_temps else []
     samples = NavSampleArray()
@@ -589,7 +593,7 @@ def _engine_on_intervals_by_instance(
 ) -> Dict[int, List[Tuple[datetime, datetime]]]:
     """Same as ``_engine_on_intervals``, but kept separate per engine instance -- needed to
     extend a trip's own logged engine hours by however long that specific engine ran
-    continuously right before departure and after arrival (see ``_engine_hours_delta_extended``),
+    continuously right before departure and after arrival (see ``_engine_hours_delta``),
     without mixing in a different engine's own on/off timing on a multi-engine boat."""
     on_times_by_instance: Dict[int, List[datetime]] = {}
     for s in engine_samples:
@@ -880,25 +884,6 @@ def _moving_duration(group: List[NavSample], max_gap: timedelta) -> timedelta:
     return total
 
 
-def _engine_hours_delta(
-    samples: List[EngineSample], start: datetime, end: datetime
-) -> Dict[int, float]:
-    by_instance: Dict[int, List[EngineSample]] = {}
-    for sample in samples:
-        if sample.total_hours_s is None:
-            continue
-        by_instance.setdefault(sample.instance, []).append(sample)
-
-    result: Dict[int, float] = {}
-    for instance, seq in by_instance.items():
-        window = sorted((s for s in seq if start <= s.time <= end), key=lambda s: s.time)
-        if len(window) < 2:
-            continue
-        delta_s = window[-1].total_hours_s - window[0].total_hours_s
-        result[instance] = max(delta_s, 0) / 3600.0
-    return result
-
-
 def _extend_engine_window(
     depart_time: datetime,
     arrive_time: datetime,
@@ -951,7 +936,7 @@ def _window_for_instance(bucket: List, start: datetime, end: datetime) -> List:
     return bucket[lo:hi]
 
 
-def _engine_hours_delta_extended(
+def _engine_hours_delta(
     engine_by_instance: Dict[int, List[EngineSample]],
     depart_time: datetime,
     arrive_time: datetime,
@@ -959,9 +944,9 @@ def _engine_hours_delta_extended(
     next_stay: Optional[Stay],
     on_intervals_by_instance: Dict[int, List[Tuple[datetime, datetime]]],
 ) -> Dict[int, float]:
-    """Same core computation as ``_engine_hours_delta``, but widening the window per engine
-    instance first (see ``_extend_engine_window``) -- each instance gets its own window since a
-    multi-engine boat's engines don't necessarily start/stop together."""
+    """Hours the engine's own hour meter advanced during the trip, per engine instance -- with
+    the window widened per instance first (see ``_extend_engine_window``): each instance gets its
+    own window since a multi-engine boat's engines don't necessarily start/stop together."""
     result: Dict[int, float] = {}
     for instance, bucket in engine_by_instance.items():
         start, end = _extend_engine_window(
@@ -1337,7 +1322,7 @@ def build_trips(
     # undoing the point of storing a season's worth of them as array.array columns in the first
     # place.
     attitude_samples = (
-        attitude_samples.sorted_by_time()
+        attitude_samples.drop_time_regressions()
         if isinstance(attitude_samples, AttitudeArray)
         else sorted(attitude_samples, key=lambda s: s.time)
     )
@@ -1461,7 +1446,7 @@ def build_trips(
                 max_speed_kn=max_speed_kn,
                 fuel_liters=_fuel_liters(engine_by_instance, depart_time, arrive_time),
                 fuel_liters_device=_device_fuel_delta(trip_fuel_by_instance, depart_time, arrive_time),
-                engine_hours=_engine_hours_delta_extended(
+                engine_hours=_engine_hours_delta(
                     engine_by_instance, depart_time, arrive_time, prev_stay, next_stay, on_intervals_by_instance
                 ),
                 engine_hours_total=_engine_hours_total(engine_by_instance, depart_time, arrive_time),

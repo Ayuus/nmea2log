@@ -131,8 +131,8 @@ def run_pipeline(
     # (fixes/sogs/attitude/...) is built by appending each file's own records in this same
     # sequence, so an out-of-order logfiles list means out-of-order data, forcing every one of
     # those arrays to pay for their own defensive re-sort later (see
-    # tripbuilder.py's _reject_gps_outliers_array/SogArray.sorted_by_time/
-    # AttitudeArray.sorted_by_time) -- confirmed, via fine-grained
+    # tripbuilder.py's _reject_gps_outliers_array/SogArray.drop_time_regressions/
+    # AttitudeArray.drop_time_regressions) -- confirmed, via fine-grained
     # checkpoint logging on a real device with a real ~2.7M-position archive, to be exactly where a
     # full-archive rebuild was getting OOM-killed. Sorting the (~2000, not ~2 million) file paths
     # themselves, once, up front, is what actually keeps every one of those arrays already sorted

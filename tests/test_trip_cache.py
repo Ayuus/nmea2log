@@ -107,15 +107,3 @@ def test_trip_cache_load_returns_none_on_a_corrupt_file(tmp_path):
     cache = TripCache(path)
 
     assert cache.load("sig-1") is None
-
-
-def test_trip_cache_clear_removes_the_file(tmp_path):
-    path = tmp_path / "trips.pkl"
-    cache = TripCache(path)
-    cache.save([_fake_trip()], "resume.ebl", None, "sig-1")
-    assert path.exists()
-
-    cache.clear()
-
-    assert not path.exists()
-    cache.clear()  # must not raise when already gone

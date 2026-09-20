@@ -15,7 +15,6 @@ from nmea2log.model import (
 )
 from nmea2log.fix_array import FixArray
 from nmea2log.tripbuilder import (
-    _reject_gps_outliers,
     _reject_gps_outliers_array,
     build_trips,
     resolve_trip_places,
@@ -261,26 +260,12 @@ def test_arrival_position_excludes_samples_while_the_engine_is_still_running():
     assert trips[0].arrive_lat == pytest.approx(52.40, abs=1e-6)
 
 
-def test_reject_gps_outliers_drops_a_single_corrupted_fix():
+def test_reject_gps_outliers_array_drops_a_single_corrupted_fix():
     """Regression test for a real incident, values taken from the actual corrupted record found
     in a real .ebl file: the correct 8-byte position payload (46.916294, -2.3801566) with its
     first 2 bytes moved to the end decodes to (-78.629377, -60.8371052), ~7800 nm away -- for one
     sample, a fraction of a second after the correct reading. The fix right after the bad one must
     survive too -- it's the bad fix that's the outlier, not the ones around it."""
-    good_before = PositionFix(datetime(2026, 8, 25, 8, 13, 55), 46.916294, -2.3801566)
-    bad = PositionFix(datetime(2026, 8, 25, 8, 13, 56), -78.629377, -60.8371052)
-    good_after = PositionFix(datetime(2026, 8, 25, 8, 13, 56), 46.9162885, -2.3801523)
-
-    kept = _reject_gps_outliers([good_before, bad, good_after])
-
-    assert kept == [good_before, good_after]
-
-
-def test_reject_gps_outliers_array_drops_a_single_corrupted_fix():
-    """Same real-world scenario as test_reject_gps_outliers_drops_a_single_corrupted_fix() above,
-    against the FixArray-native version _merge_nav_samples() actually calls (see fix_array.py --
-    both versions exist so the season-wide, memory-conscious path gets the exact same real-bug
-    coverage as the plain-list one)."""
     good_before = PositionFix(datetime(2026, 8, 25, 8, 13, 55), 46.916294, -2.3801566)
     bad = PositionFix(datetime(2026, 8, 25, 8, 13, 56), -78.629377, -60.8371052)
     good_after = PositionFix(datetime(2026, 8, 25, 8, 13, 56), 46.9162885, -2.3801523)
@@ -310,6 +295,31 @@ def test_reject_gps_outliers_array_trusts_a_large_backward_jump_as_a_clock_sync(
     # Every reading survives -- none of the real ones look "corrupted" just for coming before
     # the wrong, pre-sync anchor.
     assert kept == fixes
+
+
+def test_reject_gps_outliers_array_reports_time_anomalies_and_corrupted_fixes(log_lines):
+    base = datetime(2026, 8, 25, 8, 13, 55)
+    fixes = [
+        PositionFix(base, 46.9, -2.38),
+        PositionFix(base + timedelta(seconds=10), 46.9001, -2.3801),
+        PositionFix(base + timedelta(seconds=5), 46.9002, -2.3802),  # steps backward in time
+        PositionFix(base + timedelta(seconds=11), -78.6, -60.8),  # ~7800 nm away in a second
+    ]
+
+    _reject_gps_outliers_array(FixArray(fixes))
+
+    out = "\n".join(log_lines)
+    assert "[anomaly] Position fixes: dropped 1 row(s) that went backward in time" in out
+    assert "[anomaly] Position fixes: dropped 1 fix(es) implying more than 60 kn" in out
+
+
+def test_reject_gps_outliers_array_stays_quiet_for_equal_timestamps(log_lines):
+    base = datetime(2026, 8, 25, 8, 13, 55)
+    fixes = [PositionFix(base, 46.9, -2.38), PositionFix(base, 46.9, -2.38)]  # routine: shared PGN 126992 time
+
+    _reject_gps_outliers_array(FixArray(fixes))
+
+    assert "\n".join(log_lines) == ""
 
 
 def test_build_trips_ignores_a_single_gps_glitch_in_distance():

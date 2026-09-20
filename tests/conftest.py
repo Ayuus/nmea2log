@@ -22,3 +22,15 @@ def _isolate_cwd_from_the_real_nmea2log_ini(tmp_path, monkeypatch):
     ``main(["--config", str(config_path), ...])``) rather than relying on an implicit cwd
     lookup."""
     monkeypatch.chdir(tmp_path)
+
+
+@pytest.fixture
+def log_lines():
+    """Every line nmea2log.log.log() emits while the test runs (capsys can't see them: log()
+    binds sys.stdout as a default argument at import time)."""
+    from nmea2log.log import set_log_sink
+
+    lines: list = []
+    set_log_sink(lines.append)
+    yield lines
+    set_log_sink(None)

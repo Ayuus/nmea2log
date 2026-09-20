@@ -192,7 +192,7 @@ def _update_time_state(time_state: Dict[str, object], source: int, decoded_time:
     which one is "right" from a single message alone. Blindly taking whichever one arrived last
     made the decoded time step backward by ~1s every time the two sources' messages happened to
     interleave -- confirmed to be the direct cause of small backward-jump violations later found
-    in the season-wide fixes/sogs/attitude arrays (see fix_array.py's own sorted_by_time methods).
+    in the season-wide fixes/sogs/attitude arrays (see fix_array.py's own drop_time_regressions methods).
     Cumulative message counts, kept in ``time_state`` itself (so they carry over between files the
     same way ``time_state["current"]`` already does), converge on the same choice
     _select_primary_gps_source() already makes for position fixes from the same kind of

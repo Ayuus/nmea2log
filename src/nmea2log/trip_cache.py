@@ -136,6 +136,3 @@ class TripCache:
             pickle.dumps(data, protocol=pickle.HIGHEST_PROTOCOL), level=_COMPRESSION_LEVEL
         )
         self.path.write_bytes(payload)
-
-    def clear(self) -> None:
-        self.path.unlink(missing_ok=True)
