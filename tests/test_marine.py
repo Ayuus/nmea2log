@@ -142,7 +142,7 @@ def test_failed_request_is_not_cached(monkeypatch, tmp_path):
         raise urllib.error.URLError("getaddrinfo failed")
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-    monkeypatch.setattr("nmea2log.marine.time.sleep", lambda s: None)
+    monkeypatch.setattr("nmea2log.open_meteo.time.sleep", lambda s: None)
     cache_file = tmp_path / "cache.json"
     fetcher = MarineFetcher(cache_file=cache_file)
 
@@ -160,7 +160,7 @@ def test_remote_disconnected_is_treated_as_a_failed_lookup_not_a_crash(monkeypat
         raise http.client.RemoteDisconnected("Remote end closed connection without response")
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-    monkeypatch.setattr("nmea2log.marine.time.sleep", lambda s: None)
+    monkeypatch.setattr("nmea2log.open_meteo.time.sleep", lambda s: None)
     fetcher = MarineFetcher(cache_file=tmp_path / "cache.json")
 
     result = fetcher.hour(47.5, -2.5, datetime(2026, 8, 5, 8, 0))
