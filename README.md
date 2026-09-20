@@ -42,7 +42,7 @@ the tests.
    complete cold engine start (fuel rate, oil pressure buildup, warming up, engine-hour meter,
    even the "Preheat Indicator" warning during glow-plug preheating) came out physically
    plausible and internally consistent.
-2. **Decoding** (`pgn_decode.py`): picks ten PGNs out of the stream:
+2. **Decoding** (`pgn_decode.py`): picks eleven PGNs out of the stream:
    - **127489** (*Engine Parameters, Dynamic*) → fuel rate, engine-hour meter, and health
      indicators (oil pressure/temperature, coolant temperature, alternator voltage, engine load)
      plus the two "Discrete Status" warning fields. This is engine data, so explicitly not the
@@ -53,6 +53,11 @@ the tests.
      engine/ECU keeps itself (in liters), if the device sends this PGN.
    - **128267** (*Water Depth*) → water depth under the transducer.
    - **129025** (*Position, Rapid Update*) → GPS position.
+   - **129539** (*GNSS DOPs*) → the GPS receiver's own statement of whether its fix can be
+     trusted (fix mode + HDOP). Position messages are ignored while it reports no valid fix:
+     confirmed on a real boat, the receiver keeps sending its last *remembered* position at
+     start-up and shutdown (up to ~170 m off), and only converges on the real one ~100 s
+     after power-on.
    - **129026** (*COG & SOG, Rapid Update*) → speed over ground (SOG, GPS-derived). This is
      explicitly not "speed through water" (that would be PGN 128259, a paddlewheel/log sensor —
      not used by this app, and not present on the bus of the boat tested so far either).
@@ -520,7 +525,7 @@ pytest
   small false "jumps" — in practice this initially inflated a trip's distance 10x (153.7 instead
   of 13.5 nm).
 
-  **How the app handles this** (`_select_primary_gps_source` in `cli.py`): the source with the
+  **How the app handles this** (`_select_primary_gps_source` in `pipeline.py`): the source with the
   most position messages (PGN 129025) counts as the **primary GPS**, and the speed (PGN 129026)
   from **that same physical source** is used — deliberately not choosing the "best" source
   independently per PGN, since then position and speed could come from two different devices and

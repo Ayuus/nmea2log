@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from nmea2log import android_entry
+from nmea2log import android_entry, pipeline
 from nmea2log.geocode import NoGeocoder
 from nmea2log.marine import NoMarine
 from nmea2log.model import PositionFix, SogSample
@@ -16,9 +16,8 @@ def _write_fake_ebl(tmp_path: Path, name: str = "000000_000.ebl") -> Path:
 
 def _stub_one_trip_samples(monkeypatch):
     """Same 12min stationary -> 30min underway -> 12min stationary shape as test_cli.py's
-    _run_with_one_trip, but patching android_entry's own imported names -- `from .cli import
-    _collect_samples` copies the reference into android_entry's namespace at import time, so
-    patching cli.py's attribute afterwards would not affect what android_entry actually calls."""
+    _run_with_one_trip, but patching pipeline.py's names -- the decode helpers run there, shared
+    by both cli.py's _run() and android_entry's run_pipeline()."""
 
     def _dt(minute):
         return datetime(2026, 7, 15, 8, 0, 0) + timedelta(minutes=minute)
@@ -36,8 +35,8 @@ def _stub_one_trip_samples(monkeypatch):
         sogs.append(SogSample(_dt(m), 0.0))
 
     fixed_samples = ({10: fixes}, {10: sogs}, [], [], {}, {}, {}, [], {})
-    monkeypatch.setattr(android_entry, "_collect_samples", lambda frames: fixed_samples)
-    monkeypatch.setattr(android_entry, "_iter_frames_for_path", lambda path, state: iter([]))
+    monkeypatch.setattr(pipeline, "_collect_samples", lambda frames: fixed_samples)
+    monkeypatch.setattr(pipeline, "_iter_frames_for_path", lambda path, state: iter([]))
     # run_pipeline() now uses real Geocoder/WeatherFetcher/MarineFetcher instances by default (see
     # its own doc comment) -- stubbed out here the same way test_cli.py's own tests always pass
     # --no-geocode/--no-weather/--no-marine, so a plain test run never makes a real network request
@@ -77,8 +76,8 @@ def test_run_pipeline_returns_error_for_a_missing_file(tmp_path):
 def test_run_pipeline_returns_error_when_no_position_data(tmp_path, monkeypatch):
     ebl_path = _write_fake_ebl(tmp_path)
     empty_samples = ({}, {}, [], [], {}, {}, {}, [], {})
-    monkeypatch.setattr(android_entry, "_collect_samples", lambda frames: empty_samples)
-    monkeypatch.setattr(android_entry, "_iter_frames_for_path", lambda path, state: iter([]))
+    monkeypatch.setattr(pipeline, "_collect_samples", lambda frames: empty_samples)
+    monkeypatch.setattr(pipeline, "_iter_frames_for_path", lambda path, state: iter([]))
 
     result = android_entry.run_pipeline(
         ebl_paths=[str(ebl_path)],
@@ -104,13 +103,13 @@ def test_run_pipeline_stops_decoding_once_cancelled(tmp_path, monkeypatch):
     _stub_one_trip_samples(monkeypatch)
 
     seen_paths = []
-    real_iter_frames = android_entry._iter_frames_for_path
+    real_iter_frames = pipeline._iter_frames_for_path
 
     def _tracking_iter_frames(path, state):
         seen_paths.append(path)
         return real_iter_frames(path, state)
 
-    monkeypatch.setattr(android_entry, "_iter_frames_for_path", _tracking_iter_frames)
+    monkeypatch.setattr(pipeline, "_iter_frames_for_path", _tracking_iter_frames)
 
     calls = []
 

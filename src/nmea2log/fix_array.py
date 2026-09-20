@@ -1,5 +1,5 @@
 """Columnar, array.array-backed storage for a season's worth of PositionFix/SogSample -- built to
-replace the plain Python lists cli.py/android_entry.py used to accumulate across an entire
+replace the plain Python lists pipeline.py used to accumulate across an entire
 archive (2000+ files) before ever reaching tripbuilder.py.
 
 Why this exists: a real multi-year archive holds millions of GPS fixes, and each stays resident
@@ -129,6 +129,27 @@ class _SampleArray:
         return f"{type(self).__name__}({list(self)!r})"
 
 
+class _InstancedSampleArray(_SampleArray):
+    """A _SampleArray whose samples carry an ``instance`` (engine/battery number) -- supports
+    indexed access, so callers can look at a single row (or a small window of rows) without
+    materializing the season's whole worth of sample objects (see tripbuilder.py's
+    _InstanceIndex). Iteration is built on that same indexed access."""
+
+    __slots__ = ()
+
+    _instance: "array.array[float]"
+
+    def instance_at(self, i: int) -> int:
+        return int(self._instance[i])
+
+    def __getitem__(self, i: int):
+        raise NotImplementedError
+
+    def __iter__(self):
+        for i in range(len(self)):
+            yield self[i]
+
+
 class _SortableSampleArray(_SampleArray):
     """A _SampleArray that build_trips() needs in time order (speed and attitude samples)."""
 
@@ -150,7 +171,7 @@ class _SortableSampleArray(_SampleArray):
         Mutates and returns this same object (rather than building and returning an unrelated new
         one) for the same reason FixArray.replace_columns_with exists: a caller that keeps its own
         reference to this exact object across build_trips()'s whole run (every real caller does,
-        see android_entry.py/cli.py) would otherwise also keep the original, unsorted columns
+        see pipeline.py) would otherwise also keep the original, unsorted columns
         resident the entire time, alongside this sorted copy, for no reason.
 
         A no-op when already sorted -- see _is_sorted's own docstring. Otherwise, drops whichever
@@ -248,13 +269,12 @@ class FixArray(_SampleArray):
 
     def __getitem__(self, i: int) -> PositionFix:
         # array.array already supports negative indices natively -- e.g. all_fixes[-1] for "the
-        # most recent fix in the whole dataset" (see cli.py/android_entry.py).
+        # most recent fix in the whole dataset" (see pipeline.py).
         return PositionFix(_from_epoch(self._time[i]), self._lat[i], self._lon[i])
 
     def __iter__(self) -> Iterator[PositionFix]:
         for t, lat, lon in zip(self._time, self._lat, self._lon):
             yield PositionFix(_from_epoch(t), lat, lon)
-
 
 
 class SogArray(_SortableSampleArray):
@@ -287,11 +307,11 @@ class SogArray(_SortableSampleArray):
             yield SogSample(_from_epoch(t), sog_ms, None if math.isnan(cog) else cog)
 
 
-
-class DepthArray(_SampleArray):
+class DepthArray(_SortableSampleArray):
     """Same idea as FixArray, for DepthSample. depth_m is Optional -- stored as NaN when absent."""
 
     __slots__ = ("_time", "_depth_m")
+    _LABEL = "Depth samples"
 
     def __init__(self, samples: Iterable[DepthSample] = ()) -> None:
         self._time: "array.array[float]" = array.array("d")
@@ -302,17 +322,21 @@ class DepthArray(_SampleArray):
         self._time.append(_to_epoch(sample.time))
         self._depth_m.append(sample.depth_m if sample.depth_m is not None else math.nan)
 
+    def depth_at(self, i: int) -> Optional[float]:
+        depth_m = self._depth_m[i]
+        return None if math.isnan(depth_m) else depth_m
+
     def __iter__(self) -> Iterator[DepthSample]:
         for t, depth_m in zip(self._time, self._depth_m):
             yield DepthSample(_from_epoch(t), None if math.isnan(depth_m) else depth_m)
 
 
-
-class WaterTempArray(_SampleArray):
+class WaterTempArray(_SortableSampleArray):
     """Same idea as FixArray, for WaterTempSample. temp_c is Optional -- stored as NaN when
     absent."""
 
     __slots__ = ("_time", "_temp_c")
+    _LABEL = "Water temperature samples"
 
     def __init__(self, samples: Iterable[WaterTempSample] = ()) -> None:
         self._time: "array.array[float]" = array.array("d")
@@ -323,13 +347,16 @@ class WaterTempArray(_SampleArray):
         self._time.append(_to_epoch(sample.time))
         self._temp_c.append(sample.temp_c if sample.temp_c is not None else math.nan)
 
+    def temp_at(self, i: int) -> Optional[float]:
+        temp_c = self._temp_c[i]
+        return None if math.isnan(temp_c) else temp_c
+
     def __iter__(self) -> Iterator[WaterTempSample]:
         for t, temp_c in zip(self._time, self._temp_c):
             yield WaterTempSample(_from_epoch(t), None if math.isnan(temp_c) else temp_c)
 
 
-
-class BatteryArray(_SampleArray):
+class BatteryArray(_InstancedSampleArray):
     """Same idea as FixArray, for BatterySample. instance is stored as a float column too (array
     only has one element type per column) -- always a small non-negative integer in practice, so
     the round-trip through float is exact."""
@@ -347,13 +374,14 @@ class BatteryArray(_SampleArray):
         self._instance.append(sample.instance)
         self._voltage_v.append(sample.voltage_v if sample.voltage_v is not None else math.nan)
 
-    def __iter__(self) -> Iterator[BatterySample]:
-        for t, instance, voltage_v in zip(self._time, self._instance, self._voltage_v):
-            yield BatterySample(_from_epoch(t), int(instance), None if math.isnan(voltage_v) else voltage_v)
+    def __getitem__(self, i: int) -> BatterySample:
+        voltage_v = self._voltage_v[i]
+        return BatterySample(
+            _from_epoch(self._time[i]), int(self._instance[i]), None if math.isnan(voltage_v) else voltage_v
+        )
 
 
-
-class RpmArray(_SampleArray):
+class RpmArray(_InstancedSampleArray):
     """Same idea as FixArray, for EngineRpmSample (PGN 127488, engine speed) -- on a real
     full-season archive this is comparable in cardinality to GPS fixes (an NMEA2000 engine
     typically reports RPM at least once a second whenever running: confirmed in practice on a
@@ -377,13 +405,12 @@ class RpmArray(_SampleArray):
         self._instance.append(sample.instance)
         self._rpm.append(sample.rpm if sample.rpm is not None else math.nan)
 
-    def __iter__(self) -> Iterator[EngineRpmSample]:
-        for t, instance, rpm in zip(self._time, self._instance, self._rpm):
-            yield EngineRpmSample(_from_epoch(t), int(instance), None if math.isnan(rpm) else rpm)
+    def __getitem__(self, i: int) -> EngineRpmSample:
+        rpm = self._rpm[i]
+        return EngineRpmSample(_from_epoch(self._time[i]), int(self._instance[i]), None if math.isnan(rpm) else rpm)
 
 
-
-class TripFuelArray(_SampleArray):
+class TripFuelArray(_InstancedSampleArray):
     """Same idea as FixArray, for TripFuelSample (PGN 127497, the engine's own trip fuel meter)."""
 
     __slots__ = ("_time", "_instance", "_trip_fuel_used_l")
@@ -401,13 +428,14 @@ class TripFuelArray(_SampleArray):
             sample.trip_fuel_used_l if sample.trip_fuel_used_l is not None else math.nan
         )
 
-    def __iter__(self) -> Iterator[TripFuelSample]:
-        for t, instance, trip_fuel in zip(self._time, self._instance, self._trip_fuel_used_l):
-            yield TripFuelSample(_from_epoch(t), int(instance), None if math.isnan(trip_fuel) else trip_fuel)
+    def __getitem__(self, i: int) -> TripFuelSample:
+        trip_fuel = self._trip_fuel_used_l[i]
+        return TripFuelSample(
+            _from_epoch(self._time[i]), int(self._instance[i]), None if math.isnan(trip_fuel) else trip_fuel
+        )
 
 
-
-class EngineArray(_SampleArray):
+class EngineArray(_InstancedSampleArray):
     """Same idea as FixArray, for EngineSample -- the season-wide list of raw engine PGN
     readings (fuel rate, hour meter, oil/coolant temperature, alternator voltage, engine load)
     build_trips() holds resident for its entire run (every per-trip engine statistics function
@@ -467,28 +495,26 @@ class EngineArray(_SampleArray):
         if sample.warnings:
             self._warnings[i] = sample.warnings
 
-    def __iter__(self) -> Iterator[EngineSample]:
-        for i in range(len(self)):
-            fuel_rate = self._fuel_rate_lph[i]
-            total_hours = self._total_hours_s[i]
-            oil_pressure = self._oil_pressure_pa[i]
-            oil_temperature = self._oil_temperature_k[i]
-            coolant_temperature = self._coolant_temperature_k[i]
-            alternator_voltage = self._alternator_voltage_v[i]
-            engine_load = self._engine_load_pct[i]
-            yield EngineSample(
-                time=_from_epoch(self._time[i]),
-                instance=int(self._instance[i]),
-                fuel_rate_lph=None if math.isnan(fuel_rate) else fuel_rate,
-                total_hours_s=None if math.isnan(total_hours) else int(total_hours),
-                oil_pressure_pa=None if math.isnan(oil_pressure) else oil_pressure,
-                oil_temperature_k=None if math.isnan(oil_temperature) else oil_temperature,
-                coolant_temperature_k=None if math.isnan(coolant_temperature) else coolant_temperature,
-                alternator_voltage_v=None if math.isnan(alternator_voltage) else alternator_voltage,
-                engine_load_pct=None if math.isnan(engine_load) else engine_load,
-                warnings=self._warnings.get(i, frozenset()),
-            )
-
+    def __getitem__(self, i: int) -> EngineSample:
+        fuel_rate = self._fuel_rate_lph[i]
+        total_hours = self._total_hours_s[i]
+        oil_pressure = self._oil_pressure_pa[i]
+        oil_temperature = self._oil_temperature_k[i]
+        coolant_temperature = self._coolant_temperature_k[i]
+        alternator_voltage = self._alternator_voltage_v[i]
+        engine_load = self._engine_load_pct[i]
+        return EngineSample(
+            time=_from_epoch(self._time[i]),
+            instance=int(self._instance[i]),
+            fuel_rate_lph=None if math.isnan(fuel_rate) else fuel_rate,
+            total_hours_s=None if math.isnan(total_hours) else int(total_hours),
+            oil_pressure_pa=None if math.isnan(oil_pressure) else oil_pressure,
+            oil_temperature_k=None if math.isnan(oil_temperature) else oil_temperature,
+            coolant_temperature_k=None if math.isnan(coolant_temperature) else coolant_temperature,
+            alternator_voltage_v=None if math.isnan(alternator_voltage) else alternator_voltage,
+            engine_load_pct=None if math.isnan(engine_load) else engine_load,
+            warnings=self._warnings.get(i, frozenset()),
+        )
 
 
 class AttitudeArray(_SortableSampleArray):
@@ -536,7 +562,6 @@ class AttitudeArray(_SortableSampleArray):
             yield AttitudeSample(
                 _from_epoch(t), None if math.isnan(pitch) else pitch, None if math.isnan(roll) else roll
             )
-
 
 
 class NavSampleArray:

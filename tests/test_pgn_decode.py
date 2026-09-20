@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta
 import pytest
 
 from nmea2log.pgn_decode import (
+    decode_gnss_dops,
     decode_battery_status,
     decode_cog,
     decode_engine_dynamic,
@@ -214,3 +215,28 @@ def test_decode_battery_status_not_available():
 
     assert instance == 1
     assert voltage_v is None
+
+
+def test_decode_gnss_dops_reads_a_normal_3d_solution():
+    # Real payload from a boat's GNSS receiver during normal operation: HDOP 0.70, VDOP 1.10.
+    data = bytes.fromhex("9bd746006e00ff7f")
+
+    assert decode_gnss_dops(data) == (2, pytest.approx(0.70))
+
+
+def test_decode_gnss_dops_reads_the_receivers_no_fix_placeholder():
+    # Real payload, same receiver in the first seconds after power-on, before it had a fix: HDOP 99.00.
+    data = bytes.fromhex("04d7ac26ac26ff7f")
+
+    assert decode_gnss_dops(data) == (2, pytest.approx(99.0))
+
+
+def test_decode_gnss_dops_reads_not_available_at_power_off():
+    # Real payload, same receiver in the last second before it lost power: mode and HDOP both "not available".
+    data = bytes.fromhex("01ffff7fff7fff7f")
+
+    assert decode_gnss_dops(data) == (None, None)
+
+
+def test_decode_gnss_dops_none_when_payload_too_short():
+    assert decode_gnss_dops(b"") is None

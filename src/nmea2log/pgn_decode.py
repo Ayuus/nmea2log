@@ -22,6 +22,7 @@ PGN_SYSTEM_TIME = 126992  # System Time
 PGN_TEMPERATURE = 130312  # Temperature
 PGN_BATTERY_STATUS = 127508  # Battery Status
 PGN_ATTITUDE = 127257  # Attitude (pitch/roll/yaw)
+PGN_GNSS_DOPS = 129539  # GNSS DOPs (dilution of precision + fix mode)
 
 _EPOCH = date(1970, 1, 1)
 _KELVIN_TO_CELSIUS = 273.15
@@ -212,6 +213,20 @@ def decode_attitude(data: bytes) -> Optional[Tuple[Optional[float], Optional[flo
     pitch_deg = math.degrees(pitch_raw * 0.0001) if pitch_raw is not None else None
     roll_deg = math.degrees(roll_raw * 0.0001) if roll_raw is not None else None
     return pitch_deg, roll_deg
+
+
+def decode_gnss_dops(data: bytes) -> Optional[Tuple[Optional[int], Optional[float]]]:
+    """PGN 129539 (GNSS DOPs): (actual fix mode, HDOP) -- the receiver's own statement of whether
+    its position solution can be trusted right now. The mode is canboat's GNSS_MODE enumeration
+    (0=1D, 1=2D, 2=3D, 3=Auto, 6=Error) and is None when the field says "not available" (7);
+    HDOP is unitless (lower is better) and likewise None when "not available". A receiver with no
+    valid solution reports either a "not available" mode or a placeholder HDOP (99 was seen). Returns
+    None only if the payload is too short to contain these fields at all."""
+    if len(data) < 4:
+        return None
+    actual_mode = _extract(data, 11, 3, signed=False)
+    hdop_raw = _extract(data, 16, 16, signed=True)
+    return actual_mode, (hdop_raw * 0.01 if hdop_raw is not None else None)
 
 
 def decode_trip_fuel_engine(data: bytes) -> Optional[Tuple[int, Optional[float]]]:

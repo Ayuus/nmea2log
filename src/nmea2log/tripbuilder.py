@@ -10,24 +10,29 @@ time -- so explicitly not via a tank sensor.
 
 from __future__ import annotations
 
+import array
 import bisect
 import math
 import statistics
 from collections import Counter
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
-from typing import Dict, FrozenSet, Iterator, List, Optional, Tuple
+from typing import Dict, FrozenSet, Iterable, Iterator, List, Optional, Tuple, Union
 
 from .fix_array import (
     _CLOCK_JUMP_THRESHOLD_S,
     AttitudeArray,
+    BatteryArray,
+    DepthArray,
     EngineArray,
     FixArray,
     NavSampleArray,
     RpmArray,
     SogArray,
     TripFuelArray,
+    WaterTempArray,
     _log_time_anomaly,
+    _to_epoch,
 )
 from .geocode import NoGeocoder
 from .log import log
@@ -62,7 +67,7 @@ _RPM_BUCKET = 50  # round RPM to the nearest multiple of this before taking the 
 # data until the affected trips aged out of the cache on their own -- on a real device, that's
 # potentially never. Included in config_signature() specifically so a bump here always forces a
 # one-time full rebuild instead.
-TRIP_LOGIC_VERSION = 3
+TRIP_LOGIC_VERSION = 4
 _RPM_STABLE_MINUTES = 2.0  # a run at the typical RPM bucket must last at least this long to
 # count as steady cruising rather than a brief pass-through while accelerating/decelerating
 
@@ -237,10 +242,24 @@ _MAX_PLAUSIBLE_SPEED_KN = 60.0  # generous margin above the fastest speed this a
 # recorded (~22 kn) -- exists purely to catch corrupted position fixes, not to model anything
 # about the boat itself.
 
+# A fix must also be consistent with the receiver's *own* speed over ground (PGN 129026): position
+# and speed come from the same device, so a boat reporting 0.3 kn cannot have moved 50 m in a
+# second. Confirmed on a real boat: for ~100 s after every GPS power-on the reported position kept
+# gliding towards the real one (53, 26, 16, 12, 8 m per second, ...) while SOG stayed at 0.1-0.3 kn
+# -- and a valid HDOP was already being reported for most of that time (see gnss_gate.py), so the
+# receiver's own fix-quality report alone doesn't catch it. A fix is rejected when it is further
+# from the last accepted one than _SOG_CHECK_SLACK_M plus what _SOG_CHECK_FACTOR times the reported
+# SOG (plus _SOG_CHECK_SLACK_MS, ~3 kn) could cover in the elapsed time. Only checked across short
+# gaps: over a longer one the boat may well have moved and stopped again since.
+_SOG_CHECK_SLACK_M = 10.0
+_SOG_CHECK_FACTOR = 3.0
+_SOG_CHECK_SLACK_MS = 1.5
+_SOG_CHECK_MAX_DT_S = 30.0
+
 _CLOCK_JUMP_THRESHOLD_HOURS = _CLOCK_JUMP_THRESHOLD_S / 3600.0  # see fix_array.py
 
 
-def _reject_gps_outliers_array(fixes: FixArray) -> FixArray:
+def _reject_gps_outliers_array(fixes: FixArray, sogs: Optional[SogArray] = None) -> FixArray:
     """Drops a position fix that implies an impossible speed from the last *accepted* fix.
 
     Confirmed in practice, byte-for-byte: a real .ebl file contained a well-formed record (valid
@@ -260,10 +279,13 @@ def _reject_gps_outliers_array(fixes: FixArray) -> FixArray:
     the FixArray's columns, so a run never has to materialize a full PositionFix object per fix
     just to filter them.
 
+    ``sogs`` (already in time order), when given, adds a second check: a fix must also be
+    consistent with the receiver's own speed over ground -- see _SOG_CHECK_SLACK_M above.
+
     Mutates and returns the same ``fixes`` object it was given (see FixArray.replace_columns_with)
     rather than building and returning an unrelated new one -- a caller that keeps its own
     reference to this exact object across build_trips()'s whole run (every real caller does, see
-    android_entry.py/cli.py) sees the outlier-rejected, sorted data too, and the original, larger
+    pipeline.py) sees the outlier-rejected, sorted data too, and the original, larger
     columns are freed immediately instead of staying resident for no reason.
 
     Processes ``fixes`` in its own natural (file-discovery) order, never sorting it first --
@@ -296,19 +318,24 @@ def _reject_gps_outliers_array(fixes: FixArray) -> FixArray:
     accepted = FixArray()
     prev_i = 0
     accepted.append_raw(fixes.time_at(0), fixes.lat_at(0), fixes.lon_at(0))
-    backward_dropped = clock_resets = implausible_dropped = 0
+    backward_dropped = clock_resets = implausible_dropped = sog_inconsistent_dropped = 0
     max_backward_s = 0.0
     first_backward_at: Optional[float] = None
+    sog_idx = 0
+    current_sog_ms: Optional[float] = None
+    n_sogs = len(sogs) if sogs is not None else 0
     for i in range(1, n):
-        dt_hours = (fixes.time_at(i) - fixes.time_at(prev_i)) / 3600
+        fix_time = fixes.time_at(i)
+        dt_hours = (fix_time - fixes.time_at(prev_i)) / 3600
         if dt_hours <= -_CLOCK_JUMP_THRESHOLD_HOURS:
             # A large backward jump -- prev_i's own reading (and whatever anomaly led up to it)
             # is almost certainly the wrong one, not this one. Trust this reading and reset the
             # anchor here, instead of rejecting it and staying stuck comparing everything after
             # it against a wrong, far-future anchor.
             clock_resets += 1
-            accepted.append_raw(fixes.time_at(i), fixes.lat_at(i), fixes.lon_at(i))
+            accepted.append_raw(fix_time, fixes.lat_at(i), fixes.lon_at(i))
             prev_i = i
+            sog_idx, current_sog_ms = 0, None  # the speed samples' clock reset along with it
             continue
         if dt_hours <= 0:
             # Equal timestamps are routine (every frame between two PGN 126992 updates shares the
@@ -317,16 +344,22 @@ def _reject_gps_outliers_array(fixes: FixArray) -> FixArray:
                 backward_dropped += 1
                 max_backward_s = max(max_backward_s, -dt_hours * 3600)
                 if first_backward_at is None:
-                    first_backward_at = fixes.time_at(i)
+                    first_backward_at = fix_time
             continue  # duplicate/out-of-order timestamp -- keep whichever came first
-        implied_speed_kn = (
-            _haversine_nm(fixes.lat_at(prev_i), fixes.lon_at(prev_i), fixes.lat_at(i), fixes.lon_at(i))
-            / dt_hours
-        )
-        if implied_speed_kn > _MAX_PLAUSIBLE_SPEED_KN:
+        while sog_idx < n_sogs and sogs.time_at(sog_idx) <= fix_time:
+            current_sog_ms = sogs.sog_at(sog_idx)
+            sog_idx += 1
+        distance_nm = _haversine_nm(fixes.lat_at(prev_i), fixes.lon_at(prev_i), fixes.lat_at(i), fixes.lon_at(i))
+        if distance_nm / dt_hours > _MAX_PLAUSIBLE_SPEED_KN:
             implausible_dropped += 1
             continue
-        accepted.append_raw(fixes.time_at(i), fixes.lat_at(i), fixes.lon_at(i))
+        dt_s = dt_hours * 3600
+        if current_sog_ms is not None and dt_s <= _SOG_CHECK_MAX_DT_S:
+            allowed_m = _SOG_CHECK_SLACK_M + dt_s * (_SOG_CHECK_FACTOR * current_sog_ms + _SOG_CHECK_SLACK_MS)
+            if distance_nm * 1852.0 > allowed_m:
+                sog_inconsistent_dropped += 1
+                continue
+        accepted.append_raw(fix_time, fixes.lat_at(i), fixes.lon_at(i))
         prev_i = i
     if backward_dropped or clock_resets:
         _log_time_anomaly("Position fixes", backward_dropped, max_backward_s, first_backward_at, clock_resets)
@@ -336,9 +369,15 @@ def _reject_gps_outliers_array(fixes: FixArray) -> FixArray:
             f"{_MAX_PLAUSIBLE_SPEED_KN:.0f} kn from the previous accepted one -- a GPS position "
             f"jump or corrupted position data in the source, worth a look if it keeps happening."
         )
+    if sog_inconsistent_dropped:
+        log(
+            f"[anomaly] Position fixes: dropped {sog_inconsistent_dropped} fix(es) that moved much "
+            f"further than the receiver's own speed over ground allows -- typically a receiver "
+            f"still settling on its position shortly after power-on."
+        )
     # Written back into `fixes`' own columns (see FixArray.replace_columns_with's own docstring)
     # rather than simply `return accepted` -- the caller passed `fixes` in by reference and, on
-    # every real caller (cli.py/android_entry.py), still holds its own separate reference to the
+    # every real caller (via pipeline.py), still holds its own separate reference to the
     # exact same object for build_trips()'s entire run; returning a distinct new FixArray would
     # leave the original, larger columns resident and unreachable-but-not-freed the whole time.
     fixes.replace_columns_with(accepted)
@@ -348,8 +387,8 @@ def _reject_gps_outliers_array(fixes: FixArray) -> FixArray:
 def _merge_nav_samples(
     fixes: FixArray,
     sogs: SogArray,
-    depths: Optional[List[DepthSample]] = None,
-    water_temps: Optional[List[WaterTempSample]] = None,
+    depths: Optional[DepthArray] = None,
+    water_temps: Optional[WaterTempArray] = None,
 ) -> NavSampleArray:
     """Combines position, speed, depth, and water temperature readings chronologically; all are
     forward-filled.
@@ -370,13 +409,12 @@ def _merge_nav_samples(
     around build_trips(), see that function's own comment): SOG is typically similar cardinality
     to position fixes, so that materialization alone was a real, multi-hundred-MB cost on top of
     everything else already resident at that point."""
-    fixes = _reject_gps_outliers_array(fixes)
+    sogs = sogs.drop_time_regressions()  # first: the position check below compares against SOG
+    fixes = _reject_gps_outliers_array(fixes, sogs)
     # Already in time order -- _reject_gps_outliers_array() processes its input in sorted order
-    # and never reorders what it keeps, so no second sort is needed here (the original
-    # list-based version technically re-sorted an already-sorted list every single run).
-    sogs = sogs.drop_time_regressions()
-    depths_sorted = sorted(depths, key=lambda s: s.time) if depths else []
-    water_temps_sorted = sorted(water_temps, key=lambda s: s.time) if water_temps else []
+    # and never reorders what it keeps, so no second sort is needed here.
+    depths = (depths if depths is not None else DepthArray()).drop_time_regressions()
+    water_temps = (water_temps if water_temps is not None else WaterTempArray()).drop_time_regressions()
     samples = NavSampleArray()
     sog_idx = 0
     depth_idx = 0
@@ -392,11 +430,11 @@ def _merge_nav_samples(
             last_sog = sogs.sog_at(sog_idx)
             last_cog = sogs.cog_at(sog_idx)
             sog_idx += 1
-        while depth_idx < len(depths_sorted) and depths_sorted[depth_idx].time <= fix_time:
-            last_depth = depths_sorted[depth_idx].depth_m
+        while depth_idx < len(depths) and depths.time_at(depth_idx) <= fix_epoch:
+            last_depth = depths.depth_at(depth_idx)
             depth_idx += 1
-        while water_temp_idx < len(water_temps_sorted) and water_temps_sorted[water_temp_idx].time <= fix_time:
-            last_water_temp = water_temps_sorted[water_temp_idx].temp_c
+        while water_temp_idx < len(water_temps) and water_temps.time_at(water_temp_idx) <= fix_epoch:
+            last_water_temp = water_temps.temp_at(water_temp_idx)
             water_temp_idx += 1
         samples.append_raw(fix_epoch, fixes.lat_at(i), fixes.lon_at(i), last_sog, last_depth, last_water_temp, last_cog)
     return samples
@@ -563,18 +601,6 @@ def _engine_on_at(on_intervals: List[Tuple[datetime, datetime]], t: datetime) ->
     return any(start <= t <= end for start, end in on_intervals)
 
 
-def _engine_on_intervals(engine_samples: List[EngineSample]) -> List[Tuple[datetime, datetime]]:
-    """Merged time ranges (across all engine instances) during which an engine was actually
-    running, based on fuel consumption -- a much more direct "is it running" signal than merely
-    receiving PGN 127489, since some devices keep sending near-zero readings for a while after
-    shutdown. Consecutive "on" readings less than ``_ENGINE_OFF_GAP_S`` apart are treated as one
-    continuous interval, bridging normal reporting jitter without bridging a real shutdown."""
-    on_times = sorted(
-        s.time for s in engine_samples if s.fuel_rate_lph is not None and s.fuel_rate_lph > _ENGINE_IDLE_FUEL_LPH
-    )
-    return _merge_on_times(on_times)
-
-
 def _merge_on_times(on_times: List[datetime]) -> List[Tuple[datetime, datetime]]:
     if not on_times:
         return []
@@ -588,20 +614,27 @@ def _merge_on_times(on_times: List[datetime]) -> List[Tuple[datetime, datetime]]
     return [(start, end) for start, end in intervals]
 
 
-def _engine_on_intervals_by_instance(
-    engine_samples: List[EngineSample],
-) -> Dict[int, List[Tuple[datetime, datetime]]]:
-    """Same as ``_engine_on_intervals``, but kept separate per engine instance -- needed to
-    extend a trip's own logged engine hours by however long that specific engine ran
-    continuously right before departure and after arrival (see ``_engine_hours_delta``),
-    without mixing in a different engine's own on/off timing on a multi-engine boat."""
+def _engine_on_intervals(
+    engine_samples: EngineArray,
+) -> Tuple[List[Tuple[datetime, datetime]], Dict[int, List[Tuple[datetime, datetime]]]]:
+    """(intervals across all engine instances, intervals per engine instance) during which an
+    engine was actually running, from a single pass over the samples. Based on fuel consumption --
+    a much more direct "is it running" signal than merely receiving PGN 127489, since some devices
+    keep sending near-zero readings for a while after shutdown. Consecutive "on" readings less
+    than ``_ENGINE_OFF_GAP_S`` apart are treated as one continuous interval, bridging normal
+    reporting jitter without bridging a real shutdown.
+
+    The per-instance intervals extend a trip's own logged engine hours by however long that
+    specific engine ran continuously right before departure and after arrival (see
+    ``_engine_hours_delta``), without mixing in a different engine's own on/off timing on a
+    multi-engine boat."""
     on_times_by_instance: Dict[int, List[datetime]] = {}
     for s in engine_samples:
         if s.fuel_rate_lph is not None and s.fuel_rate_lph > _ENGINE_IDLE_FUEL_LPH:
             on_times_by_instance.setdefault(s.instance, []).append(s.time)
-    return {
-        instance: _merge_on_times(sorted(times)) for instance, times in on_times_by_instance.items()
-    }
+    overall = _merge_on_times(sorted(t for times in on_times_by_instance.values() for t in times))
+    by_instance = {instance: _merge_on_times(sorted(times)) for instance, times in on_times_by_instance.items()}
+    return overall, by_instance
 
 
 def _engine_off_span(
@@ -912,28 +945,39 @@ def _extend_engine_window(
     return min(start, depart_time), max(end, arrive_time)
 
 
-def _bucket_by_instance(samples) -> Dict[int, List]:
-    """Buckets a flat season-wide sample list (engine/RPM/battery/trip-fuel) by its ``.instance``
-    attribute, each bucket sorted by ``.time`` -- computed once per array in build_trips(), so
-    the per-trip "leaf" functions below can bisect each instance's own small time window out of
-    an already-sorted bucket (see ``_window_for_instance``) instead of re-scanning the *entire*
-    season's samples from scratch on every call. Found in practice: once the earlier OOM/sort
-    issues were fixed, this became the next bottleneck -- a single trip could take minutes with
-    ~400k engine + ~1.75M RPM samples each re-scanned by 6+ separate functions."""
-    by_instance: Dict[int, List] = {}
-    for sample in samples:
-        by_instance.setdefault(sample.instance, []).append(sample)
-    for bucket in by_instance.values():
-        bucket.sort(key=lambda s: s.time)
-    return by_instance
+class _InstanceIndex:
+    """Per instance (engine/battery number) of a season-wide, array.array-backed sample collection,
+    the row indices in time order -- computed once per array in build_trips(), so the per-trip
+    "leaf" functions below can bisect each instance's own small time window out of it (see
+    ``window``) instead of re-scanning the *entire* season's samples from scratch on every call.
+    Found in practice: once the earlier OOM/sort issues were fixed, that re-scanning was the next
+    bottleneck -- a single trip could take minutes with ~400k engine + ~1.75M RPM samples each
+    re-scanned by 6+ separate functions.
 
+    Holds only row *indices* (a few bytes each), not sample objects: materializing every one of a
+    season's ~2 million engine/RPM/battery samples as real Python objects for the whole run is
+    exactly the cost the columnar arrays exist to avoid. Only a trip's own window is ever turned
+    into objects, and only for the duration of that trip's statistics."""
 
-def _window_for_instance(bucket: List, start: datetime, end: datetime) -> List:
-    """Bisects a single already-time-sorted instance bucket (see ``_bucket_by_instance``) down to
-    just the samples in [start, end] -- O(log n + window size) instead of a full linear scan."""
-    lo = bisect.bisect_left(bucket, start, key=lambda s: s.time)
-    hi = bisect.bisect_right(bucket, end, key=lambda s: s.time)
-    return bucket[lo:hi]
+    def __init__(self, samples) -> None:
+        self._samples = samples
+        self._rows: Dict[int, "array.array[int]"] = {}
+        for i in range(len(samples)):
+            self._rows.setdefault(samples.instance_at(i), array.array("l")).append(i)
+        for instance, rows in self._rows.items():
+            times = [samples.time_at(i) for i in rows]
+            if any(a > b for a, b in zip(times, times[1:])):
+                self._rows[instance] = array.array("l", sorted(rows, key=samples.time_at))
+
+    def instances(self) -> List[int]:
+        return list(self._rows)
+
+    def window(self, instance: int, start: datetime, end: datetime) -> list:
+        """The instance's samples with start <= time <= end, in time order."""
+        rows = self._rows[instance]
+        lo = bisect.bisect_left(rows, _to_epoch(start), key=self._samples.time_at)
+        hi = bisect.bisect_right(rows, _to_epoch(end), key=self._samples.time_at)
+        return [self._samples[i] for i in rows[lo:hi]]
 
 
 def _engine_hours_delta(
@@ -948,11 +992,11 @@ def _engine_hours_delta(
     the window widened per instance first (see ``_extend_engine_window``): each instance gets its
     own window since a multi-engine boat's engines don't necessarily start/stop together."""
     result: Dict[int, float] = {}
-    for instance, bucket in engine_by_instance.items():
+    for instance in engine_by_instance.instances():
         start, end = _extend_engine_window(
             depart_time, arrive_time, prev_stay, next_stay, on_intervals_by_instance.get(instance, [])
         )
-        window = [s for s in _window_for_instance(bucket, start, end) if s.total_hours_s is not None]
+        window = [s for s in engine_by_instance.window(instance, start, end) if s.total_hours_s is not None]
         if len(window) < 2:
             continue
         delta_s = window[-1].total_hours_s - window[0].total_hours_s
@@ -965,8 +1009,8 @@ def _engine_hours_total(by_instance: Dict[int, List[EngineSample]], start: datet
     instance -- the engine's own lifetime counter, e.g. for tracking maintenance intervals,
     as opposed to ``_engine_hours_delta``'s "hours run just during this trip"."""
     result: Dict[int, float] = {}
-    for instance, bucket in by_instance.items():
-        window = [s for s in _window_for_instance(bucket, start, end) if s.total_hours_s is not None]
+    for instance in by_instance.instances():
+        window = [s for s in by_instance.window(instance, start, end) if s.total_hours_s is not None]
         if not window:
             continue
         result[instance] = window[-1].total_hours_s / 3600.0
@@ -975,8 +1019,8 @@ def _engine_hours_total(by_instance: Dict[int, List[EngineSample]], start: datet
 
 def _fuel_liters(by_instance: Dict[int, List[EngineSample]], start: datetime, end: datetime) -> float:
     total = 0.0
-    for bucket in by_instance.values():
-        window = [s for s in _window_for_instance(bucket, start, end) if s.fuel_rate_lph is not None]
+    for instance in by_instance.instances():
+        window = [s for s in by_instance.window(instance, start, end) if s.fuel_rate_lph is not None]
         for a, b in zip(window, window[1:]):
             dt_h = (b.time - a.time).total_seconds() / 3600.0
             if dt_h <= 0 or dt_h > _MAX_INTEGRATION_GAP_H:
@@ -996,8 +1040,8 @@ def _device_fuel_delta(
     """
     total = 0.0
     found_any = False
-    for bucket in by_instance.values():
-        window = [s for s in _window_for_instance(bucket, start, end) if s.trip_fuel_used_l is not None]
+    for instance in by_instance.instances():
+        window = [s for s in by_instance.window(instance, start, end) if s.trip_fuel_used_l is not None]
         if len(window) < 2:
             continue
         delta = window[-1].trip_fuel_used_l - window[0].trip_fuel_used_l
@@ -1040,8 +1084,8 @@ def _engine_health(
         return sum(values) / len(values) if values else None
 
     result: Dict[int, EngineHealth] = {}
-    for instance, bucket in by_instance.items():
-        window = _window_for_instance(bucket, start, end)
+    for instance in by_instance.instances():
+        window = by_instance.window(instance, start, end)
         if not window:
             continue
         oil_pressure = [s.oil_pressure_pa for s in window if s.oil_pressure_pa is not None]
@@ -1051,7 +1095,7 @@ def _engine_health(
         engine_load = [s.engine_load_pct for s in window if s.engine_load_pct is not None]
         warnings: FrozenSet[str] = frozenset().union(*(s.warnings for s in window))
         warning_first_seen: Dict[str, datetime] = {}
-        # window is already time-sorted (see _bucket_by_instance/_window_for_instance) -- no need
+        # window is already time-sorted (see _InstanceIndex.window) -- no need
         # to re-sort it again just for this.
         for sample in window:
             for warning in sample.warnings:
@@ -1077,8 +1121,8 @@ def _engine_health(
 
 def _battery_health(by_instance: Dict[int, List[BatterySample]], start: datetime, end: datetime) -> Dict[int, BatteryHealth]:
     result: Dict[int, BatteryHealth] = {}
-    for instance, bucket in by_instance.items():
-        window = [s for s in _window_for_instance(bucket, start, end) if s.voltage_v is not None]
+    for instance in by_instance.instances():
+        window = [s for s in by_instance.window(instance, start, end) if s.voltage_v is not None]
         if not window:
             continue
         voltages = [s.voltage_v for s in window]
@@ -1098,8 +1142,8 @@ def _rpm_at_time(
     instance -- restricted to this trip's own [start, end] window so a gap in RPM reporting right
     at that moment doesn't pick up a reading that actually belongs to a different trip."""
     result: Dict[int, float] = {}
-    for instance, bucket in rpm_by_instance.items():
-        window = [s for s in _window_for_instance(bucket, start, end) if s.rpm is not None]
+    for instance in rpm_by_instance.instances():
+        window = [s for s in rpm_by_instance.window(instance, start, end) if s.rpm is not None]
         if not window:
             continue
         result[instance] = min(window, key=lambda s: abs((s.time - time).total_seconds())).rpm
@@ -1113,8 +1157,8 @@ def _typical_rpm(rpm_by_instance: Dict[int, List[EngineRpmSample]], start: datet
     This is a more representative "cruising RPM" than an average (skewed by idle/neutral periods
     and maneuvering) or a maximum (skewed by brief revs)."""
     result: Dict[int, float] = {}
-    for instance, bucket in rpm_by_instance.items():
-        values = [s.rpm for s in _window_for_instance(bucket, start, end) if s.rpm is not None]
+    for instance in rpm_by_instance.instances():
+        values = [s.rpm for s in rpm_by_instance.window(instance, start, end) if s.rpm is not None]
         if not values:
             continue
         buckets = Counter(round(v / _RPM_BUCKET) * _RPM_BUCKET for v in values)
@@ -1151,19 +1195,19 @@ def _typical_rpm_speed_range(
     times = [s.time for s in track]
 
     by_instance: Dict[int, List[EngineRpmSample]] = {
-        instance: [s for s in _window_for_instance(bucket, start, end) if s.rpm is not None]
-        for instance, bucket in rpm_by_instance.items()
+        instance: [s for s in rpm_by_instance.window(instance, start, end) if s.rpm is not None]
+        for instance in rpm_by_instance.instances()
     }
 
     fuel_by_instance: Dict[int, List[EngineSample]] = {
-        instance: [s for s in _window_for_instance(bucket, start, end) if s.fuel_rate_lph is not None]
-        for instance, bucket in engine_by_instance.items()
+        instance: [s for s in engine_by_instance.window(instance, start, end) if s.fuel_rate_lph is not None]
+        for instance in engine_by_instance.instances()
     }
 
     min_duration = timedelta(minutes=_RPM_STABLE_MINUTES)
     result: Dict[int, Tuple[float, float, float, Optional[float]]] = {}
     for instance, samples in by_instance.items():
-        # Already time-sorted (see _bucket_by_instance/_window_for_instance) -- no need to
+        # Already time-sorted (see _InstanceIndex.window) -- no need to
         # re-sort it again just for this.
         buckets = [round(s.rpm / _RPM_BUCKET) * _RPM_BUCKET for s in samples]
         counts = Counter(buckets)
@@ -1246,16 +1290,24 @@ def _motion_variation(
     return roll_stdev, pitch_stdev, roll_range, pitch_range
 
 
+def _as_array(samples, array_type):
+    """``samples`` itself if it already is an ``array_type``, otherwise a new one built from it
+    (None means empty)."""
+    if isinstance(samples, array_type):
+        return samples
+    return array_type(samples if samples is not None else ())
+
+
 def build_trips(
-    fixes: FixArray | List[PositionFix],
-    sogs: SogArray | List[SogSample],
-    engine_samples: EngineArray | List[EngineSample],
-    trip_fuel_samples: Optional[TripFuelArray | List[TripFuelSample]] = None,
-    depth_samples: Optional[List[DepthSample]] = None,
-    water_temp_samples: Optional[List[WaterTempSample]] = None,
-    battery_samples: Optional[List[BatterySample]] = None,
-    rpm_samples: Optional[RpmArray | List[EngineRpmSample]] = None,
-    attitude_samples: Optional[List[AttitudeSample]] = None,
+    fixes: Union[FixArray, Iterable[PositionFix]],
+    sogs: Union[SogArray, Iterable[SogSample]],
+    engine_samples: Union[EngineArray, Iterable[EngineSample]],
+    trip_fuel_samples: Optional[Union[TripFuelArray, Iterable[TripFuelSample]]] = None,
+    depth_samples: Optional[Union[DepthArray, Iterable[DepthSample]]] = None,
+    water_temp_samples: Optional[Union[WaterTempArray, Iterable[WaterTempSample]]] = None,
+    battery_samples: Optional[Union[BatteryArray, Iterable[BatterySample]]] = None,
+    rpm_samples: Optional[Union[RpmArray, Iterable[EngineRpmSample]]] = None,
+    attitude_samples: Optional[Union[AttitudeArray, Iterable[AttitudeSample]]] = None,
     *,
     speed_threshold_kn: float = 0.5,
     min_stop_minutes: float = 10.0,
@@ -1293,39 +1345,24 @@ def build_trips(
     this on with sensible defaults; left off here so callers/tests that don't care about it get
     the plain speed-based behavior."""
     # Callers that already accumulate season-wide data as one of fix_array.py's array.array-backed
-    # types (cli.py/android_entry.py do, to avoid ever holding millions of boxed sample objects at
-    # once) pass those straight through; anything else (a plain list, as every existing test in
-    # this file still constructs) is wrapped here so this function's own public contract doesn't
-    # change for any existing caller.
-    if not isinstance(fixes, FixArray):
-        fixes = FixArray(fixes)
-    if not isinstance(sogs, SogArray):
-        sogs = SogArray(sogs)
-    if not isinstance(engine_samples, EngineArray):
-        engine_samples = EngineArray(engine_samples)
-    if trip_fuel_samples is None:
-        trip_fuel_samples = TripFuelArray()
-    elif not isinstance(trip_fuel_samples, TripFuelArray):
-        trip_fuel_samples = TripFuelArray(trip_fuel_samples)
-    if rpm_samples is None:
-        rpm_samples = RpmArray()
-    elif not isinstance(rpm_samples, RpmArray):
-        rpm_samples = RpmArray(rpm_samples)
-
-    if battery_samples is None:
-        battery_samples = []
-    if attitude_samples is None:
-        attitude_samples = []
-    # AttitudeArray gets its own array-native sort (see fix_array.py) -- a plain sorted(...)
-    # would iterate it into a fully-materialized list of AttitudeSample objects that then lives
-    # for the rest of this function's run (passed to _motion_variation for every trip), silently
-    # undoing the point of storing a season's worth of them as array.array columns in the first
-    # place.
-    attitude_samples = (
-        attitude_samples.drop_time_regressions()
-        if isinstance(attitude_samples, AttitudeArray)
-        else sorted(attitude_samples, key=lambda s: s.time)
-    )
+    # types (pipeline.py does, to avoid ever holding millions of boxed sample objects at once) pass
+    # those straight through; anything else (a plain list, as every existing test in this file
+    # still constructs) is wrapped here so this function's own public contract doesn't change for
+    # any existing caller. Every input ends up the same kind of array, so nothing below has to
+    # care which it got.
+    fixes = _as_array(fixes, FixArray)
+    sogs = _as_array(sogs, SogArray)
+    engine_samples = _as_array(engine_samples, EngineArray)
+    trip_fuel_samples = _as_array(trip_fuel_samples, TripFuelArray)
+    depth_samples = _as_array(depth_samples, DepthArray)
+    water_temp_samples = _as_array(water_temp_samples, WaterTempArray)
+    battery_samples = _as_array(battery_samples, BatteryArray)
+    rpm_samples = _as_array(rpm_samples, RpmArray)
+    # Sorted once up front, in place (see _SortableSampleArray.drop_time_regressions): a plain
+    # sorted(...) would iterate it into a fully-materialized list of AttitudeSample objects that
+    # then lives for the rest of this function's run (passed to _motion_variation for every
+    # trip), silently undoing the point of storing a season's worth of them as array.array columns.
+    attitude_samples = _as_array(attitude_samples, AttitudeArray).drop_time_regressions()
     if max_gap_minutes is None:
         max_gap_minutes = min_stop_minutes
 
@@ -1346,18 +1383,17 @@ def build_trips(
     # reads as "stopped" -- asked for explicitly: while the engine's still running, the skipper
     # may still be actively working the boat into its final spot (bow thruster nudges, reversing,
     # ...), not yet genuinely at rest, regardless of what the instantaneous SOG says.
-    on_intervals_by_instance = _engine_on_intervals_by_instance(engine_samples)
-    on_intervals = _engine_on_intervals(engine_samples)
+    on_intervals, on_intervals_by_instance = _engine_on_intervals(engine_samples)
 
     # Bucketed+sorted once here rather than inside each per-trip "leaf" function below (see
-    # _bucket_by_instance) -- otherwise every one of them re-scans the *entire* season's engine/
+    # _InstanceIndex) -- otherwise every one of them re-scans the *entire* season's engine/
     # RPM/battery/trip-fuel samples from scratch, once per trip, which is exactly what made this
     # phase slow in practice once the earlier OOM/sort issues were fixed (found in practice: a
     # single trip taking minutes with ~400k engine + ~1.75M RPM samples for a full season).
-    engine_by_instance = _bucket_by_instance(engine_samples)
-    rpm_by_instance = _bucket_by_instance(rpm_samples)
-    battery_by_instance = _bucket_by_instance(battery_samples)
-    trip_fuel_by_instance = _bucket_by_instance(trip_fuel_samples)
+    engine_by_instance = _InstanceIndex(engine_samples)
+    rpm_by_instance = _InstanceIndex(rpm_samples)
+    battery_by_instance = _InstanceIndex(battery_samples)
+    trip_fuel_by_instance = _InstanceIndex(trip_fuel_samples)
 
     runs = _classify_runs(samples, speed_threshold_ms)
     runs = _merge_short_stops(samples, runs, min_stop, max_gap)
@@ -1410,6 +1446,13 @@ def build_trips(
 
         depart_time = prev_stay.end if prev_stay else track[0].time
         arrive_time = next_stay.start if next_stay else track[-1].time
+        if next_stay is not None and arrive_time - track[-1].time >= max_gap:
+            # The next stay only starts after a real data gap (e.g. the logger was switched off
+            # right after arriving): it still supplies the arrival *place* (ports are linked across
+            # a gap, see _merge_short_stops), but the boat was last seen at the end of this track,
+            # not hours later when data resumed. Found in practice: a trip that ended at 12:14
+            # local was reported as arriving at 14:39, when the logger came back on.
+            arrive_time = track[-1].time
         depart_place = prev_stay.place if prev_stay else "Unknown (start outside log file)"
         arrive_place = next_stay.place if next_stay else "Unknown (end outside log file)"
         depart_lat = prev_stay.lat if prev_stay else track[0].lat
@@ -1417,9 +1460,7 @@ def build_trips(
         arrive_lat = next_stay.lat if next_stay else track[-1].lat
         arrive_lon = next_stay.lon if next_stay else track[-1].lon
 
-        distance_nm = sum(
-            _haversine_nm(a.lat, a.lon, b.lat, b.lon) for a, b in zip(track, track[1:])
-        )
+        distance_nm = _trip_distance_nm(samples, group)
         avg_speed_kn, max_speed_kn, max_speed_at = _speed_stats_kn(track)
         max_speed_rpm = (
             _rpm_at_time(rpm_by_instance, max_speed_at, depart_time, arrive_time) if max_speed_at else {}

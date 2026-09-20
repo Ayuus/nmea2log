@@ -13,7 +13,7 @@ from nmea2log.model import (
     TripFuelSample,
     WaterTempSample,
 )
-from nmea2log.fix_array import FixArray
+from nmea2log.fix_array import FixArray, SogArray
 from nmea2log.tripbuilder import (
     _reject_gps_outliers_array,
     build_trips,
@@ -58,6 +58,26 @@ def _build_scenario():
         engine_samples.append(EngineSample(_dt(m), 0, fuel_rate, 3600 * 100 + m * 60))
 
     return fixes, sogs, engine_samples
+
+
+def test_trip_arrival_is_the_last_time_the_boat_was_seen_when_a_data_gap_follows():
+    """Real incident: a trip whose last samples were still "moving" when the logger was switched
+    off (2 h 24 gap) got the *next* stay's start -- when data resumed -- as its arrival time,
+    reporting 14:39 for a trip that ended at 12:14. The next stay still supplies the arrival
+    place; only the time is clamped to the end of the trip's own track."""
+    fixes, sogs, engine_samples = _build_scenario()
+    # drop the final stationary period of the base scenario: this trip ends while still underway
+    fixes, sogs = fixes[:42], sogs[:42]
+    resume = 3 * 60  # minutes after the scenario's start: a 2 h+ gap
+    for m in range(resume, resume + 12):
+        fixes.append(PositionFix(_dt(m), 52.4001, 4.9501))
+        sogs.append(SogSample(_dt(m), 0.0))
+
+    trips = build_trips(fixes, sogs, engine_samples, speed_threshold_kn=0.5, min_stop_minutes=10)
+
+    assert len(trips) == 1
+    assert trips[0].arrive_time == _dt(41)  # last sample of the trip's own track, not _dt(resume)
+    assert trips[0].arrive_lat == pytest.approx(52.4001, abs=1e-4)  # place still linked across the gap
 
 
 def test_build_trips_single_leg():
@@ -320,6 +340,56 @@ def test_reject_gps_outliers_array_stays_quiet_for_equal_timestamps(log_lines):
     _reject_gps_outliers_array(FixArray(fixes))
 
     assert "\n".join(log_lines) == ""
+
+
+_DEG_LAT_PER_M = 1 / 111_195.0  # one metre of latitude in degrees
+
+
+def _fix_north_of(base_lat: float, metres: float, seconds: int) -> PositionFix:
+    return PositionFix(datetime(2026, 7, 30, 12, 39, 0) + timedelta(seconds=seconds), base_lat + metres * _DEG_LAT_PER_M, -4.17)
+
+
+def _sog_at(seconds: int, knots: float) -> SogSample:
+    return SogSample(datetime(2026, 7, 30, 12, 39, 0) + timedelta(seconds=seconds), knots * 0.514444, None)
+
+
+def test_reject_gps_outliers_array_drops_a_fix_far_further_than_the_reported_speed_allows(log_lines):
+    """Real incident: a stationary boat (SOG 0.3 kn) whose GPS receiver was still settling after
+    power-on reported positions gliding 16, 12, 8 m per second -- under the 60 kn sanity limit and
+    with a valid HDOP by then, but nowhere near what 0.3 kn could cover."""
+    fixes = FixArray([_fix_north_of(47.83745, 0, 0), _fix_north_of(47.83745, 16, 1), _fix_north_of(47.83745, 24, 2)])
+    sogs = SogArray([_sog_at(0, 0.3)])
+
+    kept = _reject_gps_outliers_array(fixes, sogs)
+
+    assert len(kept) == 1
+    assert "dropped 2 fix(es) that moved much further than the receiver's own speed" in "\n".join(log_lines)
+
+
+def test_reject_gps_outliers_array_keeps_gps_jitter_on_a_stationary_boat():
+    fixes = FixArray([_fix_north_of(47.83745, 0, 0), _fix_north_of(47.83745, 4, 1), _fix_north_of(47.83745, -3, 2)])
+
+    assert len(_reject_gps_outliers_array(fixes, SogArray([_sog_at(0, 0.2)]))) == 3
+
+
+def test_reject_gps_outliers_array_keeps_a_boat_moving_at_the_reported_speed():
+    six_knots_m_per_s = 6 * 0.514444
+    fixes = FixArray([_fix_north_of(47.8, six_knots_m_per_s * t, t) for t in range(0, 20)])
+
+    assert len(_reject_gps_outliers_array(fixes, SogArray([_sog_at(0, 6.0)]))) == 20
+
+
+def test_reject_gps_outliers_array_does_not_apply_the_speed_check_across_a_longer_gap():
+    """The boat may have moved 1 km during a five-minute gap and be stopped again by now."""
+    fixes = FixArray([_fix_north_of(47.8, 0, 0), _fix_north_of(47.8, 1000, 300)])
+
+    assert len(_reject_gps_outliers_array(fixes, SogArray([_sog_at(0, 0.0)]))) == 2
+
+
+def test_reject_gps_outliers_array_without_speed_data_only_applies_the_old_checks():
+    fixes = FixArray([_fix_north_of(47.8, 0, 0), _fix_north_of(47.8, 16, 1)])
+
+    assert len(_reject_gps_outliers_array(fixes)) == 2
 
 
 def test_build_trips_ignores_a_single_gps_glitch_in_distance():

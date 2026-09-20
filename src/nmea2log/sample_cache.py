@@ -31,7 +31,7 @@ from .log import log
 # being served after an upgrade that should have changed its contents -- every entry stamped with
 # an older/newer version is treated as absent and simply gets overwritten the next time that file
 # is put() again.
-CACHE_FORMAT_VERSION = 4
+CACHE_FORMAT_VERSION = 5
 
 # Raw pickled samples are highly repetitive (many similar-shaped dataclass instances), so zlib
 # compresses them roughly 10x for very little time cost.
@@ -62,7 +62,7 @@ def _decode_samples(encoded: Optional[tuple]) -> list:
 
 
 def _encode_samples_tuple(samples: tuple) -> tuple:
-    """Encodes one file's full 9-part samples tuple from _collect_samples (see cli.py): some
+    """Encodes one file's full 9-part samples tuple from _collect_samples (see pipeline.py): some
     parts are a flat list (engine, trip fuel, RPM), others a dict keyed by NMEA source address
     (position, SOG, depth, water temp, battery, attitude) -- told apart by the value's own type
     rather than its position, so this doesn't need updating if that tuple's shape ever changes."""

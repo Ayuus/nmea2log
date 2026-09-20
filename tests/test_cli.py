@@ -8,16 +8,21 @@ import pytest
 from nmea2log.cli import (
     _acquire_lock,
     _AlreadyRunningError,
+    _release_lock,
+    build_arg_parser,
+    main,
+)
+from nmea2log.pipeline import (
+    _collect_samples,
     _discover_ebl_files,
     _dominant_source_only,
     _filter_to_dominant_engine,
     _merge_array_by_source,
-    _release_lock,
     _select_primary_gps_source,
-    build_arg_parser,
-    main,
 )
-from nmea2log.model import EngineSample, PositionFix, SogSample, TripFuelSample
+import struct
+
+from nmea2log.model import EngineSample, Frame, PositionFix, SogSample, TripFuelSample
 
 
 def test_dominant_source_only_picks_largest_group():
@@ -332,10 +337,10 @@ def _stub_one_trip_samples(monkeypatch):
 
     fixed_samples = ({10: fixes}, {10: sogs}, [], [], {}, {}, {}, [], {})
     monkeypatch.setattr(
-        "nmea2log.cli._collect_samples", lambda frames: fixed_samples
+        "nmea2log.pipeline._collect_samples", lambda frames: fixed_samples
     )
     monkeypatch.setattr(
-        "nmea2log.cli._iter_frames_for_path", lambda path, state: iter([])
+        "nmea2log.pipeline._iter_frames_for_path", lambda path, state: iter([])
     )
 
 
@@ -397,9 +402,9 @@ def test_main_reuses_cached_samples_on_a_second_run(tmp_path, monkeypatch, capsy
         call_count += 1
         return fixed_samples
 
-    monkeypatch.setattr("nmea2log.cli._collect_samples", fake_collect_samples)
+    monkeypatch.setattr("nmea2log.pipeline._collect_samples", fake_collect_samples)
     monkeypatch.setattr(
-        "nmea2log.cli._iter_frames_for_path", lambda path, state: iter([])
+        "nmea2log.pipeline._iter_frames_for_path", lambda path, state: iter([])
     )
 
     cache_file = tmp_path / "cache.pkl"
@@ -453,10 +458,10 @@ def _run_with_one_trip(tmp_path: Path, monkeypatch, extra_args=()):
         {},
     )
     monkeypatch.setattr(
-        "nmea2log.cli._collect_samples", lambda frames: fixed_samples
+        "nmea2log.pipeline._collect_samples", lambda frames: fixed_samples
     )
     monkeypatch.setattr(
-        "nmea2log.cli._iter_frames_for_path", lambda path, state: iter([])
+        "nmea2log.pipeline._iter_frames_for_path", lambda path, state: iter([])
     )
     output = tmp_path / "logbook.csv"
     main(["--ebl-dir", str(tmp_path), "-o", str(output), "--no-geocode", "--no-sample-cache", *extra_args])
@@ -645,8 +650,8 @@ def _stub_samples_by_path(monkeypatch, paths, samples_by_name, call_log):
         call_log.append(name)
         return samples_by_name[name]
 
-    monkeypatch.setattr("nmea2log.cli._iter_frames_for_path", fake_iter_frames_for_path)
-    monkeypatch.setattr("nmea2log.cli._collect_samples", fake_collect_samples)
+    monkeypatch.setattr("nmea2log.pipeline._iter_frames_for_path", fake_iter_frames_for_path)
+    monkeypatch.setattr("nmea2log.pipeline._collect_samples", fake_collect_samples)
 
 
 def test_main_trip_cache_skips_decoding_already_settled_files_on_a_later_run(tmp_path, monkeypatch, capsys):
@@ -872,7 +877,7 @@ def test_main_trip_cache_is_invalidated_by_a_trip_logic_version_bump(tmp_path, m
     call_log.clear()
     capsys.readouterr()
 
-    monkeypatch.setattr("nmea2log.cli.TRIP_LOGIC_VERSION", -1)
+    monkeypatch.setattr("nmea2log.pipeline.TRIP_LOGIC_VERSION", -1)
     exit_code = main(
         ["--ebl-dir", str(tmp_path)]
         + ["-o", str(tmp_path / "logbook.csv"), "--no-geocode", "--no-weather", "--no-marine",
@@ -921,3 +926,96 @@ def test_main_trip_cache_falls_back_when_the_resume_file_is_gone(tmp_path, monke
 
     assert call_log == ["f4"]  # still decoded -- fallback, not a skip based on a guess
     assert "resume file isn't among the given logfiles" in capsys.readouterr().err
+
+
+_T0 = datetime(2026, 7, 30, 12, 0, 0)
+
+
+def _position_frame(second: int, lat: float, source: int = 11) -> Frame:
+    data = struct.pack("<ii", round(lat * 1e7), round(-4.17 * 1e7))
+    return Frame(time=_T0 + timedelta(seconds=second), source=source, destination=255, priority=2, pgn=129025, data=data)
+
+
+def _dop_frame(second: int, payload_hex: str, source: int = 11) -> Frame:
+    return Frame(
+        time=_T0 + timedelta(seconds=second), source=source, destination=255, priority=6, pgn=129539,
+        data=bytes.fromhex(payload_hex),
+    )
+
+
+# Real payloads from a boat's GNSS receiver (see test_pgn_decode.py): normal / no fix at power-on / power-off.
+_DOP_NORMAL = "9bd746006e00ff7f"
+_DOP_NO_FIX = "04d7ac26ac26ff7f"
+_DOP_POWER_OFF = "01ffff7fff7fff7f"
+
+
+def test_collect_samples_ignores_positions_while_the_receiver_reports_no_fix():
+    """Real incident: after a power-on the GNSS receiver first sends its last remembered position
+    (HDOP 99, ~170 m from the boat's real position) and only converges on the real one ~100 s later."""
+    frames = [
+        _dop_frame(0, _DOP_NO_FIX),
+        _position_frame(0, 47.83745),  # remembered, wrong position -- must be ignored
+        _position_frame(1, 47.83746),
+        _dop_frame(2, _DOP_NORMAL),
+        _position_frame(2, 47.83868),  # real position once the receiver has a fix
+    ]
+
+    fixes_by_source = _collect_samples(frames)[0]
+
+    assert [round(f.lat, 5) for f in fixes_by_source[11]] == [47.83868]
+
+
+def test_collect_samples_ignores_the_last_positions_sent_as_the_receiver_loses_power():
+    frames = [
+        _dop_frame(0, _DOP_NORMAL),
+        _position_frame(0, 47.83868),
+        _dop_frame(2, _DOP_NORMAL),
+        _position_frame(3, 47.83868),  # in the DOP interval that ends in "lost fix": dropped too
+        _dop_frame(4, _DOP_POWER_OFF),
+        _position_frame(4, 47.83745),  # the 173 m jump right at shutdown
+    ]
+
+    fixes_by_source = _collect_samples(frames)[0]
+
+    assert [round(f.lat, 5) for f in fixes_by_source[11]] == [47.83868]
+
+
+def test_collect_samples_ignores_positions_that_arrive_before_the_first_no_fix_message():
+    """The very first positions after a power-on come before the first DOP message that says the
+    receiver has no fix -- they must be judged by that message, not slip through as 'unknown'."""
+    frames = [
+        _position_frame(0, 47.83745),  # remembered, wrong position
+        _dop_frame(0, _DOP_NO_FIX),
+        _dop_frame(2, _DOP_NORMAL),
+        _position_frame(3, 47.83868),
+    ]
+
+    fixes_by_source = _collect_samples(frames)[0]
+
+    assert [round(f.lat, 5) for f in fixes_by_source[11]] == [47.83868]
+
+
+def test_collect_samples_keeps_everything_when_no_dop_message_was_seen():
+    frames = [_position_frame(0, 47.83868), _position_frame(1, 47.83869)]
+
+    assert len(_collect_samples(frames)[0][11]) == 2
+
+
+def test_collect_samples_does_not_discard_a_receiver_that_never_reports_a_real_solution():
+    """A device that always fills this message with 'not available' must not lose every position."""
+    frames = [_dop_frame(0, _DOP_POWER_OFF), _position_frame(0, 47.83868), _position_frame(1, 47.83869)]
+
+    assert len(_collect_samples(frames)[0][11]) == 2
+
+
+def test_collect_samples_tracks_each_gnss_source_separately():
+    frames = [
+        _dop_frame(0, _DOP_NO_FIX, source=11),
+        _position_frame(0, 47.83745, source=11),  # ignored
+        _position_frame(0, 47.83868, source=10),  # source 10 never reported a problem
+    ]
+
+    fixes_by_source = _collect_samples(frames)[0]
+
+    assert 11 not in fixes_by_source
+    assert len(fixes_by_source[10]) == 1

@@ -2,7 +2,7 @@
 decode and process a recent window of .ebl files instead of the entire multi-year archive every
 time -- a settled trip never changes again, so re-decoding and re-classifying it every single run
 is pure waste (found in practice: this is the single biggest cost behind both a season-wide run's
-decode time and its peak memory, see the checkpoint logging around build_trips() in cli.py, and
+decode time and its peak memory, see the checkpoint logging that used to surround build_trips(), and
 the ~3.7 GB peak RSS this exists to cut down on the Android app).
 
 Deliberately keeps the *last* known trip out of the cache and always rebuilds it fresh from raw
