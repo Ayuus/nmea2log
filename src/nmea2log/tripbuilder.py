@@ -19,6 +19,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Dict, FrozenSet, Iterable, Iterator, List, Optional, Tuple, Union
 
+from .attitude_source import SourceAttitude
 from .fix_array import (
     CLOCK_JUMP_THRESHOLD_S,
     AttitudeArray,
@@ -1377,7 +1378,7 @@ def _typical_rpm_speed_range(
 
 
 def _motion_variation(
-    sorted_samples: AttitudeArray, start: datetime, end: datetime
+    sorted_samples: Union[AttitudeArray, SourceAttitude], start: datetime, end: datetime
 ) -> Tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
     """Returns (roll_stdev, pitch_stdev, roll_range, pitch_range) from roll/pitch (PGN 127257)
     during the trip -- a rougher sea or more wave action shows up as more variation in how the
@@ -1395,9 +1396,7 @@ def _motion_variation(
     spanning many days, so re-scanning the *entire* list per trip to filter down to its own
     window is real, measured cost (found in practice: ~21s of a ~37s run, for just 18 calls)
     that a one-off sort + bisect avoids almost entirely."""
-    lo = bisect.bisect_left(sorted_samples, start, key=lambda s: s.time)
-    hi = bisect.bisect_right(sorted_samples, end, key=lambda s: s.time)
-    window = sorted_samples[lo:hi]
+    window = sorted_samples.between(start, end)
     rolls = [s.roll_deg for s in window if s.roll_deg is not None]
     pitches = [s.pitch_deg for s in window if s.pitch_deg is not None]
     roll_stdev = statistics.stdev(rolls) if len(rolls) >= 2 else None
@@ -1460,7 +1459,7 @@ class _SeasonData:
     battery: "_InstanceIndex"
     trip_fuel: "_InstanceIndex"
     on_intervals_by_instance: Dict[int, List[Tuple[datetime, datetime]]]
-    attitude: AttitudeArray  # already in time order, see build_trips
+    attitude: Union[AttitudeArray, SourceAttitude]  # in time order (see build_trips) or read per window
 
 
 def _classify_trip_runs(
@@ -1698,7 +1697,8 @@ def build_trips_with_state(
     # sorted(...) would iterate it into a fully-materialized list of AttitudeSample objects that
     # then lives for the rest of this function's run (passed to _motion_variation for every
     # trip), silently undoing the point of storing a season's worth of them as array.array columns.
-    attitude_samples = _as_array(attitude_samples, AttitudeArray).drop_time_regressions()
+    if not isinstance(attitude_samples, SourceAttitude):  # that one reads its windows itself, see attitude_source.py
+        attitude_samples = _as_array(attitude_samples, AttitudeArray).drop_time_regressions()
     if max_gap_minutes is None:
         max_gap_minutes = min_stop_minutes
 

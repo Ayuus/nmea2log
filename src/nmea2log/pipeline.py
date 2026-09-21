@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Tuple, TypeVar, Union
 
 from .ebl_reader import iter_frames as iter_frames_ebl, restore_time_state, snapshot_time_state
+from .attitude_source import AttitudeSegments, SourceAttitude
 from .fix_array import (
     AttitudeArray,
     BatteryArray,
@@ -66,7 +67,7 @@ from .pgn_decode import (
     decode_trip_fuel_engine,
     decode_water_depth,
 )
-from .sample_cache import SampleCache
+from .sample_cache import ATTITUDE_PART, SampleCache
 from .trip_cache import TripCache, choose_resume_index, config_signature, find_resume_index
 from .tripbuilder import TRIP_LOGIC_VERSION, BoatState, TripLeg, build_trips_with_state, resolve_trip_places
 
@@ -390,7 +391,7 @@ class _SeasonSamples:
     depth_by_source: Dict[int, DepthArray]
     water_temp_by_source: Dict[int, WaterTempArray]
     battery_by_source: Dict[int, BatteryArray]
-    attitude_by_source: Dict[int, AttitudeArray]
+    attitude: AttitudeSegments  # per file, see attitude_source.py: not the samples themselves
     engine: EngineArray
     trip_fuel: TripFuelArray
     rpm: RpmArray
@@ -415,7 +416,20 @@ def _decode_logfiles(
 ) -> Tuple[_SeasonSamples, _ResumeInfo]:
     """Decodes ``logfiles[resume_index:]`` (each from the sample cache when it has it) into
     season-wide arrays. ``time_state_seed`` starts the first file's PGN 126992 time state."""
-    samples_all = _SeasonSamples({}, {}, {}, {}, {}, {}, EngineArray(), TripFuelArray(), RpmArray())
+    def redecode_attitude(path: Path, time_state_before: object) -> Dict[int, list]:
+        """One file decoded again, for the attitude samples of a trip when its cache entry is gone --
+        and put back in the cache, so it is a one-off."""
+        state: Dict[str, object] = {}
+        if time_state_before is not None:
+            restore_time_state(state, time_state_before)
+        decoded = _collect_samples(_iter_frames_for_path(path, state))
+        if sample_cache is not None:
+            sample_cache.put(path, decoded, snapshot_time_state(state))
+        return decoded[ATTITUDE_PART]
+
+    samples_all = _SeasonSamples(
+        {}, {}, {}, {}, {}, AttitudeSegments(sample_cache, redecode_attitude), EngineArray(), TripFuelArray(), RpmArray()
+    )
     resume_info = _ResumeInfo({}, {})
 
     ebl_time_state: Dict[str, object] = {}
@@ -440,13 +454,17 @@ def _decode_logfiles(
         if not path.exists():
             raise PipelineError(f"Log file not found: {path}")
 
-        resume_info.ebl_time_state_before_file[file_index] = snapshot_time_state(ebl_time_state)
+        time_state_before = snapshot_time_state(ebl_time_state)
+        resume_info.ebl_time_state_before_file[file_index] = time_state_before
 
-        cached = sample_cache.get(path) if sample_cache is not None else None
+        # The attitude samples (by far the most numerous, see attitude_source.py) are not decoded from the
+        # cache at all here: only a summary of them, for the trips to read back their own window with.
+        cached = sample_cache.get(path, attitude_as_summary=True) if sample_cache is not None else None
         if cached is not None:
             samples, time_state_after = cached
-            fixes, sogs, engine, trip_fuel, depth, water_temp, battery, rpm, attitude = samples
+            fixes, sogs, engine, trip_fuel, depth, water_temp, battery, rpm, attitude_summary = samples
             restore_time_state(ebl_time_state, time_state_after)
+            samples_all.attitude.add_from_cache(path, attitude_summary, time_state_before)
             cache_hits += 1
         else:
             frames = _iter_frames_for_path(path, ebl_time_state)
@@ -454,6 +472,9 @@ def _decode_logfiles(
             fixes, sogs, engine, trip_fuel, depth, water_temp, battery, rpm, attitude = samples
             if sample_cache is not None:
                 sample_cache.put(path, samples, snapshot_time_state(ebl_time_state))
+            samples_all.attitude.add_decoded(
+                path, attitude, stored_in_cache=sample_cache is not None, time_state_before=time_state_before
+            )
 
         file_first_time: Optional[datetime] = None
         for source_fixes in fixes.values():
@@ -476,7 +497,6 @@ def _decode_logfiles(
         _merge_array_by_source(samples_all.water_temp_by_source, water_temp, WaterTempArray)
         _merge_array_by_source(samples_all.battery_by_source, battery, BatteryArray)
         samples_all.rpm.extend(rpm)
-        _merge_array_by_source(samples_all.attitude_by_source, attitude, AttitudeArray)
 
     # Unconditional, unlike the in-loop progress line above (which deliberately skips the very
     # last file so it doesn't fire right before this same count gets logged again a few lines
@@ -505,7 +525,7 @@ class _TripInputs:
     depth: DepthArray
     water_temp: WaterTempArray
     battery: BatteryArray
-    attitude: AttitudeArray
+    attitude: SourceAttitude  # read per trip window, see attitude_source.py
     engine: EngineArray
     trip_fuel: TripFuelArray
     rpm: RpmArray
@@ -524,7 +544,7 @@ def _select_trip_inputs(samples: _SeasonSamples) -> _TripInputs:
         depth=_dominant_source_only(samples.depth_by_source),
         water_temp=_dominant_source_only(samples.water_temp_by_source),
         battery=_dominant_source_only(samples.battery_by_source),
-        attitude=_dominant_source_only(samples.attitude_by_source),
+        attitude=samples.attitude.dominant_source(),
         engine=samples.engine,
         trip_fuel=samples.trip_fuel,
         rpm=samples.rpm,

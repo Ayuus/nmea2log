@@ -17,12 +17,16 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import itertools
+import operator
 import pickle
 import shutil
 import zlib
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Sequence, Tuple
 
+from .fix_array import scan_time_regressions, to_epoch
 from .log import log
 
 # Bump this whenever the decoded sample format changes (new PGN, changed decode logic, new field
@@ -80,6 +84,49 @@ def _decode_samples_tuple(encoded: tuple) -> tuple:
         else _decode_samples(value)
         for value in encoded
     )
+
+
+# Position of the attitude samples (a dict by source) in the 9-part samples tuple of _collect_samples.
+ATTITUDE_PART = 8
+
+
+@dataclasses.dataclass(frozen=True)
+class AttitudeSummary:
+    """What is known about one source's attitude samples of one file without decoding them: how many
+    there are, the time span they cover and what a pass over their times found (rows that go back in
+    time, see fix_array.scan_time_regressions; all zero for a file in order). Attitude (PGN 127257) is by
+    far the biggest sample type (37 million rows on a real season), and a trip only needs the rows of its
+    own time window, so the pipeline keeps this summary per file and reads the samples back (see
+    SampleCache.get_attitude) for a trip's window only."""
+
+    count: int
+    first_time: datetime
+    last_time: datetime
+    dropped: int = 0
+    max_backward_s: float = 0.0
+    first_dropped_at: Optional[float] = None
+    clock_resets: int = 0
+
+
+def _summarize_times(times: Sequence[datetime]) -> AttitudeSummary:
+    summary = AttitudeSummary(len(times), min(times), max(times))
+    if not any(map(operator.gt, times, itertools.islice(times, 1, None))):
+        return summary  # in order, the normal case: nothing more to find out
+    scan = scan_time_regressions([to_epoch(t) for t in times])
+    return dataclasses.replace(
+        summary, dropped=scan.dropped, max_backward_s=scan.max_backward_s,
+        first_dropped_at=scan.first_dropped_at, clock_resets=scan.clock_resets,
+    )
+
+
+def summarize_attitude(by_source: Dict[int, list]) -> Dict[int, AttitudeSummary]:
+    """The AttitudeSummary of each source of a freshly decoded file (lists of AttitudeSample)."""
+    return {source: _summarize_times([item.time for item in items]) for source, items in by_source.items() if items}
+
+
+def _summarize_encoded_attitude(encoded_by_source: Dict[int, Optional[tuple]]) -> Dict[int, AttitudeSummary]:
+    # The first column of an encoded AttitudeSample is its time.
+    return {source: _summarize_times(encoded[1][0]) for source, encoded in encoded_by_source.items() if encoded is not None}
 
 
 def _cache_key(path: Path) -> str:
@@ -156,11 +203,8 @@ class SampleCache:
         _migrate_legacy_cache(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
-    def get(self, path: Path) -> Optional[Tuple[tuple, object]]:
-        """Returns (samples, time_state_after) if this exact file (by size) is cached, else
-        None. Only the size is checked (not mtime): the file's own content is what we actually
-        care about, and re-downloading the same log can easily change the mtime without changing
-        a single byte of content."""
+    def _load_entry(self, path: Path) -> Optional[dict]:
+        """The raw (still encoded) entry of this exact file (by size), or None on a miss."""
         entry_path = _entry_path(self.cache_dir, _cache_key(path))
         if not entry_path.exists():
             return None
@@ -172,7 +216,38 @@ class SampleCache:
             return None
         if entry.get("version") != CACHE_FORMAT_VERSION or entry.get("size") != path.stat().st_size:
             return None
-        return _decode_samples_tuple(entry["samples"]), entry.get("time_state_after")
+        return entry
+
+    def get(self, path: Path, *, attitude_as_summary: bool = False) -> Optional[Tuple[tuple, object]]:
+        """Returns (samples, time_state_after) if this exact file (by size) is cached, else
+        None. Only the size is checked (not mtime): the file's own content is what we actually
+        care about, and re-downloading the same log can easily change the mtime without changing
+        a single byte of content.
+
+        With ``attitude_as_summary`` the attitude part of ``samples`` is a dict of AttitudeSummary
+        by source instead of the decoded samples: the ~37 million attitude rows of a season are
+        never needed all at once, so a caller that only needs to know what is there skips creating
+        an object for each of them (see get_attitude for reading them back)."""
+        entry = self._load_entry(path)
+        if entry is None:
+            return None
+        encoded = entry["samples"]
+        if not attitude_as_summary:
+            return _decode_samples_tuple(encoded), entry.get("time_state_after")
+        parts = list(encoded)
+        summary = _summarize_encoded_attitude(parts[ATTITUDE_PART])
+        parts[ATTITUDE_PART] = {}
+        decoded = list(_decode_samples_tuple(tuple(parts)))
+        decoded[ATTITUDE_PART] = summary
+        return tuple(decoded), entry.get("time_state_after")
+
+    def get_attitude(self, path: Path) -> Optional[Dict[int, list]]:
+        """Only the attitude samples of this file, by source; None when the entry is missing (or no
+        longer valid) -- the caller decides what that means for it."""
+        entry = self._load_entry(path)
+        if entry is None:
+            return None
+        return {source: _decode_samples(encoded) for source, encoded in entry["samples"][ATTITUDE_PART].items()}
 
     def put(self, path: Path, samples: tuple, time_state_after: Optional[Dict[str, object]]) -> None:
         """Written immediately -- unlike the old whole-cache format, there is no separate save()

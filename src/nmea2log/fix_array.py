@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import array
 import bisect
+import dataclasses
 import itertools
 import math
 from datetime import datetime, timedelta
@@ -98,6 +99,41 @@ def log_time_anomaly(label: str, dropped: int, max_backward_s: float, first_epoc
     )
 
 
+@dataclasses.dataclass
+class TimeRegressionScan:
+    """What one pass over a time column found: which rows to keep (``keep[i]``) and the numbers the
+    [anomaly] line reports."""
+
+    keep: bytearray
+    dropped: int
+    max_backward_s: float
+    first_dropped_at: Optional[float]
+    clock_resets: int
+
+
+def scan_time_regressions(times) -> TimeRegressionScan:
+    """One forward pass over ``times`` (float epoch seconds): a row is kept unless its time goes
+    backward by less than CLOCK_JUMP_THRESHOLD_S relative to the last *kept* row; a bigger backward
+    jump is trusted as a clock reset -- see drop_time_regressions for why."""
+    keep = bytearray(len(times))
+    last_time = None
+    dropped = clock_resets = 0
+    max_backward_s = 0.0
+    first_dropped_at: Optional[float] = None
+    for i, t in enumerate(times):
+        if last_time is not None and t < last_time:
+            if last_time - t < CLOCK_JUMP_THRESHOLD_S:
+                dropped += 1  # small backward jitter/duplicate -- drop it
+                max_backward_s = max(max_backward_s, last_time - t)
+                if first_dropped_at is None:
+                    first_dropped_at = t
+                continue
+            clock_resets += 1
+        keep[i] = 1
+        last_time = t
+    return TimeRegressionScan(keep, dropped, max_backward_s, first_dropped_at, clock_resets)
+
+
 class _SampleArray:
     """Shared, non-hot-path plumbing for the array.array-backed collections below -- every one of
     them keeps a ``_time`` column (float seconds, see the module docstring) alongside its own
@@ -157,7 +193,7 @@ class _SortableSampleArray(_SampleArray):
 
     _LABEL = "samples"  # what the [anomaly] line calls this collection; overridden per subclass
 
-    def drop_time_regressions(self):
+    def drop_time_regressions(self, report: bool = True):
         """Enforces non-decreasing time (despite what an earlier name of this suggested, it never
         sorts) -- the data should already be in order, so anything it has to drop or accept is
         reported via log_time_anomaly. Array-native equivalent of what
@@ -196,23 +232,10 @@ class _SortableSampleArray(_SampleArray):
         its start, that silently threw away nearly the entire season."""
         if _is_sorted(self._time):
             return self
-        keep = bytearray(len(self._time))
-        last_time = None
-        dropped = clock_resets = 0
-        max_backward_s = 0.0
-        first_dropped_at: Optional[float] = None
-        for i, t in enumerate(self._time):
-            if last_time is not None and t < last_time:
-                if last_time - t < CLOCK_JUMP_THRESHOLD_S:
-                    dropped += 1  # small backward jitter/duplicate -- drop it
-                    max_backward_s = max(max_backward_s, last_time - t)
-                    if first_dropped_at is None:
-                        first_dropped_at = t
-                    continue
-                clock_resets += 1
-            keep[i] = 1
-            last_time = t
-        log_time_anomaly(self._LABEL, dropped, max_backward_s, first_dropped_at, clock_resets)
+        scan = scan_time_regressions(self._time)
+        if report:
+            log_time_anomaly(self._LABEL, scan.dropped, scan.max_backward_s, scan.first_dropped_at, scan.clock_resets)
+        keep = scan.keep
         for column_name in self.__slots__:
             column = getattr(self, column_name)
             setattr(self, column_name, array.array(column.typecode, itertools.compress(column, keep)))
@@ -548,6 +571,19 @@ class AttitudeArray(_SortableSampleArray):
         self._time.append(to_epoch(sample.time))
         self._pitch_deg.append(sample.pitch_deg if sample.pitch_deg is not None else math.nan)
         self._roll_deg.append(sample.roll_deg if sample.roll_deg is not None else math.nan)
+
+    def between(self, start: datetime, end: datetime) -> "AttitudeArray":
+        """The rows with ``start <= time <= end``, as a new array. Needs this array in time order (see
+        drop_time_regressions); bisects on the time column, so it does not scan the rows outside."""
+        lo = bisect.bisect_left(self._time, to_epoch(start))
+        hi = bisect.bisect_right(self._time, to_epoch(end))
+        return self[lo:hi]
+
+    def extend_array(self, other: "AttitudeArray") -> None:
+        """Appends all rows of ``other`` (column by column, without going through sample objects)."""
+        self._time.extend(other._time)
+        self._pitch_deg.extend(other._pitch_deg)
+        self._roll_deg.extend(other._roll_deg)
 
     def __getitem__(self, key: Union[int, slice]) -> Union[AttitudeSample, "AttitudeArray"]:
         if isinstance(key, slice):
