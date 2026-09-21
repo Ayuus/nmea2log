@@ -2,7 +2,7 @@
 have to re-parse the whole season's worth of log files every time -- only the file(s) that are
 new or have grown since the last run.
 
-One small file per source .ebl file on disk (see _entry_path), not one big combined pickle --
+One small file per source .ebl file on disk (see _entry_file), not one big combined pickle --
 found in practice on a real ~2000-file, multi-day archive: the old single-file format had to load
 every cached entry into memory up front just to look up the *one* file the current step needed,
 even though the vast majority weren't touched again this run. On a phone that peak (measured:
@@ -20,6 +20,7 @@ import hashlib
 import itertools
 import operator
 import pickle
+import re
 import shutil
 import zlib
 from datetime import datetime
@@ -146,6 +147,20 @@ def _entry_path(cache_dir: Path, key: str) -> Path:
     return cache_dir / f"{digest}.pkl.zz"
 
 
+_EBL_FOLDER = re.compile(r"^EBL\d{6}$")
+
+
+def _entry_file(cache_dir: Path, path: Path) -> Path:
+    """Where the entry of ``path`` lives: for a file in a W2K-2 folder (``EBL000012/000012_007.ebl``) the
+    same folder and name inside the cache (``EBL000012/000012_007.pkl.zz``), so the cache reads like
+    the archive, is checked folder by folder the same way, and stays valid when the archive moves to
+    another directory or machine (the size check still rejects a file that changed). Any other file
+    keeps a hash-named entry directly in the cache directory (see _entry_path)."""
+    if path.suffix == ".ebl" and _EBL_FOLDER.match(path.parent.name):
+        return cache_dir / path.parent.name / f"{path.stem}.pkl.zz"
+    return _entry_path(cache_dir, _cache_key(path))
+
+
 def _migrate_legacy_cache(cache_dir: Path) -> None:
     """One-time upgrade from the old single-big-pickle cache (a plain file at this exact path) to
     this one-file-per-source-file directory layout. Reads the legacy file exactly once -- the
@@ -203,18 +218,36 @@ class SampleCache:
         _migrate_legacy_cache(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
+    def _entry_for(self, path: Path) -> Path:
+        """The entry file of ``path``, first moving an entry of the earlier layout (a hash-named file
+        directly in the cache directory) to its place, so a cache written by an older version is kept
+        instead of decoded again: a rename, no more."""
+        target = _entry_file(self.cache_dir, path)
+        old = _entry_path(self.cache_dir, _cache_key(path))
+        if target != old and not target.exists() and old.exists():
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                old.replace(target)
+            except OSError:
+                return old  # could not be moved: use it where it is
+        return target
+
     def has_entry(self, path: Path) -> bool:
         """Whether an entry file exists for this .ebl file (not whether it is still valid: get() decides that)."""
-        return _entry_path(self.cache_dir, _cache_key(path)).exists()
+        return self._entry_for(path).exists()
 
     def orphan_entry_count(self, logfiles: Iterable[Path]) -> int:
         """How many entry files belong to none of ``logfiles`` (an .ebl file that was removed or moved)."""
-        expected = {_entry_path(self.cache_dir, _cache_key(path)).name for path in logfiles}
-        return sum(1 for entry in self.cache_dir.glob("*.pkl.zz") if entry.name not in expected)
+        expected = {self._entry_for(path).relative_to(self.cache_dir).as_posix() for path in logfiles}
+        return sum(
+            1
+            for entry in self.cache_dir.rglob("*.pkl.zz")
+            if entry.relative_to(self.cache_dir).as_posix() not in expected
+        )
 
     def _load_entry(self, path: Path) -> Optional[dict]:
         """The raw (still encoded) entry of this exact file (by size), or None on a miss."""
-        entry_path = _entry_path(self.cache_dir, _cache_key(path))
+        entry_path = self._entry_for(path)
         if not entry_path.exists():
             return None
         try:
@@ -271,4 +304,6 @@ class SampleCache:
         payload = zlib.compress(
             pickle.dumps(entry, protocol=pickle.HIGHEST_PROTOCOL), level=_COMPRESSION_LEVEL
         )
-        _entry_path(self.cache_dir, _cache_key(path)).write_bytes(payload)
+        target = self._entry_for(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(payload)

@@ -7,6 +7,8 @@ from nmea2log.model import AttitudeSample, EngineSample, PositionFix
 from nmea2log.sample_cache import (
     CACHE_FORMAT_VERSION,
     SampleCache,
+    _cache_key,
+    _entry_path,
     _decode_samples,
     _decode_samples_tuple,
     _encode_samples,
@@ -220,3 +222,104 @@ def test_encode_decode_samples_tuple_round_trips_dict_and_list_parts():
     samples = (fixes_by_source, {}, engine_samples, [], {}, {}, {}, [], {})
 
     assert _decode_samples_tuple(_encode_samples_tuple(samples)) == samples
+
+
+# --- the entries live in the same folders as the .ebl files ------------------------------------------------
+
+
+def _ebl_in_folder(root: Path, folder: int, sequence: int, content: bytes = b"hello") -> Path:
+    path = root / f"EBL{folder:06d}" / f"{folder:06d}_{sequence:03d}.ebl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+    return path
+
+
+def test_an_entry_is_stored_under_the_folder_and_name_of_its_ebl_file(tmp_path: Path):
+    ebl = _ebl_in_folder(tmp_path / "archive", 12, 7)
+    cache = SampleCache(tmp_path / "cache")
+
+    cache.put(ebl, _sample_tuple(), None)
+
+    assert (tmp_path / "cache" / "EBL000012" / "000012_007.pkl.zz").is_file()
+    assert cache.get(ebl) is not None
+
+
+def test_a_file_outside_an_ebl_folder_keeps_a_hash_named_entry_in_the_cache_directory(tmp_path: Path):
+    ebl = tmp_path / "000_000.ebl"
+    ebl.write_bytes(b"hello")
+    cache = SampleCache(tmp_path / "cache")
+
+    cache.put(ebl, _sample_tuple(), None)
+
+    assert _entry_path(tmp_path / "cache", _cache_key(ebl)).is_file()
+    assert cache.get(ebl) is not None
+
+
+def test_the_cache_still_hits_after_the_archive_moved_to_another_directory(tmp_path: Path):
+    old = _ebl_in_folder(tmp_path / "old_place", 3, 1)
+    cache = SampleCache(tmp_path / "cache")
+    cache.put(old, _sample_tuple(), None)
+
+    moved = _ebl_in_folder(tmp_path / "somewhere" / "else", 3, 1)  # same name and content, other path
+
+    assert cache.get(moved) is not None
+
+
+def test_a_changed_file_in_the_same_place_is_still_rejected(tmp_path: Path):
+    ebl = _ebl_in_folder(tmp_path, 3, 1)
+    cache = SampleCache(tmp_path / "cache")
+    cache.put(ebl, _sample_tuple(), None)
+
+    ebl.write_bytes(b"hello, but longer now")
+
+    assert cache.get(ebl) is None
+
+
+def _write_entry_the_old_way(cache_dir: Path, ebl: Path, samples: tuple) -> Path:
+    """An entry as versions before the folder layout wrote it: hash-named, directly in the cache directory."""
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    entry = {
+        "version": CACHE_FORMAT_VERSION,
+        "size": ebl.stat().st_size,
+        "samples": _encode_samples_tuple(samples),
+        "time_state_after": None,
+    }
+    target = _entry_path(cache_dir, _cache_key(ebl))
+    target.write_bytes(zlib.compress(pickle.dumps(entry)))
+    return target
+
+
+def test_an_entry_of_the_old_layout_is_moved_into_its_folder_and_still_read(tmp_path: Path):
+    ebl = _ebl_in_folder(tmp_path / "archive", 12, 7)
+    old_entry = _write_entry_the_old_way(tmp_path / "cache", ebl, _sample_tuple(lat=51.5))
+    cache = SampleCache(tmp_path / "cache")
+
+    result = cache.get(ebl)
+
+    assert result is not None
+    assert result[0][0][10][0].lat == 51.5
+    assert not old_entry.exists()
+    assert (tmp_path / "cache" / "EBL000012" / "000012_007.pkl.zz").is_file()
+
+
+def test_putting_over_an_entry_of_the_old_layout_leaves_no_second_copy(tmp_path: Path):
+    ebl = _ebl_in_folder(tmp_path / "archive", 12, 7)
+    old_entry = _write_entry_the_old_way(tmp_path / "cache", ebl, _sample_tuple(lat=51.5))
+    cache = SampleCache(tmp_path / "cache")
+
+    cache.put(ebl, _sample_tuple(lat=52.0), None)
+
+    assert not old_entry.exists()
+    assert len(list((tmp_path / "cache").rglob("*.pkl.zz"))) == 1
+    assert cache.get(ebl)[0][0][10][0].lat == 52.0
+
+
+def test_counting_orphans_also_moves_old_entries_of_files_that_are_still_there(tmp_path: Path):
+    kept = _ebl_in_folder(tmp_path / "archive", 1, 1)
+    gone = _ebl_in_folder(tmp_path / "archive", 1, 2)
+    _write_entry_the_old_way(tmp_path / "cache", kept, _sample_tuple())
+    _write_entry_the_old_way(tmp_path / "cache", gone, _sample_tuple())
+    cache = SampleCache(tmp_path / "cache")
+
+    assert cache.orphan_entry_count([kept]) == 1  # only the entry of ``gone``
+    assert (tmp_path / "cache" / "EBL000001" / "000001_001.pkl.zz").is_file()
