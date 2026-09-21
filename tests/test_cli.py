@@ -995,6 +995,33 @@ def test_collect_samples_ignores_positions_that_arrive_before_the_first_no_fix_m
     assert [round(f.lat, 5) for f in fixes_by_source[11]] == [47.83868]
 
 
+def test_the_ignored_fixes_log_line_says_when_each_stretch_happened(log_lines):
+    """A power-off and the start-up hours later in the same file are two events: one line each,
+    with the date and time (UTC) of the ignored fixes, not one total for the whole file."""
+    frames = [
+        _dop_frame(0, _DOP_NORMAL),
+        _position_frame(0, 47.83868),
+        _dop_frame(2, _DOP_POWER_OFF),
+        _position_frame(2, 47.83745),  # the fix lost at shutdown (and the one before it: look-ahead)
+        _position_frame(3, 47.83745),
+        _dop_frame(4, _DOP_POWER_OFF),
+        _dop_frame(7200, _DOP_NO_FIX),  # power back on two hours later
+        _position_frame(7200, 47.83745),
+        _position_frame(7220, 47.83746),
+        _dop_frame(7222, _DOP_NORMAL),
+        _position_frame(7222, 47.83868),
+    ]
+
+    _collect_samples(frames)
+
+    lines = [line for line in log_lines if "Ignored" in line]
+    assert len(lines) == 2
+    assert f"Ignored 3 position fix(es) from source 11 at {_T0:%Y-%m-%d %H:%M:%S} until " in lines[0]
+    assert f"{_T0 + timedelta(seconds=3):%Y-%m-%d %H:%M:%S} UTC" in lines[0]
+    assert f"Ignored 2 position fix(es) from source 11 at {_T0 + timedelta(seconds=7200):%Y-%m-%d %H:%M:%S} until " in lines[1]
+    assert f"{_T0 + timedelta(seconds=7220):%Y-%m-%d %H:%M:%S} UTC" in lines[1]
+
+
 def test_collect_samples_keeps_everything_when_no_dop_message_was_seen():
     frames = [_position_frame(0, 47.83868), _position_frame(1, 47.83869)]
 

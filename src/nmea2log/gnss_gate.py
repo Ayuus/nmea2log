@@ -11,6 +11,8 @@ itself in PGN 129539 (GNSS DOPs), sent every ~2 s, so that is what gates the pos
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Set
 
 from .log import log
@@ -23,6 +25,17 @@ _GNSS_FIX_MODES = frozenset({0, 1, 2, 3})
 # HDOP a receiver reports as a placeholder while it has no satellites yet -- 99.00 on the real boat
 # above, for the first seconds after power-on.
 _NO_FIX_HDOP = 50.0
+
+# Ignored fixes closer together than this belong to the same stretch in the log: DOP messages come
+# every ~2 s, so one no-fix period is settled in many small pieces that must read as one line.
+_SAME_STRETCH_GAP = timedelta(seconds=30)
+
+
+@dataclass
+class _IgnoredStretch:
+    first: datetime
+    last: datetime
+    count: int
 
 
 def gnss_fix_usable(actual_mode: Optional[int], hdop: Optional[float], ever_reported_valid: bool) -> bool:
@@ -53,7 +66,10 @@ class GnssFixGate:
 
     def __init__(self) -> None:
         self.accepted: Dict[int, List[PositionFix]] = {}
-        self.ignored: Dict[int, int] = {}
+        # Per source, the stretches of ignored fixes (first time, last time, count); kept as
+        # separate stretches (not one total) so the log says *when*: a shutdown and the start-up
+        # hours later in the same file are two different events.
+        self.ignored: Dict[int, List[_IgnoredStretch]] = {}
         self._usable: Dict[int, bool] = {}
         self._valid_seen: Set[int] = set()
         self._pending: Dict[int, List[PositionFix]] = {}
@@ -73,17 +89,30 @@ class GnssFixGate:
         message alone), and reports how many fixes were ignored in total."""
         for source in list(self._pending):
             self._settle(source, self._usable.get(source, True))
-        for source, count in self.ignored.items():
-            log(
-                f"[info] Ignored {count} position fix(es) from source {source} while its GNSS receiver "
-                f"reported no valid fix (start-up or shutdown -- it keeps sending its last remembered "
-                f"position meanwhile).",
-                file=sys.stderr,
-            )
+        for source, stretches in self.ignored.items():
+            for stretch in stretches:
+                when = f"{stretch.first:%Y-%m-%d %H:%M:%S}"
+                if stretch.last != stretch.first:
+                    when += f" until {stretch.last:%Y-%m-%d %H:%M:%S}"
+                log(
+                    f"[info] Ignored {stretch.count} position fix(es) from source {source} at {when} UTC while its "
+                    f"GNSS receiver reported no valid fix (start-up or shutdown -- it keeps sending its "
+                    f"last remembered position meanwhile).",
+                    file=sys.stderr,
+                )
 
     def _settle(self, source: int, accept: bool) -> None:
         pending = self._pending.pop(source, [])
         if accept:
             self.accepted.setdefault(source, []).extend(pending)
         elif pending:
-            self.ignored[source] = self.ignored.get(source, 0) + len(pending)
+            # One settle can span a power cycle (no DOP message while the receiver was off, so the
+            # last fixes before shutdown and the first after start-up are settled together), so the
+            # split into stretches is by the fixes' own times, not by the call.
+            stretches = self.ignored.setdefault(source, [])
+            for fix in pending:
+                if stretches and fix.time - stretches[-1].last <= _SAME_STRETCH_GAP:
+                    stretches[-1].last = fix.time
+                    stretches[-1].count += 1
+                else:
+                    stretches.append(_IgnoredStretch(fix.time, fix.time, 1))
