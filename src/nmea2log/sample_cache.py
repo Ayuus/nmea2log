@@ -20,9 +20,8 @@ import hashlib
 import pickle
 import shutil
 import zlib
-from datetime import datetime
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 from .log import log
 
@@ -31,7 +30,7 @@ from .log import log
 # being served after an upgrade that should have changed its contents -- every entry stamped with
 # an older/newer version is treated as absent and simply gets overwritten the next time that file
 # is put() again.
-CACHE_FORMAT_VERSION = 5
+CACHE_FORMAT_VERSION = 6
 
 # Raw pickled samples are highly repetitive (many similar-shaped dataclass instances), so zlib
 # compresses them roughly 10x for very little time cost.
@@ -157,7 +156,7 @@ class SampleCache:
         _migrate_legacy_cache(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
-    def get(self, path: Path) -> Optional[Tuple[tuple, Optional[datetime]]]:
+    def get(self, path: Path) -> Optional[Tuple[tuple, object]]:
         """Returns (samples, time_state_after) if this exact file (by size) is cached, else
         None. Only the size is checked (not mtime): the file's own content is what we actually
         care about, and re-downloading the same log can easily change the mtime without changing
@@ -175,7 +174,7 @@ class SampleCache:
             return None
         return _decode_samples_tuple(entry["samples"]), entry.get("time_state_after")
 
-    def put(self, path: Path, samples: tuple, time_state_after: Optional[datetime]) -> None:
+    def put(self, path: Path, samples: tuple, time_state_after: Optional[Dict[str, object]]) -> None:
         """Written immediately -- unlike the old whole-cache format, there is no separate save()
         step and nothing to lose if the process is killed before the run finishes: every file's
         own entry is durable on disk the moment it's decoded."""

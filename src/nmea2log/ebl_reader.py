@@ -201,9 +201,45 @@ def _update_time_state(time_state: Dict[str, object], source: int, decoded_time:
     counts = time_state.setdefault("source_counts", {})
     counts[source] = counts.get(source, 0) + 1
     preferred_source = time_state.get("time_source")
-    if preferred_source is None or counts[source] >= counts.get(preferred_source, 0):
+    # Strictly more, not "at least as many": with two sources sending at almost the same rate
+    # (found in practice: 1456 vs 1446 messages) a tie must keep the current choice -- switching
+    # on every tie made the decoded time hop between the two clocks whenever the counts happened
+    # to be level, e.g. right after a decode that restarted with its counts at zero.
+    if preferred_source is None or counts[source] > counts.get(preferred_source, 0):
         time_state["time_source"] = source
         time_state["current"] = decoded_time
+    elif source == preferred_source:
+        time_state["current"] = decoded_time
+
+
+# Everything in ``time_state`` that decides the time of later frames -- not just the last time
+# itself: which source is trusted (``time_source``) follows from the cumulative ``source_counts``,
+# so a decode that continues from a cache (sample_cache.py, trip_cache.py) must get all of it back,
+# otherwise it starts over with empty counts and can trust a different clock than an uninterrupted
+# decode of the very same files would (found in practice: the same file decoded on a phone that had
+# resumed from its cache and on a tablet that hadn't differed by 1-3 s in ~40% of its rows).
+_PERSISTED_TIME_STATE_KEYS = ("current", "time_source", "source_counts")
+
+
+def snapshot_time_state(time_state: Dict[str, object]) -> Dict[str, object]:
+    """A self-contained copy of the parts of ``time_state`` that decide later timestamps, safe to
+    keep (and pickle) while the live dict goes on changing."""
+    snapshot = {key: time_state[key] for key in _PERSISTED_TIME_STATE_KEYS if key in time_state}
+    if "source_counts" in snapshot:
+        snapshot["source_counts"] = dict(snapshot["source_counts"])  # type: ignore[arg-type]
+    return snapshot
+
+
+def restore_time_state(time_state: Dict[str, object], snapshot: object) -> None:
+    """Puts ``time_state`` back exactly as it was when ``snapshot_time_state`` took ``snapshot``.
+    A bare datetime (what older caches stored: only the last time) or None restores just that."""
+    time_state.clear()
+    if isinstance(snapshot, datetime):
+        time_state["current"] = snapshot
+    elif isinstance(snapshot, dict):
+        time_state.update(snapshot)
+        if "source_counts" in snapshot:
+            time_state["source_counts"] = dict(snapshot["source_counts"])
 
 
 def iter_frames(

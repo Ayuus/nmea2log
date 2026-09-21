@@ -2,7 +2,7 @@ import struct
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from nmea2log.ebl_reader import iter_frames
+from nmea2log.ebl_reader import iter_frames, restore_time_state, snapshot_time_state
 
 _ESC = 0x1B
 _SOH = 0x01
@@ -246,6 +246,94 @@ def test_iter_frames_prefers_the_system_time_source_with_more_messages(tmp_path:
     frames = list(iter_frames(path))
 
     assert [f.time for f in frames] == [t_a2, t_a2, t_a3]
+
+
+def _two_clock_file(path: Path, start: datetime, seconds: int, lead_source: int = 10) -> None:
+    """A file where two devices (sources 10 and 11) both send PGN 126992 every second, source 11's
+    clock a second ahead of source 10's -- the real boat's situation (found in practice), which
+    makes the decoded time depend on which source is trusted. ``lead_source`` sends twice per
+    second, so it has sent the most; a position frame follows each message pair."""
+    position_record = _bst95_record(
+        _encode_can_id(priority=2, pgn=129025, source=5), struct.pack("<ii", 1000000, 2000000)
+    )
+    other_source = 11 if lead_source == 10 else 10
+    data = bytearray()
+    for i in range(seconds):
+        when = start + timedelta(seconds=i)
+        clocks = {10: when, 11: when + timedelta(seconds=1)}
+        data += _frame_bytes(_system_time_record(clocks[other_source], source=other_source))
+        data += _frame_bytes(position_record)
+        data += _frame_bytes(_system_time_record(clocks[lead_source], source=lead_source))
+        data += _frame_bytes(_system_time_record(clocks[lead_source], source=lead_source))
+        data += _frame_bytes(position_record)
+    path.write_bytes(bytes(data))
+
+
+def test_iter_frames_keeps_the_current_time_source_on_a_tie(tmp_path: Path):
+    """With two sources sending equally often, the counts are level after every pair -- switching
+    to whichever spoke last on a tie made the decoded time hop between the two clocks."""
+    t0 = datetime(2026, 8, 18, 8, 0, 0)
+    position_record = _bst95_record(
+        _encode_can_id(priority=2, pgn=129025, source=5), struct.pack("<ii", 1000000, 2000000)
+    )
+    data = bytearray()
+    for i in range(4):
+        data += _frame_bytes(_system_time_record(t0 + timedelta(seconds=i), source=10))
+        data += _frame_bytes(_system_time_record(t0 + timedelta(seconds=i + 1), source=11))  # ahead
+        data += _frame_bytes(position_record)
+    path = tmp_path / "a.ebl"
+    path.write_bytes(bytes(data))
+
+    times = [f.time for f in iter_frames(path)]
+
+    assert times == [t0 + timedelta(seconds=i) for i in range(4)]  # source 10's clock throughout
+
+
+def test_resuming_with_a_restored_time_state_decodes_exactly_like_an_uninterrupted_run(tmp_path: Path):
+    """Real bug (the same bytes decoded on a phone that had resumed from its sample cache and on a
+    tablet that hadn't gave timestamps 1-3 s apart in ~40% of the rows): the caches only stored the
+    last *time*, so a resumed decode started with empty per-source message counts and trusted
+    whichever device spoke first -- possibly the other clock. The whole state must survive."""
+    t0 = datetime(2026, 8, 18, 8, 0, 0)
+    first, second = tmp_path / "a.ebl", tmp_path / "b.ebl"
+    _two_clock_file(first, t0, 6, lead_source=10)  # source 10 has sent the most...
+    _two_clock_file(second, t0 + timedelta(seconds=6), 6, lead_source=10)  # ...and keeps doing so
+
+    continuous: dict = {}
+    list(iter_frames(first, time_state=continuous))
+    snapshot = snapshot_time_state(continuous)
+    expected = [f.time for f in iter_frames(second, time_state=continuous)]
+
+    resumed: dict = {}
+    restore_time_state(resumed, snapshot)
+    assert [f.time for f in iter_frames(second, time_state=resumed)] == expected
+
+    # Restoring only the last time (what the caches used to keep) trusts source 11's clock instead:
+    # its message is the first one seen with empty counts, so its time is used.
+    only_time: dict = {"current": snapshot["current"]}
+    assert [f.time for f in iter_frames(second, time_state=only_time)] != expected
+
+
+def test_snapshot_time_state_is_independent_of_the_live_state():
+    live = {"current": datetime(2026, 8, 18, 8, 0, 0), "time_source": 10, "source_counts": {10: 3, 11: 2}}
+
+    snapshot = snapshot_time_state(live)
+    live["source_counts"][10] = 99
+    live["current"] = datetime(2026, 8, 18, 9, 0, 0)
+
+    assert snapshot == {
+        "current": datetime(2026, 8, 18, 8, 0, 0), "time_source": 10, "source_counts": {10: 3, 11: 2}
+    }
+
+
+def test_restore_time_state_accepts_the_bare_datetime_older_caches_stored():
+    state: dict = {"source_counts": {1: 5}}
+
+    restore_time_state(state, datetime(2026, 8, 18, 8, 0, 0))
+
+    assert state == {"current": datetime(2026, 8, 18, 8, 0, 0)}
+    restore_time_state(state, None)
+    assert state == {}
 
 
 def test_iter_frames_carries_time_across_files_via_time_state(tmp_path: Path):

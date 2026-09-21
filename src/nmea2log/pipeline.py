@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Tuple, TypeVar, Union
 
-from .ebl_reader import iter_frames as iter_frames_ebl
+from .ebl_reader import iter_frames as iter_frames_ebl, restore_time_state, snapshot_time_state
 from .fix_array import (
     AttitudeArray,
     BatteryArray,
@@ -291,7 +291,9 @@ def _iter_frames_for_path(
     """``ebl_time_state`` is passed to consecutive .ebl files so the last known time (PGN 126992)
     is preserved across file boundaries -- otherwise a file without its own System Time message
     (e.g. anchored for a long time, GPS/plotter idle) gets discarded entirely, even though the
-    time is already known from the previous file (see ebl_reader.py)."""
+    time is already known from the previous file (see ebl_reader.py). The dict holds more than
+    that time (which device's clock is trusted follows from per-source message counts), so a run
+    that continues from a cache restores all of it, see restore_time_state()."""
     return iter_frames_ebl(path, time_state=ebl_time_state, wanted_pgns=_WANTED_PGNS)
 
 
@@ -414,7 +416,7 @@ def build_season_trips(
         # preferable to seeding it with a value that actually belongs to a different file.
         ebl_time_state: Dict[str, object] = {}
         if widen_attempts == 0 and resume_ebl_time_state_seed is not None:
-            ebl_time_state["current"] = resume_ebl_time_state_seed
+            restore_time_state(ebl_time_state, resume_ebl_time_state_seed)
 
         cache_hits = 0
         last_progress_log = time.monotonic()
@@ -439,20 +441,20 @@ def build_season_trips(
             if not path.exists():
                 raise PipelineError(f"Log file not found: {path}")
 
-            ebl_time_state_before_file[file_index] = ebl_time_state.get("current")
+            ebl_time_state_before_file[file_index] = snapshot_time_state(ebl_time_state)
 
             cached = sample_cache.get(path) if sample_cache is not None else None
             if cached is not None:
                 samples, time_state_after = cached
                 fixes, sogs, engine, trip_fuel, depth, water_temp, battery, rpm, attitude = samples
-                ebl_time_state["current"] = time_state_after
+                restore_time_state(ebl_time_state, time_state_after)
                 cache_hits += 1
             else:
                 frames = _iter_frames_for_path(path, ebl_time_state)
                 samples = _collect_samples(frames)
                 fixes, sogs, engine, trip_fuel, depth, water_temp, battery, rpm, attitude = samples
                 if sample_cache is not None:
-                    sample_cache.put(path, samples, ebl_time_state.get("current"))
+                    sample_cache.put(path, samples, snapshot_time_state(ebl_time_state))
 
             file_first_time: Optional[datetime] = None
             for source_fixes in fixes.values():

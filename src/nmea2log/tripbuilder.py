@@ -67,7 +67,7 @@ _RPM_BUCKET = 50  # round RPM to the nearest multiple of this before taking the 
 # data until the affected trips aged out of the cache on their own -- on a real device, that's
 # potentially never. Included in config_signature() specifically so a bump here always forces a
 # one-time full rebuild instead.
-TRIP_LOGIC_VERSION = 6
+TRIP_LOGIC_VERSION = 7
 _RPM_STABLE_MINUTES = 2.0  # a run at the typical RPM bucket must last at least this long to
 # count as steady cruising rather than a brief pass-through while accelerating/decelerating
 

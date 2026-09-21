@@ -51,6 +51,20 @@ def test_put_then_get_returns_the_cached_entry(tmp_path: Path):
     assert result == (_sample_tuple(), when)
 
 
+def test_the_whole_time_state_survives_a_put_then_get(tmp_path: Path):
+    """The per-source message counts decide which device's clock is trusted (see ebl_reader.py), so
+    a decode resuming from the cache needs them back -- not just the last time (found in practice:
+    a resumed run decoded the same file to different timestamps than an uninterrupted one)."""
+    ebl = tmp_path / "000_000.ebl"
+    ebl.write_bytes(b"hello")
+    cache = SampleCache(tmp_path / "cache.pkl")
+    state = {"current": datetime(2026, 7, 15, 9, 0), "time_source": 10, "source_counts": {10: 12, 11: 6}}
+
+    cache.put(ebl, _sample_tuple(), state)
+
+    assert cache.get(ebl) == (_sample_tuple(), state)
+
+
 def test_get_matches_regardless_of_relative_vs_absolute_path(tmp_path: Path, monkeypatch):
     """Regression test for a real bug found in practice: caching keyed on the raw path string
     missed the cache every time the same file was referred to by a relative path in one run and
