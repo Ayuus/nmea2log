@@ -10,6 +10,7 @@ the way the desktop CLI can.
 
 from __future__ import annotations
 
+import json
 import urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
@@ -44,6 +45,10 @@ def _report_result(progress_callback, result: dict) -> None:
     can accept a plain non-nullable Int this way instead of needing an Int? overload."""
     if progress_callback is None:
         return
+    # Where the boat stands at the end of the data (BoatState.to_dict()), for the boat mode; null when
+    # the run produced none. A separate call, before onResult(), so onResult()'s signature stays put.
+    boat_state = result.get("boat_state")
+    progress_callback.onBoatState(json.dumps(boat_state) if boat_state else None)
     progress_callback.onResult(
         bool(result.get("ok", False)),
         result.get("error"),
@@ -421,3 +426,24 @@ def discover_w2k2_only(subnet_prefix: str, progress_callback) -> None:
     calling into Kotlin *during* the call has not."""
     found = w2k2_download.discover_w2k2(subnet_prefix) is not None
     progress_callback.onDiscoverResult(found)
+
+
+def probe_w2k2(user: str, password: str, subnet_prefix: str, download_dir: str, progress_callback) -> None:
+    """A quiet look for the boat mode: is the W2K-2 reachable on the hotspot's subnet, and does it hold
+    files that are not downloaded yet? Reports ``progress_callback.onProbeResult(found, has_new_files)``
+    (during the call, like discover_w2k2_only()). Nothing is downloaded and nothing is logged -- it
+    runs every few minutes while the boat mode waits. When the file lists cannot be read, the W2K-2
+    still counts as found (with no new files): the round that follows reports the real error."""
+    host = w2k2_download.discover_w2k2(subnet_prefix)
+    if host is None:
+        progress_callback.onProbeResult(False, False)
+        return
+    has_new_files = False
+    try:
+        config = w2k2_download.W2K2Config(download_dir=Path(download_dir), token=None, user=user, password=password)
+        session = w2k2_download.make_session(host, config)
+        _plan, to_download = w2k2_download.build_download_plan(session, config.download_dir)
+        has_new_files = len(to_download) > 0
+    except Exception:
+        pass
+    progress_callback.onProbeResult(True, has_new_files)

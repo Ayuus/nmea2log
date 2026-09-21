@@ -379,11 +379,12 @@ class BootModeMachine:
             next_at = at + _minutes(config.port_poll_minutes)
             return [Notify(Status.WAITING_IN_PORT, next_at), ScheduleTick(next_at)]
         self.state = replace(self.state, phase=Phase.ABOARD)
-        actions: List[Action] = [Notify(Status.ROUND_DONE)]
+        next_at = self._next_tick_after(at)  # before a publish may start: it is the next *round*
+        actions: List[Action] = [Notify(Status.ROUND_DONE, next_at)]
         if config.publish_every_round and config.publish_configured and outcome.downloaded_count > 0:
             actions += self._start_publish()
         else:
-            actions.append(ScheduleTick(self._next_tick_after(at)))
+            actions.append(ScheduleTick(next_at))
         return actions
 
     def _on_round_not_found(self, at: int) -> List[Action]:

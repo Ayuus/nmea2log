@@ -113,7 +113,8 @@ def test_a_round_while_underway_schedules_the_next_one_an_interval_later():
 
     actions = finish_round(m, T0 + minutes(2))
 
-    assert actions == [Notify(Status.ROUND_DONE), ScheduleTick(T0 + minutes(2) + minutes(60))]
+    next_round = T0 + minutes(2) + minutes(60)
+    assert actions == [Notify(Status.ROUND_DONE, next_round), ScheduleTick(next_round)]
     assert m.state.phase is Phase.ABOARD and m.state.working is None
 
 

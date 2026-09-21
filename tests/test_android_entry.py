@@ -1,5 +1,8 @@
+import json
 from datetime import datetime, timedelta
 from pathlib import Path
+
+import pytest
 
 from nmea2log import android_entry, pipeline
 from nmea2log.geocode import NoGeocoder
@@ -363,6 +366,11 @@ def test_build_from_local_files_forwards_log_lines_to_the_callback(tmp_path, mon
         def onDownloadComplete(self):
             pass
 
+        def onBoatState(self, boat_state_json):
+
+            pass
+
+
         def onResult(self, ok, error, cancelled, trip_count, html_path, downloaded_count):
             pass
 
@@ -411,6 +419,11 @@ def test_sync_from_w2k2_forwards_log_lines_to_the_callback(tmp_path, monkeypatch
 
         def onDownloadComplete(self):
             pass
+
+        def onBoatState(self, boat_state_json):
+
+            pass
+
 
         def onResult(self, ok, error, cancelled, trip_count, html_path, downloaded_count):
             pass
@@ -466,6 +479,11 @@ def test_sync_from_w2k2_calls_on_download_complete_once_before_the_pipeline_runs
 
         def onDownloadComplete(self):
             events.append("onDownloadComplete")
+
+        def onBoatState(self, boat_state_json):
+
+            pass
+
 
         def onResult(self, ok, error, cancelled, trip_count, html_path, downloaded_count):
             pass
@@ -590,6 +608,11 @@ def test_sync_from_w2k2_reports_progress_only_for_files_it_actually_fetches(tmp_
         def onDownloadComplete(self):
             pass
 
+        def onBoatState(self, boat_state_json):
+
+            pass
+
+
         def onResult(self, ok, error, cancelled, trip_count, html_path, downloaded_count):
             pass
 
@@ -653,6 +676,11 @@ def test_sync_from_w2k2_stops_between_files_when_cancelled(tmp_path, monkeypatch
 
         def onDownloadComplete(self):
             pass
+
+        def onBoatState(self, boat_state_json):
+
+            pass
+
 
         def onResult(self, ok, error, cancelled, trip_count, html_path, downloaded_count):
             pass
@@ -737,6 +765,11 @@ def test_sync_from_w2k2_reports_the_final_result_via_onresult_too(tmp_path, monk
         def onDownloadComplete(self):
             pass
 
+        def onBoatState(self, boat_state_json):
+
+            pass
+
+
         def onResult(self, ok, error, cancelled, trip_count, html_path, downloaded_count):
             calls.append((ok, error, cancelled, trip_count, html_path, downloaded_count))
 
@@ -771,6 +804,9 @@ def test_report_result_uses_minus_one_for_a_missing_trip_or_downloaded_count(tmp
     calls = []
 
     class _Listener:
+        def onBoatState(self, boat_state_json):
+            pass
+
         def onResult(self, ok, error, cancelled, trip_count, html_path, downloaded_count):
             calls.append((ok, error, cancelled, trip_count, html_path, downloaded_count))
 
@@ -805,3 +841,66 @@ def test_discover_w2k2_only_reports_false_via_the_callback_when_not_found(monkey
     android_entry.discover_w2k2_only("192.168.43.", _Listener())
 
     assert calls == [False]
+
+
+def test_report_result_hands_the_boat_state_over_as_json_before_the_result():
+    calls = []
+
+    class _Listener:
+        def onBoatState(self, boat_state_json):
+            calls.append(("boat", boat_state_json))
+
+        def onResult(self, ok, error, cancelled, trip_count, html_path, downloaded_count):
+            calls.append(("result", ok))
+
+    boat = {"underway": False, "stationary_since": "2026-09-12T12:18:18"}
+    android_entry._report_result(_Listener(), {"ok": True, "trip_count": 3, "boat_state": boat})
+    android_entry._report_result(_Listener(), {"ok": False, "error": "x"})
+
+    assert calls == [
+        ("boat", json.dumps(boat)), ("result", True),
+        ("boat", None), ("result", False),
+    ]
+
+
+class _ProbeListener:
+    def __init__(self):
+        self.calls = []
+
+    def onProbeResult(self, found, has_new_files):
+        self.calls.append((found, has_new_files))
+
+
+def test_probe_reports_not_found_when_the_w2k2_does_not_answer(monkeypatch):
+    monkeypatch.setattr(android_entry.w2k2_download, "discover_w2k2", lambda subnet_prefix: None)
+    listener = _ProbeListener()
+
+    android_entry.probe_w2k2("u", "p", "192.168.43.", "/tmp/x", listener)
+
+    assert listener.calls == [(False, False)]
+
+
+@pytest.mark.parametrize("to_download, expected", [([], False), ([{"file_name": "a.ebl"}], True)])
+def test_probe_reports_whether_new_files_are_waiting(monkeypatch, to_download, expected):
+    monkeypatch.setattr(android_entry.w2k2_download, "discover_w2k2", lambda subnet_prefix: "http://10.0.0.5")
+    monkeypatch.setattr(android_entry.w2k2_download, "make_session", lambda host, config: object())
+    monkeypatch.setattr(android_entry.w2k2_download, "build_download_plan", lambda session, download_dir: ([], to_download))
+    listener = _ProbeListener()
+
+    android_entry.probe_w2k2("u", "p", "192.168.43.", "/tmp/x", listener)
+
+    assert listener.calls == [(True, expected)]
+
+
+def test_probe_still_counts_the_w2k2_as_found_when_its_file_lists_cannot_be_read(monkeypatch):
+    def broken(session, download_dir):
+        raise ValueError("garbled response")
+
+    monkeypatch.setattr(android_entry.w2k2_download, "discover_w2k2", lambda subnet_prefix: "http://10.0.0.5")
+    monkeypatch.setattr(android_entry.w2k2_download, "make_session", lambda host, config: object())
+    monkeypatch.setattr(android_entry.w2k2_download, "build_download_plan", broken)
+    listener = _ProbeListener()
+
+    android_entry.probe_w2k2("u", "p", "192.168.43.", "/tmp/x", listener)
+
+    assert listener.calls == [(True, False)]
