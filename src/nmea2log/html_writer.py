@@ -1290,7 +1290,8 @@ def write_html_logbook(
     padding: 0.8em 1.2em; margin-bottom: 1.5em;
   }}
   .show-remarks {{ cursor: pointer; border: 1px solid #1a6ecc; background: white; color: #1a6ecc; border-radius: 4px; padding: 0.2em 0.6em; white-space: nowrap; }}
-  .show-remarks:hover {{ background: #1a6ecc; color: white; }}
+  .show-remarks:hover:not(:disabled) {{ background: #1a6ecc; color: white; }}
+  .show-remarks:disabled {{ cursor: not-allowed; opacity: 0.45; }}
   .remarks-dialog {{ width: 24em; max-width: 90vw; }}
   .remarks-textarea {{
     width: 100%; box-sizing: border-box; font: inherit; margin-bottom: 0.8em;
@@ -1808,7 +1809,20 @@ document.querySelectorAll('.show-log').forEach(function(btn) {{
   }});
   enableDialogDrag(dialog);
 }})();
-if (REMARKS_API_URL) {{
+// Remarks live in WordPress and are read/saved with the visitor's WordPress login session, so they
+// only exist when this page is served from the site itself. Opened as a local file (double-clicked,
+// or the Android app's own view of the logbook) there is no session and the fetch could only fail:
+// the button is disabled up front, with the reason as its tooltip (re-translated on a language
+// switch via data-i18n-title, see applyLanguage), instead of opening an empty, unsavable dialog.
+var servedFromSite = location.protocol === 'http:' || location.protocol === 'https:';
+if (REMARKS_API_URL && !servedFromSite) {{
+  document.querySelectorAll('.show-remarks').forEach(function(btn) {{
+    btn.disabled = true;
+    btn.dataset.i18nTitle = 'remarks_local_only';
+    btn.title = I18N[currentLang].remarks_local_only;
+  }});
+}}
+if (REMARKS_API_URL && servedFromSite) {{
   var remarksButtonsByUid = {{}};
   document.querySelectorAll('.show-remarks').forEach(function(btn) {{
     var dialog = document.getElementById('remarks-' + btn.dataset.trip);

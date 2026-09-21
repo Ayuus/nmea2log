@@ -123,6 +123,7 @@ NL: Dict[str, str] = {
     "remarks_save_forbidden": "Je account mag geen opmerkingen opslaan.",
     "remarks_save_failed": "Opslaan is niet gelukt, probeer het opnieuw.",
     "remarks_unavailable": "Opmerkingen konden niet worden geladen.",
+    "remarks_local_only": "Opmerkingen zijn alleen beschikbaar op de site, niet in de lokale weergave.",
 }
 
 EN: Dict[str, str] = {
@@ -207,6 +208,7 @@ EN: Dict[str, str] = {
     "remarks_save_forbidden": "Your account isn't allowed to save remarks.",
     "remarks_save_failed": "Saving failed, please try again.",
     "remarks_unavailable": "Remarks could not be loaded.",
+    "remarks_local_only": "Remarks are only available on the site, not in the local view.",
 }
 
 FR: Dict[str, str] = {
@@ -291,6 +293,7 @@ FR: Dict[str, str] = {
     "remarks_save_forbidden": "Votre compte n'est pas autorisé à enregistrer des remarques.",
     "remarks_save_failed": "Échec de l'enregistrement, veuillez réessayer.",
     "remarks_unavailable": "Les remarques n'ont pas pu être chargées.",
+    "remarks_local_only": "Les remarques ne sont disponibles que sur le site, pas dans l'affichage local.",
 }
 
 DE: Dict[str, str] = {
@@ -375,6 +378,7 @@ DE: Dict[str, str] = {
     "remarks_save_forbidden": "Dein Konto darf keine Bemerkungen speichern.",
     "remarks_save_failed": "Speichern ist fehlgeschlagen, bitte versuche es erneut.",
     "remarks_unavailable": "Bemerkungen konnten nicht geladen werden.",
+    "remarks_local_only": "Bemerkungen sind nur auf der Website verfügbar, nicht in der lokalen Ansicht.",
 }
 
 # strftime's %b is locale-independent (always English month abbreviations) unless the process

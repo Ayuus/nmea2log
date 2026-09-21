@@ -979,6 +979,30 @@ def test_write_html_logbook_shows_remarks_button_when_enabled(tmp_path: Path):
     assert '"/wp-json/nmea2log/v1/remarks"' in html  # embedded as the JS REMARKS_API_URL const
 
 
+def test_write_html_logbook_disables_the_remarks_button_when_not_served_from_the_site(tmp_path: Path):
+    """Remarks need the visitor's WordPress session, so they only exist on the site itself. Opened as
+    a local file (double-click, or the Android app's own view) the button is disabled up front with
+    the reason as a translated tooltip, instead of opening an empty dialog that can't save."""
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([_trip()], out_path, trip_uids=["uid-a"])
+
+    html = out_path.read_text(encoding="utf-8")
+    assert "location.protocol === 'http:' || location.protocol === 'https:'" in html
+    assert "REMARKS_API_URL && !servedFromSite" in html
+    assert "btn.disabled = true;" in html
+    assert "btn.dataset.i18nTitle = 'remarks_local_only';" in html  # so a language switch re-translates it
+    assert "REMARKS_API_URL && servedFromSite" in html  # the fetch/save wiring only runs on the site
+    assert ".show-remarks:disabled" in html
+
+
+def test_the_remarks_local_only_tooltip_is_translated_into_every_language():
+    from nmea2log.translations import LANGUAGES
+
+    for language, texts in LANGUAGES.items():
+        assert texts["remarks_local_only"], language
+
+
 def test_write_html_logbook_no_remarks_button_without_a_trip_uid(tmp_path: Path):
     out_path = tmp_path / "logbook.html"
 
