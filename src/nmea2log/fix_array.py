@@ -48,14 +48,14 @@ _EPOCH = datetime(1970, 1, 1)
 # not ordinary jitter/duplicate timestamps (found in practice: real jumps were on the order of
 # weeks; real jitter/duplicates are seconds at most). Shared with tripbuilder.py's own outlier
 # rejection -- see SogArray/AttitudeArray.drop_time_regressions and _reject_gps_outliers_array.
-_CLOCK_JUMP_THRESHOLD_S = 24 * 3600.0
+CLOCK_JUMP_THRESHOLD_S = 24 * 3600.0
 
 
-def _to_epoch(dt: datetime) -> float:
+def to_epoch(dt: datetime) -> float:
     return (dt - _EPOCH).total_seconds()
 
 
-def _from_epoch(seconds: float) -> datetime:
+def from_epoch(seconds: float) -> datetime:
     return _EPOCH + timedelta(seconds=seconds)
 
 
@@ -75,7 +75,7 @@ def _is_sorted(time_column: "array.array[float]") -> bool:
     return all(time_column[i] <= time_column[i + 1] for i in range(len(time_column) - 1))
 
 
-def _log_time_anomaly(label: str, dropped: int, max_backward_s: float, first_epoch: Optional[float], clock_resets: int) -> None:
+def log_time_anomaly(label: str, dropped: int, max_backward_s: float, first_epoch: Optional[float], clock_resets: int) -> None:
     """Called whenever a time column turned out *not* to be in order -- which, with the decoder
     picking one consistent System Time source (see ebl_reader.py), should never happen on real
     data any more. Loud on purpose (its own ``[anomaly]`` tag, not ``[warning]``: the Android app
@@ -86,7 +86,7 @@ def _log_time_anomaly(label: str, dropped: int, max_backward_s: float, first_epo
     if dropped:
         parts.append(
             f"dropped {dropped} row(s) that went backward in time (largest jump {max_backward_s:.1f}s"
-            + (f", first at {_from_epoch(first_epoch)}" if first_epoch is not None else "")
+            + (f", first at {from_epoch(first_epoch)}" if first_epoch is not None else "")
             + ")"
         )
     if clock_resets:
@@ -160,7 +160,7 @@ class _SortableSampleArray(_SampleArray):
     def drop_time_regressions(self):
         """Enforces non-decreasing time (despite what an earlier name of this suggested, it never
         sorts) -- the data should already be in order, so anything it has to drop or accept is
-        reported via _log_time_anomaly. Array-native equivalent of what
+        reported via log_time_anomaly. Array-native equivalent of what
         sorted(samples, key=lambda s: s.time) would otherwise have needed -- used by
         build_trips()/_merge_nav_samples() (see tripbuilder.py) so a season's worth of these
         samples (SOG: similar cardinality to position fixes, millions on a real multi-year
@@ -187,7 +187,7 @@ class _SortableSampleArray(_SampleArray):
         of boxed index *and* key objects (confirmed, via fine-grained checkpoint logging on a real
         device, to be where a full-archive rebuild was actually getting OOM-killed).
 
-        A jump of at least _CLOCK_JUMP_THRESHOLD_S is trusted and reset onto, not dropped --
+        A jump of at least CLOCK_JUMP_THRESHOLD_S is trusted and reset onto, not dropped --
         confirmed in practice: an earlier version that dropped every backward-going row
         regardless of size got permanently anchored on the wrong, weeks-in-the-future row once
         one of these clock-sync jumps happened, then kept dropping every genuinely good,
@@ -203,7 +203,7 @@ class _SortableSampleArray(_SampleArray):
         first_dropped_at: Optional[float] = None
         for i, t in enumerate(self._time):
             if last_time is not None and t < last_time:
-                if last_time - t < _CLOCK_JUMP_THRESHOLD_S:
+                if last_time - t < CLOCK_JUMP_THRESHOLD_S:
                     dropped += 1  # small backward jitter/duplicate -- drop it
                     max_backward_s = max(max_backward_s, last_time - t)
                     if first_dropped_at is None:
@@ -212,7 +212,7 @@ class _SortableSampleArray(_SampleArray):
                 clock_resets += 1
             keep[i] = 1
             last_time = t
-        _log_time_anomaly(self._LABEL, dropped, max_backward_s, first_dropped_at, clock_resets)
+        log_time_anomaly(self._LABEL, dropped, max_backward_s, first_dropped_at, clock_resets)
         for column_name in self.__slots__:
             column = getattr(self, column_name)
             setattr(self, column_name, array.array("d", itertools.compress(column, keep)))
@@ -234,7 +234,7 @@ class FixArray(_SampleArray):
         self.extend(fixes)
 
     def append(self, fix: PositionFix) -> None:
-        self.append_raw(_to_epoch(fix.time), fix.lat, fix.lon)
+        self.append_raw(to_epoch(fix.time), fix.lat, fix.lon)
 
     def append_raw(self, epoch_seconds: float, lat: float, lon: float) -> None:
         """Appends an already-epoch-encoded row directly -- used internally (see
@@ -251,7 +251,7 @@ class FixArray(_SampleArray):
         return self._lon[i]
 
     def datetime_at(self, i: int) -> datetime:
-        return _from_epoch(self._time[i])
+        return from_epoch(self._time[i])
 
     def replace_columns_with(self, other: "FixArray") -> None:
         """Swaps this array's own columns for another FixArray's, in place -- used by
@@ -270,11 +270,11 @@ class FixArray(_SampleArray):
     def __getitem__(self, i: int) -> PositionFix:
         # array.array already supports negative indices natively -- e.g. all_fixes[-1] for "the
         # most recent fix in the whole dataset" (see pipeline.py).
-        return PositionFix(_from_epoch(self._time[i]), self._lat[i], self._lon[i])
+        return PositionFix(from_epoch(self._time[i]), self._lat[i], self._lon[i])
 
     def __iter__(self) -> Iterator[PositionFix]:
         for t, lat, lon in zip(self._time, self._lat, self._lon):
-            yield PositionFix(_from_epoch(t), lat, lon)
+            yield PositionFix(from_epoch(t), lat, lon)
 
 
 class SogArray(_SortableSampleArray):
@@ -291,7 +291,7 @@ class SogArray(_SortableSampleArray):
         self.extend(sogs)
 
     def append(self, sog: SogSample) -> None:
-        self._time.append(_to_epoch(sog.time))
+        self._time.append(to_epoch(sog.time))
         self._sog_ms.append(sog.sog_ms)
         self._cog_deg.append(sog.cog_deg if sog.cog_deg is not None else math.nan)
 
@@ -304,7 +304,7 @@ class SogArray(_SortableSampleArray):
 
     def __iter__(self) -> Iterator[SogSample]:
         for t, sog_ms, cog in zip(self._time, self._sog_ms, self._cog_deg):
-            yield SogSample(_from_epoch(t), sog_ms, None if math.isnan(cog) else cog)
+            yield SogSample(from_epoch(t), sog_ms, None if math.isnan(cog) else cog)
 
 
 class DepthArray(_SortableSampleArray):
@@ -319,7 +319,7 @@ class DepthArray(_SortableSampleArray):
         self.extend(samples)
 
     def append(self, sample: DepthSample) -> None:
-        self._time.append(_to_epoch(sample.time))
+        self._time.append(to_epoch(sample.time))
         self._depth_m.append(sample.depth_m if sample.depth_m is not None else math.nan)
 
     def depth_at(self, i: int) -> Optional[float]:
@@ -328,7 +328,7 @@ class DepthArray(_SortableSampleArray):
 
     def __iter__(self) -> Iterator[DepthSample]:
         for t, depth_m in zip(self._time, self._depth_m):
-            yield DepthSample(_from_epoch(t), None if math.isnan(depth_m) else depth_m)
+            yield DepthSample(from_epoch(t), None if math.isnan(depth_m) else depth_m)
 
 
 class WaterTempArray(_SortableSampleArray):
@@ -344,7 +344,7 @@ class WaterTempArray(_SortableSampleArray):
         self.extend(samples)
 
     def append(self, sample: WaterTempSample) -> None:
-        self._time.append(_to_epoch(sample.time))
+        self._time.append(to_epoch(sample.time))
         self._temp_c.append(sample.temp_c if sample.temp_c is not None else math.nan)
 
     def temp_at(self, i: int) -> Optional[float]:
@@ -353,7 +353,7 @@ class WaterTempArray(_SortableSampleArray):
 
     def __iter__(self) -> Iterator[WaterTempSample]:
         for t, temp_c in zip(self._time, self._temp_c):
-            yield WaterTempSample(_from_epoch(t), None if math.isnan(temp_c) else temp_c)
+            yield WaterTempSample(from_epoch(t), None if math.isnan(temp_c) else temp_c)
 
 
 class BatteryArray(_InstancedSampleArray):
@@ -370,14 +370,14 @@ class BatteryArray(_InstancedSampleArray):
         self.extend(samples)
 
     def append(self, sample: BatterySample) -> None:
-        self._time.append(_to_epoch(sample.time))
+        self._time.append(to_epoch(sample.time))
         self._instance.append(sample.instance)
         self._voltage_v.append(sample.voltage_v if sample.voltage_v is not None else math.nan)
 
     def __getitem__(self, i: int) -> BatterySample:
         voltage_v = self._voltage_v[i]
         return BatterySample(
-            _from_epoch(self._time[i]), int(self._instance[i]), None if math.isnan(voltage_v) else voltage_v
+            from_epoch(self._time[i]), int(self._instance[i]), None if math.isnan(voltage_v) else voltage_v
         )
 
 
@@ -401,13 +401,13 @@ class RpmArray(_InstancedSampleArray):
         self.extend(samples)
 
     def append(self, sample: EngineRpmSample) -> None:
-        self._time.append(_to_epoch(sample.time))
+        self._time.append(to_epoch(sample.time))
         self._instance.append(sample.instance)
         self._rpm.append(sample.rpm if sample.rpm is not None else math.nan)
 
     def __getitem__(self, i: int) -> EngineRpmSample:
         rpm = self._rpm[i]
-        return EngineRpmSample(_from_epoch(self._time[i]), int(self._instance[i]), None if math.isnan(rpm) else rpm)
+        return EngineRpmSample(from_epoch(self._time[i]), int(self._instance[i]), None if math.isnan(rpm) else rpm)
 
 
 class TripFuelArray(_InstancedSampleArray):
@@ -422,7 +422,7 @@ class TripFuelArray(_InstancedSampleArray):
         self.extend(samples)
 
     def append(self, sample: TripFuelSample) -> None:
-        self._time.append(_to_epoch(sample.time))
+        self._time.append(to_epoch(sample.time))
         self._instance.append(sample.instance)
         self._trip_fuel_used_l.append(
             sample.trip_fuel_used_l if sample.trip_fuel_used_l is not None else math.nan
@@ -431,7 +431,7 @@ class TripFuelArray(_InstancedSampleArray):
     def __getitem__(self, i: int) -> TripFuelSample:
         trip_fuel = self._trip_fuel_used_l[i]
         return TripFuelSample(
-            _from_epoch(self._time[i]), int(self._instance[i]), None if math.isnan(trip_fuel) else trip_fuel
+            from_epoch(self._time[i]), int(self._instance[i]), None if math.isnan(trip_fuel) else trip_fuel
         )
 
 
@@ -477,7 +477,7 @@ class EngineArray(_InstancedSampleArray):
 
     def append(self, sample: EngineSample) -> None:
         i = len(self._time)
-        self._time.append(_to_epoch(sample.time))
+        self._time.append(to_epoch(sample.time))
         self._instance.append(sample.instance)
         self._fuel_rate_lph.append(sample.fuel_rate_lph if sample.fuel_rate_lph is not None else math.nan)
         self._total_hours_s.append(sample.total_hours_s if sample.total_hours_s is not None else math.nan)
@@ -504,7 +504,7 @@ class EngineArray(_InstancedSampleArray):
         alternator_voltage = self._alternator_voltage_v[i]
         engine_load = self._engine_load_pct[i]
         return EngineSample(
-            time=_from_epoch(self._time[i]),
+            time=from_epoch(self._time[i]),
             instance=int(self._instance[i]),
             fuel_rate_lph=None if math.isnan(fuel_rate) else fuel_rate,
             total_hours_s=None if math.isnan(total_hours) else int(total_hours),
@@ -538,7 +538,7 @@ class AttitudeArray(_SortableSampleArray):
         self.extend(samples)
 
     def append(self, sample: AttitudeSample) -> None:
-        self._time.append(_to_epoch(sample.time))
+        self._time.append(to_epoch(sample.time))
         self._pitch_deg.append(sample.pitch_deg if sample.pitch_deg is not None else math.nan)
         self._roll_deg.append(sample.roll_deg if sample.roll_deg is not None else math.nan)
 
@@ -552,7 +552,7 @@ class AttitudeArray(_SortableSampleArray):
         pitch = self._pitch_deg[key]
         roll = self._roll_deg[key]
         return AttitudeSample(
-            _from_epoch(self._time[key]),
+            from_epoch(self._time[key]),
             None if math.isnan(pitch) else pitch,
             None if math.isnan(roll) else roll,
         )
@@ -560,7 +560,7 @@ class AttitudeArray(_SortableSampleArray):
     def __iter__(self) -> Iterator[AttitudeSample]:
         for t, pitch, roll in zip(self._time, self._pitch_deg, self._roll_deg):
             yield AttitudeSample(
-                _from_epoch(t), None if math.isnan(pitch) else pitch, None if math.isnan(roll) else roll
+                from_epoch(t), None if math.isnan(pitch) else pitch, None if math.isnan(roll) else roll
             )
 
 
@@ -617,7 +617,7 @@ class NavSampleArray:
         return self._time[i]
 
     def datetime_at(self, i: int) -> datetime:
-        return _from_epoch(self._time[i])
+        return from_epoch(self._time[i])
 
     def lat_at(self, i: int) -> float:
         return self._lat[i]
@@ -645,8 +645,8 @@ class NavSampleArray:
         via bisect -- relies on rows being appended in non-decreasing time order (always true in
         practice: build_trips()'s only caller, _merge_nav_samples, iterates an already
         outlier-rejected-and-sorted FixArray). Returns None if nothing falls in that window."""
-        lo = bisect.bisect_left(self._time, _to_epoch(start))
-        hi = bisect.bisect_right(self._time, _to_epoch(end))
+        lo = bisect.bisect_left(self._time, to_epoch(start))
+        hi = bisect.bisect_right(self._time, to_epoch(end))
         return (lo, hi) if hi > lo else None
 
     def __len__(self) -> int:

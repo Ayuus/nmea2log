@@ -942,7 +942,7 @@ def test_write_html_logbook_without_trip_uids(tmp_path: Path):
 
 def test_write_html_logbook_remarks_enabled_by_default(tmp_path: Path):
     """The Remarks feature is on by default (a fixed, single-site API path, not something that
-    needs per-machine configuration -- see _DEFAULT_REMARKS_API_URL's own docstring for why this
+    needs per-machine configuration -- see DEFAULT_REMARKS_API_URL's own docstring for why this
     changed from an opt-in ini setting: that only ever got applied on the desktop CLI, silently
     leaving every phone-built logbook without a remarks column at all)."""
     out_path = tmp_path / "logbook.html"

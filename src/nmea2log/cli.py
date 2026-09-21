@@ -10,11 +10,11 @@ from typing import List, Optional
 from .config import load_section
 from .geocode import Geocoder, NoGeocoder
 from .gpx_writer import write_gpx
-from .html_writer import _DEFAULT_LOG_INTERVAL_MINUTES, _DEFAULT_REMARKS_API_URL, write_html_logbook
+from .html_writer import DEFAULT_LOG_INTERVAL_MINUTES, DEFAULT_REMARKS_API_URL, write_html_logbook
 from .log import DEFAULT_LOG_RETENTION_DAYS, log, set_log_file, set_log_level
 from .logbook_writer import write_csv
 from .marine import MarineFetcher, NoMarine
-from .pipeline import PipelineError, _discover_ebl_files, build_season_trips
+from .pipeline import PipelineError, discover_ebl_files, build_season_trips
 from .trip_ids import assign_trip_ids
 from .upload import UploadError, upload_file, upload_via_rest
 from .weather import NoWeather, WeatherFetcher
@@ -220,17 +220,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--log-interval-minutes",
         type=float,
-        default=_DEFAULT_LOG_INTERVAL_MINUTES,
+        default=DEFAULT_LOG_INTERVAL_MINUTES,
         help="Interval (minutes) between the periodic course/speed/position entries in each "
-        f"trip's 'Log' table in the HTML logbook (default {_DEFAULT_LOG_INTERVAL_MINUTES:g})",
+        f"trip's 'Log' table in the HTML logbook (default {DEFAULT_LOG_INTERVAL_MINUTES:g})",
     )
     parser.add_argument(
         "--remarks-api-url",
         type=str,
-        default=_DEFAULT_REMARKS_API_URL,
+        default=DEFAULT_REMARKS_API_URL,
         help="URL of a WordPress REST endpoint (see wordpress-plugin/) that stores per-trip "
         f"remarks, shown as a 'Remarks' button+popup per trip in the HTML logbook. Default: "
-        f"'{_DEFAULT_REMARKS_API_URL}' -- a relative path resolves against whatever site the "
+        f"'{DEFAULT_REMARKS_API_URL}' -- a relative path resolves against whatever site the "
         f"logbook is opened from, so it works without also configuring a host as long as the "
         f"logbook is uploaded (see --upload) to the same site as the plugin. Set to an empty "
         f"string to disable.",
@@ -533,12 +533,12 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         parser.error("--ebl-dir is required (or set ebl_dir in the config file)")
     if not args.ebl_dir.is_dir():
         parser.error(f"--ebl-dir {args.ebl_dir} is not a directory")
-    # Already sorted (see _discover_ebl_files's own docstring) -- the resume-cache logic below
+    # Already sorted (see discover_ebl_files's own docstring) -- the resume-cache logic below
     # (resume_index as a plain cutoff into this list) and every season-wide sample array
     # build_trips() accumulates (fixes/sogs/attitude/...) both assume file order corresponds to
     # chronological order -- see android_entry.py's own run_pipeline() for the real-world version
     # of this same assumption breaking (Kotlin's file listing has no ordering guarantee there).
-    args.logfiles = _discover_ebl_files(args.ebl_dir)
+    args.logfiles = discover_ebl_files(args.ebl_dir)
     if not args.logfiles:
         parser.error(f"no .ebl files found under {args.ebl_dir}")
     log(f"[info] Found {len(args.logfiles)} .ebl file(s) under {args.ebl_dir}.", file=sys.stderr)

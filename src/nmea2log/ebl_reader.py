@@ -23,7 +23,7 @@ Two properties of the format that shape the reader below:
    During long periods without GPS/instrument activity (e.g. at anchor, plotter off), an
    entire file can contain no 126992 message at all, while other PGNs (autopilot, gyro) keep
    coming in normally. So when processing multiple consecutive files, pass the same
-   ``time_state`` dict to every ``iter_frames`` call (see ``cli.py``): the last known time then
+   ``time_state`` dict to every ``iter_frames`` call (see ``pipeline.py``): the last known time then
    stays valid across file boundaries, instead of an entire file being silently discarded just
    because it happens not to contain a 126992 message itself.
 

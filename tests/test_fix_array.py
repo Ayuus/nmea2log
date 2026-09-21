@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 
-from nmea2log.fix_array import AttitudeArray, FixArray, NavSampleArray, SogArray, _to_epoch
+from nmea2log.fix_array import AttitudeArray, FixArray, NavSampleArray, SogArray, to_epoch
 from nmea2log.model import AttitudeSample, PositionFix, SogSample
 
 
@@ -77,7 +77,7 @@ def test_nav_sample_array_index_range_for_time_is_inclusive_both_ends():
     array = NavSampleArray()
     base = datetime(2026, 7, 15, 9, 0, 0)
     for i in range(5):
-        array.append_raw(_to_epoch(base) + i, 0.0, 0.0, 0.0, None, None, None)
+        array.append_raw(to_epoch(base) + i, 0.0, 0.0, 0.0, None, None, None)
 
     assert array.index_range_for_time(base, base) == (0, 1)
     assert array.index_range_for_time(base + timedelta(seconds=1), base + timedelta(seconds=3)) == (1, 4)
@@ -86,7 +86,7 @@ def test_nav_sample_array_index_range_for_time_is_inclusive_both_ends():
 def test_nav_sample_array_index_range_for_time_returns_none_when_nothing_matches():
     array = NavSampleArray()
     base = datetime(2026, 7, 15, 9, 0, 0)
-    array.append_raw(_to_epoch(base), 0.0, 0.0, 0.0, None, None, None)
+    array.append_raw(to_epoch(base), 0.0, 0.0, 0.0, None, None, None)
 
     assert array.index_range_for_time(base + timedelta(hours=1), base + timedelta(hours=2)) is None
 
@@ -124,7 +124,7 @@ def test_sog_array_drop_time_regressions_keeps_rows_with_equal_timestamps():
 
 
 def test_sog_array_drop_time_regressions_trusts_a_large_backward_jump_as_a_clock_sync():
-    """A backward jump this large (see _CLOCK_JUMP_THRESHOLD_S) is trusted, not dropped like a
+    """A backward jump this large (see CLOCK_JUMP_THRESHOLD_S) is trusted, not dropped like a
     small one -- otherwise every genuinely good row that follows a device's pre-sync clock error
     would also get dropped for "coming before" that wrong, far-future anchor, all the way until
     real time caught back up to it (found in practice, on a real archive: this silently

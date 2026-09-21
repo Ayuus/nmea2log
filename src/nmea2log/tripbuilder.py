@@ -20,7 +20,7 @@ from datetime import datetime, timedelta
 from typing import Dict, FrozenSet, Iterable, Iterator, List, Optional, Tuple, Union
 
 from .fix_array import (
-    _CLOCK_JUMP_THRESHOLD_S,
+    CLOCK_JUMP_THRESHOLD_S,
     AttitudeArray,
     BatteryArray,
     DepthArray,
@@ -31,9 +31,9 @@ from .fix_array import (
     SogArray,
     TripFuelArray,
     WaterTempArray,
-    _from_epoch,
-    _log_time_anomaly,
-    _to_epoch,
+    from_epoch,
+    log_time_anomaly,
+    to_epoch,
 )
 from .geocode import NoGeocoder
 from .log import log
@@ -48,6 +48,7 @@ from .model import (
     TripFuelSample,
     WaterTempSample,
 )
+from .stretches import StretchLog
 
 _KNOT_IN_MS = 0.514444
 _EARTH_RADIUS_NM = 3440.065
@@ -257,13 +258,7 @@ _SOG_CHECK_FACTOR = 3.0
 _SOG_CHECK_SLACK_MS = 1.5
 _SOG_CHECK_MAX_DT_S = 30.0
 
-_CLOCK_JUMP_THRESHOLD_HOURS = _CLOCK_JUMP_THRESHOLD_S / 3600.0  # see fix_array.py
-
-# The outlier log lines say *when* the dropped fixes were, so a start-up glitch can be told from a
-# jump in the middle of a trip: fixes at most this far apart are one stretch, and only the first
-# few stretches are spelled out (a broken source could otherwise produce a very long line).
-_STRETCH_GAP_S = 30.0
-_MAX_STRETCHES_LOGGED = 8
+_CLOCK_JUMP_THRESHOLD_HOURS = CLOCK_JUMP_THRESHOLD_S / 3600.0  # see fix_array.py
 
 # A receiver keeps settling on its position for a while after power-on even though it already
 # reports a good fix (found in practice: fix mode 3D and HDOP 1.1-1.8 while the reported position
@@ -273,42 +268,6 @@ _MAX_STRETCHES_LOGGED = 8
 # known behaviour and logged as plain info; anything dropped elsewhere is a real [anomaly].
 _POWER_ON_GAP_S = 300.0
 _POWER_ON_SETTLE_S = 120.0
-
-
-@dataclass
-class _Stretch:
-    first: float
-    last: float
-    count: int
-
-
-class _DroppedTimes:
-    """The times (epoch seconds) of the fixes one outlier check dropped, kept as stretches."""
-
-    def __init__(self) -> None:
-        self.stretches: List[_Stretch] = []
-        self.total = 0
-
-    def add(self, epoch: float) -> None:
-        self.total += 1
-        if self.stretches and epoch - self.stretches[-1].last <= _STRETCH_GAP_S:
-            self.stretches[-1].last = epoch
-            self.stretches[-1].count += 1
-        else:
-            self.stretches.append(_Stretch(epoch, epoch, 1))
-
-    def describe(self) -> str:
-        """``2026-07-30 12:39:12 until 2026-07-30 12:39:41 UTC (258 fixes); ...``"""
-        parts = []
-        for stretch in self.stretches[:_MAX_STRETCHES_LOGGED]:
-            text = f"{_from_epoch(stretch.first):%Y-%m-%d %H:%M:%S}"
-            if stretch.last != stretch.first:
-                text += f" until {_from_epoch(stretch.last):%Y-%m-%d %H:%M:%S}"
-            parts.append(f"{text} UTC ({stretch.count} {'fix' if stretch.count == 1 else 'fixes'})")
-        more = len(self.stretches) - _MAX_STRETCHES_LOGGED
-        if more > 0:
-            parts.append(f"and {more} more")
-        return "; ".join(parts)
 
 
 def _reject_gps_outliers_array(fixes: FixArray, sogs: Optional[SogArray] = None) -> FixArray:
@@ -371,8 +330,8 @@ def _reject_gps_outliers_array(fixes: FixArray, sogs: Optional[SogArray] = None)
     prev_i = 0
     accepted.append_raw(fixes.time_at(0), fixes.lat_at(0), fixes.lon_at(0))
     backward_dropped = clock_resets = 0
-    implausible_times, sog_inconsistent_times = _DroppedTimes(), _DroppedTimes()
-    implausible_startup, sog_inconsistent_startup = _DroppedTimes(), _DroppedTimes()
+    implausible_times, sog_inconsistent_times = StretchLog(), StretchLog()
+    implausible_startup, sog_inconsistent_startup = StretchLog(), StretchLog()
     session_start = fixes.time_at(0)  # the last power-on: see _POWER_ON_GAP_S
     max_backward_s = 0.0
     first_backward_at: Optional[float] = None
@@ -406,7 +365,9 @@ def _reject_gps_outliers_array(fixes: FixArray, sogs: Optional[SogArray] = None)
             sog_idx += 1
         distance_nm = _haversine_nm(fixes.lat_at(prev_i), fixes.lon_at(prev_i), fixes.lat_at(i), fixes.lon_at(i))
         if distance_nm / dt_hours > _MAX_PLAUSIBLE_SPEED_KN:
-            (implausible_startup if fix_time - session_start <= _POWER_ON_SETTLE_S else implausible_times).add(fix_time)
+            (implausible_startup if fix_time - session_start <= _POWER_ON_SETTLE_S else implausible_times).add(
+                from_epoch(fix_time)
+            )
             continue
         dt_s = dt_hours * 3600
         if current_sog_ms is not None and dt_s <= _SOG_CHECK_MAX_DT_S:
@@ -414,14 +375,14 @@ def _reject_gps_outliers_array(fixes: FixArray, sogs: Optional[SogArray] = None)
             if distance_nm * 1852.0 > allowed_m:
                 (
                     sog_inconsistent_startup if fix_time - session_start <= _POWER_ON_SETTLE_S else sog_inconsistent_times
-                ).add(fix_time)
+                ).add(from_epoch(fix_time))
                 continue
         if fix_time - fixes.time_at(prev_i) >= _POWER_ON_GAP_S:
             session_start = fix_time
         accepted.append_raw(fix_time, fixes.lat_at(i), fixes.lon_at(i))
         prev_i = i
     if backward_dropped or clock_resets:
-        _log_time_anomaly("Position fixes", backward_dropped, max_backward_s, first_backward_at, clock_resets)
+        log_time_anomaly("Position fixes", backward_dropped, max_backward_s, first_backward_at, clock_resets)
     implausible_what = f"implying more than {_MAX_PLAUSIBLE_SPEED_KN:.0f} kn from the previous accepted one"
     sog_what = "that moved much further than the receiver's own speed over ground allows"
     for startup, elsewhere, what in (
@@ -1044,8 +1005,8 @@ class _InstanceIndex:
     def window(self, instance: int, start: datetime, end: datetime) -> list:
         """The instance's samples with start <= time <= end, in time order."""
         rows = self._rows[instance]
-        lo = bisect.bisect_left(rows, _to_epoch(start), key=self._samples.time_at)
-        hi = bisect.bisect_right(rows, _to_epoch(end), key=self._samples.time_at)
+        lo = bisect.bisect_left(rows, to_epoch(start), key=self._samples.time_at)
+        hi = bisect.bisect_right(rows, to_epoch(end), key=self._samples.time_at)
         return [self._samples[i] for i in rows[lo:hi]]
 
 
@@ -1329,7 +1290,7 @@ def _typical_rpm_speed_range(
 
 
 def _motion_variation(
-    sorted_samples: List[AttitudeSample], start: datetime, end: datetime
+    sorted_samples: AttitudeArray, start: datetime, end: datetime
 ) -> Tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
     """Returns (roll_stdev, pitch_stdev, roll_range, pitch_range) from roll/pitch (PGN 127257)
     during the trip -- a rougher sea or more wave action shows up as more variation in how the
@@ -1342,8 +1303,8 @@ def _motion_variation(
     sensor this app doesn't have); just relative indicators from whatever motion sensor is
     already on the network.
 
-    ``sorted_samples`` must already be sorted by time (see build_trips, which sorts once up
-    front) -- this is called once per trip, and a real log can have millions of attitude samples
+    ``sorted_samples`` must already be sorted by time (see build_trips, which enforces that once
+    up front via drop_time_regressions()) -- this is called once per trip, and a real log can have millions of attitude samples
     spanning many days, so re-scanning the *entire* list per trip to filter down to its own
     window is real, measured cost (found in practice: ~21s of a ~37s run, for just 18 calls)
     that a one-off sort + bisect avoids almost entirely."""

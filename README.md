@@ -536,6 +536,19 @@ pytest
   CLI reports on stderr which source was chosen as primary whenever there's more than one.
   **Caveat**: "most messages" is a proxy, not a quality assessment — GPS accuracy (HDOP,
   satellite count, fix type) isn't taken into account.
+- **Bad positions are filtered in three layers**, each logged with the date/time (UTC) of what it
+  dropped: (1) positions are ignored while the receiver itself reports no valid fix (PGN 129539,
+  see above; `[info]`, one line per start-up/shutdown); (2) a position that is much further from
+  the last accepted one than the receiver's own speed over ground allows; (3) one that implies more
+  than 60 kn. Layers 2 and 3 exist because a receiver can report a perfectly good fix (3D, HDOP
+  1.1–1.8) while its position still glides for ~30 s after power-on, so no fix-quality rule catches
+  that. Drops within 120 s of a power-on are known behaviour and logged as `[info]`; drops anywhere
+  else are logged as `[anomaly]` (a source-data problem worth investigating).
+- **Time comes from PGN 126992, and more than one device may send it** (found on a real boat: two,
+  clocks 1–2 s apart). The reader trusts the source with the most messages so far; that choice
+  follows from per-source message counts, so the sample and trip caches store the *whole* time
+  state (not just the last time) — otherwise a decode that resumes from a cache could trust the
+  other clock and give the same file different timestamps than an uninterrupted run.
 - **Fuel consumption** is calculated from engine fuel-rate data (PGN 127489, integrated over
   time) or the engine's own trip counter (PGN 127497) — nothing is shown when a boat has no
   engine-reporting PGNs at all, which matters for sailboats that are often underway with the

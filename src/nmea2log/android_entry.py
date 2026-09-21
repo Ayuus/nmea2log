@@ -21,7 +21,7 @@ from .geocode import Geocoder
 from .html_writer import write_html_logbook
 from .log import log, set_log_file, set_log_sink
 from .marine import MarineFetcher
-from .pipeline import PipelineCancelled, PipelineError, _discover_ebl_files, build_season_trips
+from .pipeline import PipelineCancelled, PipelineError, discover_ebl_files, build_season_trips
 from .trip_ids import assign_trip_ids
 from .weather import WeatherFetcher
 
@@ -95,9 +95,9 @@ def run_pipeline(
         args.min_stop_minutes = min_stop_minutes
 
     # Sorted here, unconditionally -- unlike cli.py's own logfiles (discovered via
-    # _discover_ebl_files(), which already sorts), ebl_paths here can come straight from Kotlin's
+    # discover_ebl_files(), which already sorts), ebl_paths here can come straight from Kotlin's
     # own file listing (MainActivity's local file scan for the offline-build path; for the W2K-2
-    # sync path it's _discover_ebl_files() again, already sorted -- sorting twice is a no-op).
+    # sync path it's discover_ebl_files() again, already sorted -- sorting twice is a no-op).
     # Found in practice, on a real device: Kotlin's own listing is not
     # guaranteed to be chronological (File.walkTopDown() makes no ordering promise), which doesn't
     # just affect decode order cosmetically -- every season-wide sample array accumulated below
@@ -350,7 +350,7 @@ def _sync_from_w2k2(
         # checked against the device this run -- a folder it skipped entirely (already complete
         # locally, see build_download_plan()) still needs its files fed into the pipeline below,
         # same as _run()'s own --ebl-dir discovery does on desktop (see cli.py).
-        local_paths = [str(p) for p in _discover_ebl_files(config.download_dir)]
+        local_paths = [str(p) for p in discover_ebl_files(config.download_dir)]
     except w2k2_download.DownloadCancelled:
         return {"ok": False, "error": "Sync cancelled.", "cancelled": True}
     except urllib.error.HTTPError as exc:

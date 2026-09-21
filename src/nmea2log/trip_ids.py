@@ -19,7 +19,7 @@ from __future__ import annotations
 import uuid
 from typing import Dict, List, Optional
 
-from .logbook_writer import _to_local, _trip_utc_offset_hours
+from .logbook_writer import to_local, trip_utc_offset_hours
 from .tripbuilder import TripLeg
 
 # Fixed, arbitrary namespace for uuid5 -- only needs to be constant across runs (so the same
@@ -55,8 +55,8 @@ def _match_key(trip: TripLeg, utc_offset_hours: Optional[float], occurrence: int
     counter to tell apart repeated same-day round trips between the same two spots. Deliberately
     doesn't include the exact time -- that's the whole point, since exact times are exactly what
     a trip-recognition fix might shift."""
-    offset = _trip_utc_offset_hours(trip, utc_offset_hours)
-    local_date = _to_local(trip.depart_time, offset).date().isoformat()
+    offset = trip_utc_offset_hours(trip, utc_offset_hours)
+    local_date = to_local(trip.depart_time, offset).date().isoformat()
     return f"{local_date}|{_position_key(trip)}|{occurrence}"
 
 

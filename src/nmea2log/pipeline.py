@@ -297,7 +297,7 @@ def _iter_frames_for_path(
     return iter_frames_ebl(path, time_state=ebl_time_state, wanted_pgns=_WANTED_PGNS)
 
 
-def _discover_ebl_files(ebl_dir: Path) -> List[Path]:
+def discover_ebl_files(ebl_dir: Path) -> List[Path]:
     """Every .ebl file found recursively under ``ebl_dir``, sorted -- used when nmea2log is
     called without any logfiles (see --ebl-dir), so you don't have to select or drag files by
     hand after downloading them."""

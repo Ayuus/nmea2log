@@ -184,7 +184,7 @@ def test_run_pipeline_enables_the_remarks_column(tmp_path, monkeypatch):
     nmea2log.ini (there's no such file on the phone). Back when --remarks-api-url's default came
     from that ini file, this left every phone-built logbook without a remarks column at all, only
     ever a desktop-built one had it. Now that the URL is a fixed, built-in default (see
-    _DEFAULT_REMARKS_API_URL in html_writer.py) rather than an opt-in ini setting, a bare
+    DEFAULT_REMARKS_API_URL in html_writer.py) rather than an opt-in ini setting, a bare
     parse_args([]) already carries it -- this just confirms that stays true end to end."""
     ebl_path = _write_fake_ebl(tmp_path)
     _stub_one_trip_samples(monkeypatch)

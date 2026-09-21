@@ -41,11 +41,11 @@ _FIELDNAMES = [
 ]
 
 
-def _nl_num(value: float, decimals: int = 1) -> str:
+def nl_num(value: float, decimals: int = 1) -> str:
     return f"{value:.{decimals}f}".replace(".", ",")
 
 
-def _duration_minutes(duration: timedelta) -> int:
+def duration_minutes(duration: timedelta) -> int:
     """Rounded to the nearest minute -- shared with html_writer's totals computation so the
     displayed "Totale uren" always exactly equals the sum of the individual "Duur" column values
     a user would get by adding them up by hand (found in practice: floor-rounding each trip's own
@@ -54,8 +54,8 @@ def _duration_minutes(duration: timedelta) -> int:
     return round(duration.total_seconds() / 60)
 
 
-def _format_duration(duration: timedelta) -> str:
-    hours, minutes = divmod(_duration_minutes(duration), 60)
+def format_duration(duration: timedelta) -> str:
+    hours, minutes = divmod(duration_minutes(duration), 60)
     return f"{hours}:{minutes:02d}"
 
 
@@ -67,15 +67,15 @@ def _format_engine_health(engine_health: Dict[int, EngineHealth]) -> str:
     for instance, health in sorted(engine_health.items()):
         bits = []
         if health.oil_pressure_bar_avg is not None:
-            bits.append(f"oil {_nl_num(health.oil_pressure_bar_avg)} bar")
+            bits.append(f"oil {nl_num(health.oil_pressure_bar_avg)} bar")
         if health.oil_temperature_c_avg is not None:
-            bits.append(f"oil temp {_nl_num(health.oil_temperature_c_avg, 0)}°C")
+            bits.append(f"oil temp {nl_num(health.oil_temperature_c_avg, 0)}°C")
         if health.coolant_temperature_c_avg is not None:
-            bits.append(f"coolant {_nl_num(health.coolant_temperature_c_avg, 0)}°C")
+            bits.append(f"coolant {nl_num(health.coolant_temperature_c_avg, 0)}°C")
         if health.alternator_voltage_v_avg is not None:
-            bits.append(f"alternator {_nl_num(health.alternator_voltage_v_avg)} V")
+            bits.append(f"alternator {nl_num(health.alternator_voltage_v_avg)} V")
         if health.engine_load_pct_max is not None:
-            bits.append(f"load max {_nl_num(health.engine_load_pct_max, 0)}%")
+            bits.append(f"load max {nl_num(health.engine_load_pct_max, 0)}%")
         if bits:
             prefix = "" if single_engine else f"engine {instance}: "
             parts.append(prefix + ", ".join(bits))
@@ -103,11 +103,11 @@ def _battery_warning_text(battery_health: Dict[int, BatteryHealth], threshold: O
     for instance, health in sorted(battery_health.items()):
         if health.min_voltage_v is not None and health.min_voltage_v < threshold:
             prefix = "" if single_battery else f"battery {instance}: "
-            parts.append(f"{prefix}low battery {_nl_num(health.min_voltage_v)} V")
+            parts.append(f"{prefix}low battery {nl_num(health.min_voltage_v)} V")
     return "; ".join(parts)
 
 
-def _all_warnings_text(trip: TripLeg, battery_warning_voltage: Optional[float] = None) -> str:
+def all_warnings_text(trip: TripLeg, battery_warning_voltage: Optional[float] = None) -> str:
     parts = [
         text
         for text in (
@@ -181,7 +181,7 @@ def _estimate_utc_offset_hours(lat: float, longitude: float, when_utc: datetime)
     return base
 
 
-def _trip_utc_offset_hours(trip: TripLeg, fixed_offset: Optional[float]) -> float:
+def trip_utc_offset_hours(trip: TripLeg, fixed_offset: Optional[float]) -> float:
     if fixed_offset is not None:
         return fixed_offset
     if trip.track:
@@ -189,24 +189,24 @@ def _trip_utc_offset_hours(trip: TripLeg, fixed_offset: Optional[float]) -> floa
     return 0.0
 
 
-def _to_local(dt: datetime, offset_hours: float) -> datetime:
+def to_local(dt: datetime, offset_hours: float) -> datetime:
     return dt + timedelta(hours=offset_hours)
 
 
-def _avg_consumption_l_per_nm(trip: TripLeg) -> Optional[float]:
+def avg_consumption_l_per_nm(trip: TripLeg) -> Optional[float]:
     return trip.fuel_liters / trip.distance_nm if trip.distance_nm > 0 else None
 
 
-def _engine_hours_text(trip: TripLeg) -> str:
+def engine_hours_text(trip: TripLeg) -> str:
     if len(trip.engine_hours) == 1:
         hours = next(iter(trip.engine_hours.values()))
-        return f"{_nl_num(hours)} h"
+        return f"{nl_num(hours)} h"
     return ", ".join(
-        f"engine {instance}: {_nl_num(hours)} h" for instance, hours in sorted(trip.engine_hours.items())
+        f"engine {instance}: {nl_num(hours)} h" for instance, hours in sorted(trip.engine_hours.items())
     )
 
 
-def _typical_rpm_text(trip: TripLeg) -> str:
+def typical_rpm_text(trip: TripLeg) -> str:
     if not trip.typical_rpm:
         return ""
     if len(trip.typical_rpm) == 1:
@@ -237,14 +237,14 @@ def write_csv(
         writer = csv.DictWriter(handle, fieldnames=_FIELDNAMES, delimiter=";")
         writer.writeheader()
         for trip in trips:
-            offset = _trip_utc_offset_hours(trip, utc_offset_hours)
-            depart_local = _to_local(trip.depart_time, offset)
-            arrive_local = _to_local(trip.arrive_time, offset)
+            offset = trip_utc_offset_hours(trip, utc_offset_hours)
+            depart_local = to_local(trip.depart_time, offset)
+            arrive_local = to_local(trip.arrive_time, offset)
 
             duration = trip.duration
             duration_h = duration.total_seconds() / 3600.0
             avg_consumption = trip.fuel_liters / duration_h if duration_h > 0 else None
-            avg_consumption_per_nm = _avg_consumption_l_per_nm(trip)
+            avg_consumption_per_nm = avg_consumption_l_per_nm(trip)
             writer.writerow(
                 {
                     "date": depart_local.date().isoformat(),
@@ -252,34 +252,34 @@ def write_csv(
                     "departure_port": trip.depart_place,
                     "arrival_time": arrive_local.strftime("%H:%M"),
                     "arrival_port": trip.arrive_place,
-                    "duration": _format_duration(duration),
-                    "distance_nm": _nl_num(trip.distance_nm),
-                    "avg_speed_kn": _nl_num(trip.avg_speed_kn) if trip.avg_speed_kn is not None else "",
-                    "max_speed_kn": _nl_num(trip.max_speed_kn) if trip.max_speed_kn is not None else "",
-                    "fuel_L_calculated": _nl_num(trip.fuel_liters),
-                    "fuel_L_engine_meter": _nl_num(trip.fuel_liters_device)
+                    "duration": format_duration(duration),
+                    "distance_nm": nl_num(trip.distance_nm),
+                    "avg_speed_kn": nl_num(trip.avg_speed_kn) if trip.avg_speed_kn is not None else "",
+                    "max_speed_kn": nl_num(trip.max_speed_kn) if trip.max_speed_kn is not None else "",
+                    "fuel_L_calculated": nl_num(trip.fuel_liters),
+                    "fuel_L_engine_meter": nl_num(trip.fuel_liters_device)
                     if trip.fuel_liters_device is not None
                     else "",
-                    "avg_consumption_L_per_hour": _nl_num(avg_consumption) if avg_consumption is not None else "",
-                    "avg_consumption_L_per_nm": _nl_num(avg_consumption_per_nm, 2)
+                    "avg_consumption_L_per_hour": nl_num(avg_consumption) if avg_consumption is not None else "",
+                    "avg_consumption_L_per_nm": nl_num(avg_consumption_per_nm, 2)
                     if avg_consumption_per_nm is not None
                     else "",
-                    "engine_hours": _engine_hours_text(trip),
-                    "typical_rpm": _typical_rpm_text(trip),
+                    "engine_hours": engine_hours_text(trip),
+                    "typical_rpm": typical_rpm_text(trip),
                     "engine_health": _format_engine_health(trip.engine_health),
-                    "warnings": _all_warnings_text(trip, battery_warning_voltage),
-                    "min_depth_m": _nl_num(trip.min_depth_m) if trip.min_depth_m is not None else "",
+                    "warnings": all_warnings_text(trip, battery_warning_voltage),
+                    "min_depth_m": nl_num(trip.min_depth_m) if trip.min_depth_m is not None else "",
                     "min_depth_position": _min_depth_position_text(trip),
-                    "avg_water_temp_c": _nl_num(trip.avg_water_temp_c) if trip.avg_water_temp_c is not None else "",
-                    "min_water_temp_c": _nl_num(trip.min_water_temp_c) if trip.min_water_temp_c is not None else "",
-                    "max_water_temp_c": _nl_num(trip.max_water_temp_c) if trip.max_water_temp_c is not None else "",
-                    "roll_variation_deg": _nl_num(trip.roll_variation_deg)
+                    "avg_water_temp_c": nl_num(trip.avg_water_temp_c) if trip.avg_water_temp_c is not None else "",
+                    "min_water_temp_c": nl_num(trip.min_water_temp_c) if trip.min_water_temp_c is not None else "",
+                    "max_water_temp_c": nl_num(trip.max_water_temp_c) if trip.max_water_temp_c is not None else "",
+                    "roll_variation_deg": nl_num(trip.roll_variation_deg)
                     if trip.roll_variation_deg is not None
                     else "",
-                    "pitch_variation_deg": _nl_num(trip.pitch_variation_deg)
+                    "pitch_variation_deg": nl_num(trip.pitch_variation_deg)
                     if trip.pitch_variation_deg is not None
                     else "",
-                    "roll_range_deg": _nl_num(trip.roll_range_deg) if trip.roll_range_deg is not None else "",
-                    "pitch_range_deg": _nl_num(trip.pitch_range_deg) if trip.pitch_range_deg is not None else "",
+                    "roll_range_deg": nl_num(trip.roll_range_deg) if trip.roll_range_deg is not None else "",
+                    "pitch_range_deg": nl_num(trip.pitch_range_deg) if trip.pitch_range_deg is not None else "",
                 }
             )

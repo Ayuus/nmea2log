@@ -33,14 +33,14 @@ from typing import Dict, Iterable, List, Optional, Tuple
 from xml.sax.saxutils import escape
 
 from .logbook_writer import (
-    _avg_consumption_l_per_nm,
-    _duration_minutes,
-    _engine_hours_text,
-    _format_duration,
-    _nl_num,
-    _to_local,
-    _trip_utc_offset_hours,
-    _typical_rpm_text,
+    avg_consumption_l_per_nm,
+    duration_minutes,
+    engine_hours_text,
+    format_duration,
+    nl_num,
+    to_local,
+    trip_utc_offset_hours,
+    typical_rpm_text,
 )
 from .translations import LANGUAGE_FLAGS, LANGUAGES, MONTH_ABBR, MONTH_ABBR_NL, NL as T
 from .tripbuilder import NavSample, TripLeg
@@ -69,7 +69,7 @@ _ICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
 _ICON_URL = "data:image/svg+xml;base64," + base64.b64encode(_ICON_SVG.encode("utf-8")).decode("ascii")
 _MAX_MAP_POINTS = 500
 _KNOT_IN_MS = 0.514444
-_DEFAULT_LOG_INTERVAL_MINUTES = 30.0
+DEFAULT_LOG_INTERVAL_MINUTES = 30.0
 # A relative path, so it resolves against whatever site the logbook is opened from -- works
 # without a host configured too, as long as logbook.html is uploaded (see --upload) to the same
 # site as the WordPress plugin (see wordpress-plugin/nmea2log-remarks.php), which every real run
@@ -80,7 +80,7 @@ _DEFAULT_LOG_INTERVAL_MINUTES = 30.0
 # on Android at all, see android_entry.py's run_pipeline docstring) -- found in practice: every
 # phone-built logbook silently had no remarks column at all, only ever a desktop-built one did.
 # Still overridable with --remarks-api-url (empty disables it) for local testing/development.
-_DEFAULT_REMARKS_API_URL = "/wp-json/nmea2log/v1/remarks"
+DEFAULT_REMARKS_API_URL = "/wp-json/nmea2log/v1/remarks"
 
 
 @dataclass
@@ -100,10 +100,10 @@ def _compute_totals(trips: List[TripLeg]) -> _Totals:
     fuel_liters = sum(trip.fuel_liters for trip in trips)
     device_values = [trip.fuel_liters_device for trip in trips if trip.fuel_liters_device is not None]
     fuel_liters_device = sum(device_values) if device_values else None
-    # Summed from each trip's own *rounded* minutes (the same rounding _format_duration uses for
+    # Summed from each trip's own *rounded* minutes (the same rounding format_duration uses for
     # the "Duur" column), not the raw unrounded durations -- otherwise this total doesn't exactly
     # equal what a user gets by adding up the visible per-row values by hand (found in practice).
-    moving_hours = sum(_duration_minutes(trip.duration) for trip in trips) / 60.0
+    moving_hours = sum(duration_minutes(trip.duration) for trip in trips) / 60.0
     engine_hours: Dict[int, float] = {}
     engine_hours_current: Dict[int, float] = {}
     # ``trips`` is already sorted chronologically by the caller, so the last value seen per
@@ -220,7 +220,7 @@ def _warnings_count(trip: TripLeg, battery_warning_voltage: Optional[float]) -> 
 
 
 def _warnings_tooltip_text(trip: TripLeg, battery_warning_voltage: Optional[float], offset_hours: float) -> str:
-    """Same warnings as the CSV's plain-text column (see logbook_writer._all_warnings_text), but
+    """Same warnings as the CSV's plain-text column (see logbook_writer.all_warnings_text), but
     flattened into one list across every engine/battery and sorted chronologically (time first,
     then the warning text) instead of grouped and alphabetized -- built separately rather than
     reusing that function so the CSV's own text stays exactly as-is for anything already parsing
@@ -240,13 +240,13 @@ def _warnings_tooltip_text(trip: TripLeg, battery_warning_voltage: Optional[floa
             if health.min_voltage_v is None or health.min_voltage_v >= battery_warning_voltage:
                 continue
             prefix = "" if single_battery else f"battery {instance}: "
-            entries.append((health.min_voltage_at, f"{prefix}low battery {_nl_num(health.min_voltage_v)} V"))
+            entries.append((health.min_voltage_at, f"{prefix}low battery {nl_num(health.min_voltage_v)} V"))
 
     # Entries without a known time (only possible from data built before warning_first_seen/
     # min_voltage_at existed) sort last instead of crashing on comparing None to a datetime.
     entries.sort(key=lambda entry: (entry[0] is None, entry[0]))
     return ", ".join(
-        f"{_to_local(time, offset_hours).strftime('%H:%M')} {text}" if time is not None else text
+        f"{to_local(time, offset_hours).strftime('%H:%M')} {text}" if time is not None else text
         for time, text in entries
     )
 
@@ -272,9 +272,9 @@ def _water_temp_detail_text(trip: TripLeg) -> str:
     hover-only cell."""
     if trip.avg_water_temp_c is None:
         return ""
-    text = f"{_nl_num(trip.avg_water_temp_c)}°C"
+    text = f"{nl_num(trip.avg_water_temp_c)}°C"
     if trip.max_water_temp_c - trip.min_water_temp_c > 0.5:
-        text += f" ({_nl_num(trip.min_water_temp_c)}–{_nl_num(trip.max_water_temp_c)}°C)"
+        text += f" ({nl_num(trip.min_water_temp_c)}–{nl_num(trip.max_water_temp_c)}°C)"
     return text
 
 
@@ -286,14 +286,14 @@ def _motion_detail_text(trip: TripLeg) -> str:
     hover tooltip to explain it."""
     parts = []
     if trip.roll_variation_deg is not None:
-        text = f"{_i18n_span('motion_roll')} ±{_nl_num(trip.roll_variation_deg)}°"
+        text = f"{_i18n_span('motion_roll')} ±{nl_num(trip.roll_variation_deg)}°"
         if trip.roll_range_deg is not None:
-            text += f" ({_i18n_span('motion_peak')} {_nl_num(trip.roll_range_deg)}°)"
+            text += f" ({_i18n_span('motion_peak')} {nl_num(trip.roll_range_deg)}°)"
         parts.append(text)
     if trip.pitch_variation_deg is not None:
-        text = f"{_i18n_span('motion_pitch')} ±{_nl_num(trip.pitch_variation_deg)}°"
+        text = f"{_i18n_span('motion_pitch')} ±{nl_num(trip.pitch_variation_deg)}°"
         if trip.pitch_range_deg is not None:
-            text += f" ({_i18n_span('motion_peak')} {_nl_num(trip.pitch_range_deg)}°)"
+            text += f" ({_i18n_span('motion_peak')} {nl_num(trip.pitch_range_deg)}°)"
         parts.append(text)
     return ", ".join(parts)
 
@@ -304,7 +304,7 @@ def _typical_rpm_html(trip: TripLeg) -> str:
     which is diluted by slower maneuvering in/out of the harbor and reads as if that RPM only
     makes that speed (found in practice: "2250 RPM" next to "11.9 kn avg" looked like 2250 RPM
     made 11.9 kn, when the boat was actually doing 12.6-13.4 kn whenever it held that RPM)."""
-    visible_text = _typical_rpm_text(trip)
+    visible_text = typical_rpm_text(trip)
     if not visible_text:
         return ""
     visible = escape(visible_text)
@@ -316,12 +316,12 @@ def _typical_rpm_html(trip: TripLeg) -> str:
         if avg_fuel_l_per_nm is not None:
             tooltip_html = _i18n_tpl_html(
                 "rpm_tooltip_single_fuel",
-                avg=_nl_num(avg_kn), min=_nl_num(min_kn), max=_nl_num(max_kn),
-                fuel=_nl_num(avg_fuel_l_per_nm, 2),
+                avg=nl_num(avg_kn), min=nl_num(min_kn), max=nl_num(max_kn),
+                fuel=nl_num(avg_fuel_l_per_nm, 2),
             )
         else:
             tooltip_html = _i18n_tpl_html(
-                "rpm_tooltip_single", avg=_nl_num(avg_kn), min=_nl_num(min_kn), max=_nl_num(max_kn)
+                "rpm_tooltip_single", avg=nl_num(avg_kn), min=nl_num(min_kn), max=nl_num(max_kn)
             )
     else:
         parts = []
@@ -330,15 +330,15 @@ def _typical_rpm_html(trip: TripLeg) -> str:
                 parts.append(
                     _i18n_tpl_html(
                         "rpm_tooltip_per_engine_fuel",
-                        instance=instance, avg=_nl_num(avg_kn), min=_nl_num(min_kn), max=_nl_num(max_kn),
-                        fuel=_nl_num(avg_fuel_l_per_nm, 2),
+                        instance=instance, avg=nl_num(avg_kn), min=nl_num(min_kn), max=nl_num(max_kn),
+                        fuel=nl_num(avg_fuel_l_per_nm, 2),
                     )
                 )
             else:
                 parts.append(
                     _i18n_tpl_html(
                         "rpm_tooltip_per_engine",
-                        instance=instance, avg=_nl_num(avg_kn), min=_nl_num(min_kn), max=_nl_num(max_kn),
+                        instance=instance, avg=nl_num(avg_kn), min=nl_num(min_kn), max=nl_num(max_kn),
                     )
                 )
         tooltip_html = ", ".join(parts)
@@ -355,10 +355,10 @@ def _max_speed_html(trip: TripLeg, offset_hours: float) -> str:
     downwind surge at low RPM or genuinely flat-out at full throttle."""
     if trip.max_speed_kn is None:
         return ""
-    visible = _nl_num(trip.max_speed_kn) + " kn"
+    visible = nl_num(trip.max_speed_kn) + " kn"
     if trip.max_speed_at is None:
         return visible
-    time_text = _to_local(trip.max_speed_at, offset_hours).strftime("%H:%M")
+    time_text = to_local(trip.max_speed_at, offset_hours).strftime("%H:%M")
 
     if len(trip.max_speed_rpm) == 1:
         rpm = next(iter(trip.max_speed_rpm.values()))
@@ -397,13 +397,13 @@ def _periodic_log_entries(
     if not track:
         return []
     interval = timedelta(minutes=interval_minutes)
-    local_start = _to_local(track[0].time, offset_hours)
+    local_start = to_local(track[0].time, offset_hours)
     next_due = _next_aligned_time(local_start, interval)
     while next_due <= local_start:  # don't immediately re-log the departure point itself
         next_due += interval
     entries = [track[0]]
     for sample in track[1:]:
-        local_time = _to_local(sample.time, offset_hours)
+        local_time = to_local(sample.time, offset_hours)
         if local_time >= next_due:
             entries.append(sample)
             while next_due <= local_time:  # stay on the clock grid even across a data gap
@@ -423,14 +423,14 @@ def _map_log_points(trip: TripLeg, offset_hours: float, interval_minutes: float)
         return []
     points = []
     for entry in entries:
-        local_time = _to_local(entry.time, offset_hours)
+        local_time = to_local(entry.time, offset_hours)
         points.append(
             {
                 "lat": round(entry.lat, 6),
                 "lon": round(entry.lon, 6),
                 "time": f"{local_time:%H:%M}",
-                "cog": f"{_nl_num(entry.cog_deg, 0)}°" if entry.cog_deg is not None else None,
-                "sog": f"{_nl_num(entry.sog_ms / _KNOT_IN_MS)} kn",
+                "cog": f"{nl_num(entry.cog_deg, 0)}°" if entry.cog_deg is not None else None,
+                "sog": f"{nl_num(entry.sog_ms / _KNOT_IN_MS)} kn",
             }
         )
     return points
@@ -462,8 +462,8 @@ def _max_speed_marker(trip: TripLeg, offset_hours: float) -> Optional[dict]:
     return {
         "lat": round(sample.lat, 6),
         "lon": round(sample.lon, 6),
-        "time": f"{_to_local(trip.max_speed_at, offset_hours):%H:%M}",
-        "speed": f"{_nl_num(trip.max_speed_kn)} kn",
+        "time": f"{to_local(trip.max_speed_at, offset_hours):%H:%M}",
+        "speed": f"{nl_num(trip.max_speed_kn)} kn",
         "rpm": rpm_text,
     }
 
@@ -539,9 +539,9 @@ def _details_cell_html(
                 number_text = _i18n_span("map_marker_arrival")
             else:
                 number_text = str(i)
-            local_time = _to_local(entry.time, offset_hours)
-            cog_text = f"{_nl_num(entry.cog_deg, 0)}&deg;" if entry.cog_deg is not None else ""
-            sog_text = f"{_nl_num(entry.sog_ms / _KNOT_IN_MS)} kn"
+            local_time = to_local(entry.time, offset_hours)
+            cog_text = f"{nl_num(entry.cog_deg, 0)}&deg;" if entry.cog_deg is not None else ""
+            sog_text = f"{nl_num(entry.sog_ms / _KNOT_IN_MS)} kn"
             position_text = f"{entry.lat:.4f}, {entry.lon:.4f}"
             # Not a measurement from the boat itself -- regional weather-model data for the
             # nearest grid cell at this hour (see weather.py), one lookup per log row rather than
@@ -550,13 +550,13 @@ def _details_cell_html(
             hourly = weather.hour(entry.lat, entry.lon, entry.time)
             if hourly is not None and hourly.wind_kn is not None and hourly.wind_deg is not None:
                 wind_text = (
-                    f"{_nl_num(hourly.wind_kn)} kn {_compass_abbr(hourly.wind_deg)} "
+                    f"{nl_num(hourly.wind_kn)} kn {_compass_abbr(hourly.wind_deg)} "
                     f"(Bft {_beaufort(hourly.wind_kn)})"
                 )
             else:
                 wind_text = ""
-            precip_text = f"{_nl_num(hourly.precip_mm, 1)} mm" if hourly and hourly.precip_mm is not None else ""
-            cloud_text = f"{_nl_num(hourly.cloud_pct, 0)}%" if hourly and hourly.cloud_pct is not None else ""
+            precip_text = f"{nl_num(hourly.precip_mm, 1)} mm" if hourly and hourly.precip_mm is not None else ""
+            cloud_text = f"{nl_num(hourly.cloud_pct, 0)}%" if hourly and hourly.cloud_pct is not None else ""
             # Not a measurement from the boat itself either -- regional wave/current-model data
             # for the nearest sea grid cell at this hour, from a separate Open-Meteo dataset than
             # the wind/precipitation/cloud data above (see marine.py).
@@ -568,8 +568,8 @@ def _details_cell_html(
                 and hourly_marine.wave_direction_deg is not None
             ):
                 wave_text = (
-                    f"{_nl_num(hourly_marine.wave_height_m)} m, "
-                    f"{_nl_num(hourly_marine.wave_period_s)} s, "
+                    f"{nl_num(hourly_marine.wave_height_m)} m, "
+                    f"{nl_num(hourly_marine.wave_period_s)} s, "
                     f"{_compass_abbr(hourly_marine.wave_direction_deg)}"
                 )
             else:
@@ -580,7 +580,7 @@ def _details_cell_html(
                 and hourly_marine.current_direction_deg is not None
             ):
                 current_text = (
-                    f"{_nl_num(hourly_marine.current_kn)} kn "
+                    f"{nl_num(hourly_marine.current_kn)} kn "
                     f"{_compass_abbr(hourly_marine.current_direction_deg)}"
                 )
             else:
@@ -611,7 +611,7 @@ def _details_cell_html(
 
     if not sections:
         return ""
-    depart_local = _to_local(trip.depart_time, offset_hours)
+    depart_local = to_local(trip.depart_time, offset_hours)
     title = f'<div class="trip-map-title">{_trip_title(trip, depart_local)}</div>'
     dialog = (
         f'<dialog class="log-dialog" id="log-{idx}">{title}{"".join(sections)}'
@@ -661,36 +661,36 @@ def _totals_html(totals: _Totals) -> str:
 
     items = [
         (_i18n_span("totals_trips"), str(totals.trip_count)),
-        (_i18n_span("totals_distance"), f"{_nl_num(totals.distance_nm)} nm"),
+        (_i18n_span("totals_distance"), f"{nl_num(totals.distance_nm)} nm"),
     ]
     # In 3rd/4th place specifically (found in practice: wanted near the top, not buried after
     # every fuel/speed stat).
     if len(totals.engine_hours_current) == 1:
         hours = next(iter(totals.engine_hours_current.values()))
-        items.append((_i18n_span("totals_engine_hour_meter"), f"{_nl_num(hours)} h"))
+        items.append((_i18n_span("totals_engine_hour_meter"), f"{nl_num(hours)} h"))
     else:
         for instance, hours in sorted(totals.engine_hours_current.items()):
             label_html = _i18n_tpl_html("totals_engine_hour_meter_engine", instance=instance)
-            items.append((label_html, f"{_nl_num(hours)} h"))
+            items.append((label_html, f"{nl_num(hours)} h"))
     if len(totals.engine_hours) == 1:
         hours = next(iter(totals.engine_hours.values()))
-        items.append((_i18n_span("totals_hours_logged"), f"{_nl_num(hours)} h"))
+        items.append((_i18n_span("totals_hours_logged"), f"{nl_num(hours)} h"))
     else:
         for instance, hours in sorted(totals.engine_hours.items()):
             label_html = _i18n_tpl_html("totals_hours_logged_engine", instance=instance)
-            items.append((label_html, f"{_nl_num(hours)} h"))
-    items.append((_i18n_span("totals_hours"), f"{_nl_num(totals.moving_hours)} h"))
-    items.append((_i18n_span("totals_fuel_calculated"), f"{_nl_num(totals.fuel_liters)} L"))
+            items.append((label_html, f"{nl_num(hours)} h"))
+    items.append((_i18n_span("totals_hours"), f"{nl_num(totals.moving_hours)} h"))
+    items.append((_i18n_span("totals_fuel_calculated"), f"{nl_num(totals.fuel_liters)} L"))
     if totals.fuel_liters_device is not None:
-        items.append((_i18n_span("totals_fuel_engine_meter"), f"{_nl_num(totals.fuel_liters_device)} L"))
+        items.append((_i18n_span("totals_fuel_engine_meter"), f"{nl_num(totals.fuel_liters_device)} L"))
     if avg_l_per_nm is not None:
-        items.append((_i18n_span("totals_avg_consumption"), f"{_nl_num(avg_l_per_nm, 2)} L/nm"))
+        items.append((_i18n_span("totals_avg_consumption"), f"{nl_num(avg_l_per_nm, 2)} L/nm"))
     if avg_l_per_hour is not None:
-        items.append((_i18n_span("totals_avg_consumption"), f"{_nl_num(avg_l_per_hour)} L/h"))
+        items.append((_i18n_span("totals_avg_consumption"), f"{nl_num(avg_l_per_hour)} L/h"))
     if avg_speed_kn is not None:
-        items.append((_i18n_span("totals_avg_speed"), f"{_nl_num(avg_speed_kn)} kn"))
+        items.append((_i18n_span("totals_avg_speed"), f"{nl_num(avg_speed_kn)} kn"))
     if totals.max_speed_kn is not None:
-        items.append((_i18n_span("totals_top_speed"), f"{_nl_num(totals.max_speed_kn)} kn"))
+        items.append((_i18n_span("totals_top_speed"), f"{nl_num(totals.max_speed_kn)} kn"))
 
     cards = "".join(
         f'<div class="stat"><div class="stat-label">{label_html}</div>'
@@ -712,9 +712,9 @@ def _trip_row_html(
     utc_offset_hours: Optional[float],
     trip_uid: Optional[str] = None,
     battery_warning_voltage: Optional[float] = None,
-    log_interval_minutes: float = _DEFAULT_LOG_INTERVAL_MINUTES,
+    log_interval_minutes: float = DEFAULT_LOG_INTERVAL_MINUTES,
     seq: Optional[int] = None,
-    remarks_api_url: str = _DEFAULT_REMARKS_API_URL,
+    remarks_api_url: str = DEFAULT_REMARKS_API_URL,
     weather=None,
     marine=None,
 ) -> str:
@@ -722,10 +722,10 @@ def _trip_row_html(
         weather = NoWeather()
     if marine is None:
         marine = NoMarine()
-    offset = _trip_utc_offset_hours(trip, utc_offset_hours)
-    depart_local = _to_local(trip.depart_time, offset)
-    arrive_local = _to_local(trip.arrive_time, offset)
-    avg_consumption_nm = _avg_consumption_l_per_nm(trip)
+    offset = trip_utc_offset_hours(trip, utc_offset_hours)
+    depart_local = to_local(trip.depart_time, offset)
+    arrive_local = to_local(trip.arrive_time, offset)
+    avg_consumption_nm = avg_consumption_l_per_nm(trip)
 
     map_cell = (
         f'<button class="show-map" data-trip="{idx}">{_i18n_span("map_button_show")}</button>'
@@ -736,7 +736,7 @@ def _trip_row_html(
     # column -- found in practice, asked for explicitly: a whole column that's empty for the
     # overwhelming majority of trips wasn't worth the width, and this reads just as clearly right
     # next to the hours themselves.
-    engine_hours_cell = escape(_engine_hours_text(trip))
+    engine_hours_cell = escape(engine_hours_text(trip))
     warnings_html = _warnings_html(trip, battery_warning_voltage, offset)
     if warnings_html:
         engine_hours_cell += f" ({warnings_html})"
@@ -748,12 +748,12 @@ def _trip_row_html(
         _place_html(trip.depart_place),
         arrive_local.strftime("%H:%M"),
         _place_html(trip.arrive_place),
-        _format_duration(trip.duration),
-        f"{_nl_num(trip.distance_nm)} nm",
-        _nl_num(trip.avg_speed_kn) + " kn" if trip.avg_speed_kn is not None else "",
+        format_duration(trip.duration),
+        f"{nl_num(trip.distance_nm)} nm",
+        nl_num(trip.avg_speed_kn) + " kn" if trip.avg_speed_kn is not None else "",
         _max_speed_html(trip, offset),
-        _nl_num(trip.fuel_liters) + " L",
-        f"{_nl_num(avg_consumption_nm, 2)} L/nm" if avg_consumption_nm is not None else "",
+        nl_num(trip.fuel_liters) + " L",
+        f"{nl_num(avg_consumption_nm, 2)} L/nm" if avg_consumption_nm is not None else "",
         engine_hours_cell,
         _typical_rpm_html(trip),
         map_cell,
@@ -841,7 +841,7 @@ _HEADER_KEYS = [
 
 def _headers_for(remarks_api_url: str) -> List[str]:
     """The Remarks column only exists at all when the feature is configured (see
-    _DEFAULT_REMARKS_API_URL) -- unlike Route/Details, whose *column* always exists even though
+    DEFAULT_REMARKS_API_URL) -- unlike Route/Details, whose *column* always exists even though
     individual trips without track data leave that cell empty, "remarks enabled" is a whole-
     document setting, not a per-trip one, so an unused column isn't shown at all rather than
     always being present-but-empty."""
@@ -858,8 +858,8 @@ def write_html_logbook(
     trip_uids: Optional[List[str]] = None,
     battery_warning_voltage: Optional[float] = None,
     latest_data_at: Optional[datetime] = None,
-    log_interval_minutes: float = _DEFAULT_LOG_INTERVAL_MINUTES,
-    remarks_api_url: str = _DEFAULT_REMARKS_API_URL,
+    log_interval_minutes: float = DEFAULT_LOG_INTERVAL_MINUTES,
+    remarks_api_url: str = DEFAULT_REMARKS_API_URL,
     weather=None,
     marine=None,
     geocoder=None,
@@ -919,14 +919,14 @@ def write_html_logbook(
         # arrival, e.g. while anchored) -- the most recent trip's own offset is still the best
         # available estimate of the current local timezone, since the boat is very unlikely to
         # have jumped somewhere wildly different since then.
-        offset = _trip_utc_offset_hours(trips[-1], utc_offset_hours) if trips else (utc_offset_hours or 0.0)
-        latest_local = _to_local(latest_data_at, offset)
+        offset = trip_utc_offset_hours(trips[-1], utc_offset_hours) if trips else (utc_offset_hours or 0.0)
+        latest_local = to_local(latest_data_at, offset)
         last_updated_html = (
             f'<div class="last-updated">{_i18n_span("last_updated")}: {latest_local:%Y-%m-%d %H:%M}</div>'
         )
         if latest_position is not None:
             place = geocoder.place_name(latest_position.lat, latest_position.lon)
-            position_time_local = _to_local(latest_position.time, offset)
+            position_time_local = to_local(latest_position.time, offset)
             # A small in-page map popup (asked for explicitly), not the external Google Maps link
             # this used to be -- that link never worked from inside the Android app's WebView
             # (target="_blank" has nowhere to go there, same class of problem the Overzicht map's
@@ -958,8 +958,8 @@ def write_html_logbook(
     # the calendar one.
     by_week: Dict[Tuple[int, int, int], List[int]] = defaultdict(list)
     for idx, trip in enumerate(trips):
-        offset = _trip_utc_offset_hours(trip, utc_offset_hours)
-        local_date = _to_local(trip.depart_time, offset).date()
+        offset = trip_utc_offset_hours(trip, utc_offset_hours)
+        local_date = to_local(trip.depart_time, offset).date()
         iso_year, iso_week, _ = local_date.isocalendar()
         by_week[(local_date.year, iso_year, iso_week)].append(idx)
 
@@ -1053,14 +1053,14 @@ def write_html_logbook(
             "departPos": [round(trip.depart_lat, 6), round(trip.depart_lon, 6)],
             "arrivePos": [round(trip.arrive_lat, 6), round(trip.arrive_lon, 6)],
             "log": _map_log_points(
-                trip, _trip_utc_offset_hours(trip, utc_offset_hours), log_interval_minutes
+                trip, trip_utc_offset_hours(trip, utc_offset_hours), log_interval_minutes
             ),
-            "maxSpeed": _max_speed_marker(trip, _trip_utc_offset_hours(trip, utc_offset_hours)),
+            "maxSpeed": _max_speed_marker(trip, trip_utc_offset_hours(trip, utc_offset_hours)),
             # Only used by the "Overzicht" season map (see the <dialog id="overview-dialog">
             # further down) -- seq is the same 1-based per-year number as the table's own "Nr."
             # column (seq_by_index_all, built alongside year_trip_indices above).
             "seq": seq_by_index_all.get(idx),
-            "date": _to_local(trip.depart_time, _trip_utc_offset_hours(trip, utc_offset_hours)).strftime("%Y-%m-%d"),
+            "date": to_local(trip.depart_time, trip_utc_offset_hours(trip, utc_offset_hours)).strftime("%Y-%m-%d"),
             # Split, not the raw geocode.py string, so the Overzicht map's own JS-built tooltips
             # (built fresh from TRIPS every time the map is opened, see formatPlace() below) follow
             # the page's language switcher instead of a fallback place name staying stuck in the

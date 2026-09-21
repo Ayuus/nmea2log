@@ -14,7 +14,7 @@ from nmea2log.cli import (
 )
 from nmea2log.pipeline import (
     _collect_samples,
-    _discover_ebl_files,
+    discover_ebl_files,
     _dominant_source_only,
     _filter_to_dominant_engine,
     _merge_array_by_source,
@@ -204,7 +204,7 @@ def test_discover_ebl_files_finds_files_recursively(tmp_path: Path):
     (tmp_path / "EBL000001" / "000001_000.ebl").write_bytes(b"")
     (tmp_path / "EBL000000" / "readme.txt").write_text("not an ebl file")
 
-    found = _discover_ebl_files(tmp_path)
+    found = discover_ebl_files(tmp_path)
 
     assert found == sorted(
         [tmp_path / "EBL000000" / "000000_000.ebl", tmp_path / "EBL000001" / "000001_000.ebl"]
@@ -212,7 +212,7 @@ def test_discover_ebl_files_finds_files_recursively(tmp_path: Path):
 
 
 def test_discover_ebl_files_empty_dir(tmp_path: Path):
-    assert _discover_ebl_files(tmp_path) == []
+    assert discover_ebl_files(tmp_path) == []
 
 
 def test_ebl_dir_config_default_applies_when_not_given_on_the_command_line(tmp_path, monkeypatch):
