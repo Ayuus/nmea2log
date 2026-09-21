@@ -69,6 +69,13 @@ def _distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 _LANDMARK_MAX_RETRIES = 2
 
+# After this many landmark checks in a row that failed on every retry, Overpass is left alone for the rest of
+# the run: when the public instance is overloaded or refuses connections it stays that way for hours (34 of 39
+# failing lookups were given up in one real 25-trip run), and every further lookup only adds its retries and
+# waits without ever succeeding. The places involved keep Nominatim's name and are not cached (see
+# Geocoder._lookup), so a later run tries the check again.
+_LANDMARK_GIVE_UP_AFTER = 3
+
 # Same reasoning as _LANDMARK_MAX_RETRIES below, applied to the main Nominatim reverse-geocode
 # request itself -- found in practice, a real, reproducible-in-isolation flake: the exact same
 # coordinate that failed with a dropped connection mid-run resolved correctly on every one of 4
@@ -260,6 +267,8 @@ class Geocoder:
         self.precision = precision
         self._cache: dict[str, str] = {}
         self._last_request = 0.0
+        self._landmark_failures_in_a_row = 0
+        self._landmark_check_switched_off = False
         if cache_file is not None and cache_file.exists():
             self._cache = self._migrate_cache_precision(json.loads(cache_file.read_text(encoding="utf-8")))
 
@@ -385,7 +394,7 @@ class Geocoder:
         self._last_request = time.monotonic()
         # A nearby islet/lock/bridge's own name always beats whatever Nominatim's plain reverse
         # lookup happened to match instead -- see _nearby_landmark_name.
-        landmark_name, landmark_check_ok = _nearby_landmark_name(lat, lon, self.user_agent)
+        landmark_name, landmark_check_ok = self._landmark_check(lat, lon)
         self._last_request = time.monotonic()
         if landmark_name:
             return landmark_name, True
@@ -395,6 +404,26 @@ class Geocoder:
         # wrong name, that's the whole reason the check exists -- would get permanently stuck in
         # the cache even once Overpass is reachable again on a later run.
         return place, landmark_check_ok
+
+    def _landmark_check(self, lat: float, lon: float) -> Tuple[Optional[str], bool]:
+        """_nearby_landmark_name, unless Overpass has been given up on for this run (see
+        _LANDMARK_GIVE_UP_AFTER): then no request at all, and ``ok`` False like for a failed check."""
+        if self._landmark_check_switched_off:
+            return None, False
+        name, ok = _nearby_landmark_name(lat, lon, self.user_agent)
+        if ok:
+            self._landmark_failures_in_a_row = 0
+            return name, ok
+        self._landmark_failures_in_a_row += 1
+        if self._landmark_failures_in_a_row >= _LANDMARK_GIVE_UP_AFTER:
+            self._landmark_check_switched_off = True
+            log(
+                f"[geocode] Overpass landmark check switched off for the rest of this run: "
+                f"{self._landmark_failures_in_a_row} lookups in a row failed on every attempt. The places "
+                "after this keep Nominatim's own name and are not cached, so a later run tries the check again.",
+                file=sys.stderr,
+            )
+        return name, ok
 
     def _save_cache(self) -> None:
         if self.cache_file is None:

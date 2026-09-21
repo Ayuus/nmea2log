@@ -495,6 +495,86 @@ def test_place_name_falls_back_to_nominatim_when_no_landmark_nearby(monkeypatch,
     assert geocoder.place_name(47.5707, -2.8853) == "Kerners"
 
 
+def _overpass_that(monkeypatch, outcomes: dict):
+    """urlopen fake: Nominatim always answers "Kerners"; Overpass fails or answers "no landmark" depending on
+    ``outcomes["overpass_fails"]``. Returns the list of Overpass requests made."""
+    overpass_requests = []
+
+    def fake_urlopen(request, timeout=10):
+        if "overpass-api.de" in request.full_url:
+            overpass_requests.append(request.full_url)
+            if outcomes["overpass_fails"]:
+                raise urllib.error.HTTPError(request.full_url, 429, "Too Many Requests", None, None)
+            return _FakeResponse({"elements": []})
+        return _FakeResponse({"address": {"village": "Kerners"}})
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr("nmea2log.geocode.time.sleep", lambda s: None)
+    return overpass_requests
+
+
+def test_overpass_is_left_alone_after_three_lookups_in_a_row_failed(monkeypatch, tmp_path):
+    outcomes = {"overpass_fails": True}
+    overpass_requests = _overpass_that(monkeypatch, outcomes)
+    geocoder = Geocoder(cache_file=tmp_path / "cache.json")
+
+    for i in range(3):
+        assert geocoder.place_name(47.50 + i * 0.1, -2.88) == "Kerners"
+    assert len(overpass_requests) == 3 * 3  # three lookups, each with its three attempts
+
+    assert geocoder.place_name(47.90, -2.88) == "Kerners"  # still gets a name, from Nominatim alone
+    assert len(overpass_requests) == 3 * 3  # ...without another Overpass request
+
+
+def test_a_place_looked_up_without_overpass_is_not_cached(monkeypatch, tmp_path):
+    outcomes = {"overpass_fails": True}
+    _overpass_that(monkeypatch, outcomes)
+    cache_file = tmp_path / "cache.json"
+    geocoder = Geocoder(cache_file=cache_file)
+    for i in range(3):
+        geocoder.place_name(47.50 + i * 0.1, -2.88)
+    geocoder.place_name(47.90, -2.88)
+
+    assert not cache_file.exists() or json.loads(cache_file.read_text(encoding="utf-8")) == {}
+
+    # A later run (new Geocoder) with Overpass back: the check is tried again and the place is cached.
+    outcomes["overpass_fails"] = False
+    later = Geocoder(cache_file=cache_file)
+    assert later.place_name(47.90, -2.88) == "Kerners"
+    assert json.loads(cache_file.read_text(encoding="utf-8")) == {"47.9,-2.88": "Kerners"}
+
+
+def test_a_lookup_that_works_starts_the_count_over(monkeypatch, tmp_path):
+    outcomes = {"overpass_fails": True}
+    overpass_requests = _overpass_that(monkeypatch, outcomes)
+    geocoder = Geocoder(cache_file=tmp_path / "cache.json")
+
+    geocoder.place_name(47.50, -2.88)
+    geocoder.place_name(47.60, -2.88)
+    outcomes["overpass_fails"] = False
+    geocoder.place_name(47.70, -2.88)  # works: two failures so far no longer count
+    outcomes["overpass_fails"] = True
+    geocoder.place_name(47.80, -2.88)
+    geocoder.place_name(47.90, -2.88)
+    requests_before = len(overpass_requests)
+    geocoder.place_name(48.00, -2.88)  # the third failure since the success: still tried
+    assert len(overpass_requests) == requests_before + 3
+
+    geocoder.place_name(48.10, -2.88)  # now switched off
+    assert len(overpass_requests) == requests_before + 3
+
+
+def test_switching_overpass_off_is_logged_once(monkeypatch, tmp_path, capsys):
+    outcomes = {"overpass_fails": True}
+    _overpass_that(monkeypatch, outcomes)
+    geocoder = Geocoder(cache_file=tmp_path / "cache.json")
+
+    for i in range(6):
+        geocoder.place_name(47.50 + i * 0.1, -2.88)
+
+    assert capsys.readouterr().err.count("Overpass landmark check switched off") == 1
+
+
 def test_place_name_ignores_a_failed_landmark_check(monkeypatch, tmp_path):
     """A failed Overpass lookup (timeout, unreachable, ...) must not break geocoding entirely --
     just falls back to the plain Nominatim result, same as if no landmark had been found."""
