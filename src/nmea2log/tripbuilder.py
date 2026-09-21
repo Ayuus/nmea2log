@@ -267,7 +267,8 @@ _CLOCK_JUMP_THRESHOLD_HOURS = CLOCK_JUMP_THRESHOLD_S / 3600.0  # see fix_array.p
 # fix after at least _POWER_ON_GAP_S without any accepted one, or the very first fix -- are that
 # known behaviour and logged as plain info; anything dropped elsewhere is a real [anomaly].
 _POWER_ON_GAP_S = 300.0
-_POWER_ON_SETTLE_S = 120.0
+# 5 minutes: settling took ~30 s at most start-ups, but 3 minutes (a second burst) at one (31 July).
+_POWER_ON_SETTLE_S = 300.0
 
 
 def _reject_gps_outliers_array(fixes: FixArray, sogs: Optional[SogArray] = None) -> FixArray:
@@ -396,7 +397,8 @@ def _reject_gps_outliers_array(fixes: FixArray, sogs: Optional[SogArray] = None)
             )
         if elsewhere.total:
             log(
-                f"[anomaly] Position fixes: dropped {elsewhere.total} fix(es) {what}, at {elsewhere.describe()} -- "
+                f"[anomaly] Position fixes: dropped {elsewhere.total} fix(es) {what}, at {elsewhere.describe()}, "
+                f"more than {_POWER_ON_SETTLE_S:.0f} s after a power-on -- "
                 f"a GPS position jump or corrupted position data in the source, worth a look if it keeps happening."
             )
     # Written back into `fixes`' own columns (see FixArray.replace_columns_with's own docstring)

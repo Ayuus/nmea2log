@@ -542,7 +542,7 @@ pytest
   the last accepted one than the receiver's own speed over ground allows; (3) one that implies more
   than 60 kn. Layers 2 and 3 exist because a receiver can report a perfectly good fix (3D, HDOP
   1.1–1.8) while its position still glides for ~30 s after power-on, so no fix-quality rule catches
-  that. Drops within 120 s of a power-on are known behaviour and logged as `[info]`; drops anywhere
+  that. Drops within 5 minutes (300 s) of a power-on are known behaviour and logged as `[info]` (the window is named in the line); drops anywhere
   else are logged as `[anomaly]` (a source-data problem worth investigating).
 - **Time comes from PGN 126992, and more than one device may send it** (found on a real boat: two,
   clocks 1–2 s apart). The reader trusts the source with the most messages so far; that choice

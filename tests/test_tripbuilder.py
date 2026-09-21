@@ -15,6 +15,7 @@ from nmea2log.model import (
 )
 from nmea2log.fix_array import FixArray, SogArray
 from nmea2log.tripbuilder import (
+    _POWER_ON_SETTLE_S,
     _reject_gps_outliers_array,
     build_trips,
     resolve_trip_places,
@@ -348,16 +349,18 @@ def test_reject_gps_outliers_array_reports_time_anomalies_and_corrupted_fixes(lo
         PositionFix(base, 46.9, -2.38),
         PositionFix(base + timedelta(seconds=10), 46.9001, -2.3801),
         PositionFix(base + timedelta(seconds=5), 46.9002, -2.3802),  # steps backward in time
-        PositionFix(base + timedelta(seconds=200), 46.9003, -2.3803),  # well after power-on...
-        PositionFix(base + timedelta(seconds=201), -78.6, -60.8),  # ...then ~7800 nm away in a second
     ]
+    for seconds in (100, 200, 300, 400):  # a steady stream, well past the power-on window, no long gap
+        fixes.append(PositionFix(base + timedelta(seconds=seconds), 46.9003, -2.3803))
+    fixes.append(PositionFix(base + timedelta(seconds=401), -78.6, -60.8))  # ...then ~7800 nm away in a second
 
     _reject_gps_outliers_array(FixArray(fixes))
 
     out = "\n".join(log_lines)
     assert "[anomaly] Position fixes: dropped 1 row(s) that went backward in time" in out
     assert "[anomaly] Position fixes: dropped 1 fix(es) implying more than 60 kn" in out
-    assert "at 2026-08-25 08:17:16 UTC (1 fix)" in out  # when: a start-up glitch vs. mid-trip
+    assert "at 2026-08-25 08:20:36 UTC (1 fix)" in out  # when: a start-up glitch vs. mid-trip
+    assert "more than 300 s after a power-on" in out  # and what "later" means
 
 
 def test_reject_gps_outliers_array_stays_quiet_for_equal_timestamps(log_lines):
@@ -400,9 +403,9 @@ def test_outlier_log_lines_list_separate_stretches_and_cap_how_many(log_lines):
     that keeps glitching must not produce an unbounded line."""
     fixes = [_fix_north_of(47.83745, 0, 0)]
     for k in range(1, 11):  # ten separate one-fix jumps, an hour apart, each well after its power-on
-        fixes.append(_fix_north_of(47.83745, 0, 3600 * k))
-        fixes.append(_fix_north_of(47.83745, 0, 3600 * k + 200))
-        fixes.append(_fix_north_of(47.83745, 400000, 3600 * k + 201))  # 400 km in a second
+        for seconds in (0, 100, 200, 300, 400):
+            fixes.append(_fix_north_of(47.83745, 0, 3600 * k + seconds))
+        fixes.append(_fix_north_of(47.83745, 400000, 3600 * k + 401))  # 400 km in a second
     _reject_gps_outliers_array(FixArray(fixes), None)
 
     out = "\n".join(log_lines)
@@ -422,25 +425,26 @@ def test_drops_right_after_power_on_are_info_not_an_anomaly(log_lines):
 
     out = "\n".join(log_lines)
     assert "[info] Position fixes: dropped 2 fix(es) that moved much further" in out
-    assert "within 120 s of a power-on" in out
+    assert f"within {_POWER_ON_SETTLE_S:.0f} s of a power-on" in out
     assert "[anomaly]" not in out
 
 
 def test_a_drop_well_after_power_on_is_still_an_anomaly(log_lines):
-    start = _fix_north_of(47.83745, 0, 0)
-    fixes = FixArray([start, _fix_north_of(47.83745, 0, 200), _fix_north_of(47.83745, 30, 201)])
+    fixes = FixArray([_fix_north_of(47.83745, 0, seconds) for seconds in (0, 100, 200, 300, 400)])
+    fixes.append(_fix_north_of(47.83745, 30, 401))  # glides, but 401 s after power-on: outside the window
     sogs = SogArray([_sog_at(0, 0.3)])
 
     _reject_gps_outliers_array(fixes, sogs)
 
     out = "\n".join(log_lines)
     assert "[anomaly] Position fixes: dropped 1 fix(es) that moved much further" in out
-    assert "power-on" not in out
+    assert "more than 300 s after a power-on" in out
+    assert "[info]" not in out
 
 
 def test_a_long_gap_starts_a_new_power_on_window(log_lines):
     """The first fix after >= 5 minutes without any is a new power-on: what the receiver does in
-    the next two minutes is start-up settling again, however long into the data that is."""
+    the next five minutes is start-up settling again, however long into the data that is."""
     fixes = FixArray([
         _fix_north_of(47.83745, 0, 0),
         _fix_north_of(47.83745, 0, 3600),  # hour-long gap: a new power-on
