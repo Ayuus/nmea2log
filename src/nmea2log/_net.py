@@ -6,8 +6,11 @@ from __future__ import annotations
 import queue
 import socket
 import threading
+import sys
 import urllib.request
 from typing import Any
+
+from .log import log
 
 
 def _call_with_timeout(func, args, timeout: float):
@@ -87,3 +90,35 @@ def urlopen_ipv4_first(request: urllib.request.Request, timeout: float) -> Any:
         return urllib.request.urlopen(request, timeout=timeout)
     finally:
         socket.getaddrinfo = original_getaddrinfo
+
+
+class FailureBreaker:
+    """Leaves a web service alone for the rest of a run once it has clearly stopped answering.
+
+    Fed one result per lookup (``record(ok)``, ok=False when the lookup failed on every retry it had). After
+    ``limit`` failed lookups in a row the breaker is ``off``: callers skip the service, so the run no longer
+    pays its retries and waits for nothing. The public services used here (Overpass, Nominatim, Open-Meteo) stay
+    overloaded or unreachable for hours when they do (34 of 39 failing Overpass lookups were given up in one
+    real 25-trip run), and the places or days involved are not cached when their lookup failed, so a later run
+    simply tries again. A lookup that works starts the count over. Logs once when it switches off."""
+
+    def __init__(self, service: str, tag: str, consequence: str, limit: int = 3) -> None:
+        self._service = service
+        self._tag = tag
+        self._consequence = consequence
+        self._limit = limit
+        self._failed_in_a_row = 0
+        self.off = False
+
+    def record(self, ok: bool) -> None:
+        if ok:
+            self._failed_in_a_row = 0
+            return
+        self._failed_in_a_row += 1
+        if self._failed_in_a_row >= self._limit and not self.off:
+            self.off = True
+            log(
+                f"[{self._tag}] {self._service} switched off for the rest of this run: {self._failed_in_a_row} "
+                f"lookups in a row failed on every attempt. {self._consequence}",
+                file=sys.stderr,
+            )

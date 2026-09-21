@@ -23,10 +23,12 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from ._net import urlopen_ipv4_first
+from ._net import FailureBreaker, urlopen_ipv4_first
 from .log import log
 
-_MAX_RETRIES = 5
+# The first attempt plus 2 retries: the same as Nominatim and Overpass (see geocode.py). More never paid off:
+# when the service is down, the extra attempts fail too (see FailureBreaker).
+_MAX_RETRIES = 2
 # Open-Meteo has no documented per-second limit like Nominatim's, but requests fired back-to-back
 # (one per day/position, no gap) were found in practice to get reset by the server about a third
 # of the time (WinError 10054 / connection reset) -- spacing them out the same way Geocoder does
@@ -73,6 +75,10 @@ class OpenMeteoDayFetcher:
         self.user_agent = user_agent
         self._cache: Dict[str, Optional[DayData]] = {}
         self._last_request = 0.0
+        self._breaker = FailureBreaker(
+            "Open-Meteo", self._LOG_TAG,
+            "The days after this show no data and are not cached, so a later run fetches them again.",
+        )
         if cache_file is not None and cache_file.exists():
             self._cache = json.loads(cache_file.read_text(encoding="utf-8"))
 
@@ -115,6 +121,8 @@ class OpenMeteoDayFetcher:
             }
         )
         request = urllib.request.Request(f"{self._API_URL}?{params}", headers={"User-Agent": self.user_agent})
+        if self._breaker.off:
+            return None  # given up on for this run: like a failed request, so not cached
         payload = None
         for attempt in range(_MAX_RETRIES + 1):
             if attempt:
@@ -134,6 +142,7 @@ class OpenMeteoDayFetcher:
                     f"-- attempt {attempt + 1}/{_MAX_RETRIES + 1}",
                     file=sys.stderr,
                 )
+        self._breaker.record(payload is not None)
         if payload is None:
             return None  # best-effort: the caller shows no data for this day rather than crashing
         return self._parse_hourly(payload.get("hourly", {}))

@@ -18,7 +18,7 @@ import urllib.request
 from pathlib import Path
 from typing import Optional, Tuple
 
-from ._net import urlopen_ipv4_first
+from ._net import FailureBreaker, urlopen_ipv4_first
 from .log import log
 
 _NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
@@ -69,12 +69,6 @@ def _distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 _LANDMARK_MAX_RETRIES = 2
 
-# After this many landmark checks in a row that failed on every retry, Overpass is left alone for the rest of
-# the run: when the public instance is overloaded or refuses connections it stays that way for hours (34 of 39
-# failing lookups were given up in one real 25-trip run), and every further lookup only adds its retries and
-# waits without ever succeeding. The places involved keep Nominatim's name and are not cached (see
-# Geocoder._lookup), so a later run tries the check again.
-_LANDMARK_GIVE_UP_AFTER = 3
 
 # Same reasoning as _LANDMARK_MAX_RETRIES below, applied to the main Nominatim reverse-geocode
 # request itself -- found in practice, a real, reproducible-in-isolation flake: the exact same
@@ -267,8 +261,15 @@ class Geocoder:
         self.precision = precision
         self._cache: dict[str, str] = {}
         self._last_request = 0.0
-        self._landmark_failures_in_a_row = 0
-        self._landmark_check_switched_off = False
+        # See FailureBreaker: what happens to the places once a service has been given up on for this run.
+        self._nominatim_breaker = FailureBreaker(
+            "Nominatim", "geocode",
+            "The places after this show only their coordinates and are not cached, so a later run looks them up again.",
+        )
+        self._landmark_breaker = FailureBreaker(
+            "Overpass landmark check", "geocode",
+            "The places after this keep Nominatim's own name and are not cached, so a later run tries the check again.",
+        )
         if cache_file is not None and cache_file.exists():
             self._cache = self._migrate_cache_precision(json.loads(cache_file.read_text(encoding="utf-8")))
 
@@ -361,6 +362,8 @@ class Geocoder:
         request = urllib.request.Request(
             f"{_NOMINATIM_URL}?{params}", headers={"User-Agent": self.user_agent}
         )
+        if self._nominatim_breaker.off:
+            return f"Onbekend ({lat:.4f}, {lon:.4f})", False
         payload = None
         last_exc: Optional[Exception] = None
         for attempt in range(_NOMINATIM_MAX_RETRIES + 1):
@@ -383,6 +386,7 @@ class Geocoder:
                     f"{attempt + 1}/{_NOMINATIM_MAX_RETRIES + 1}",
                     file=sys.stderr,
                 )
+        self._nominatim_breaker.record(payload is not None)
         if payload is None:
             # Just "Onbekend (lat, lon)", not the full exception text -- asked for explicitly:
             # the raw urllib error (a whole "<urlopen error [WinError 10054] ...>" sentence) read
@@ -406,23 +410,12 @@ class Geocoder:
         return place, landmark_check_ok
 
     def _landmark_check(self, lat: float, lon: float) -> Tuple[Optional[str], bool]:
-        """_nearby_landmark_name, unless Overpass has been given up on for this run (see
-        _LANDMARK_GIVE_UP_AFTER): then no request at all, and ``ok`` False like for a failed check."""
-        if self._landmark_check_switched_off:
+        """_nearby_landmark_name, unless Overpass has been given up on for this run: then no request at all,
+        and ``ok`` False like for a failed check."""
+        if self._landmark_breaker.off:
             return None, False
         name, ok = _nearby_landmark_name(lat, lon, self.user_agent)
-        if ok:
-            self._landmark_failures_in_a_row = 0
-            return name, ok
-        self._landmark_failures_in_a_row += 1
-        if self._landmark_failures_in_a_row >= _LANDMARK_GIVE_UP_AFTER:
-            self._landmark_check_switched_off = True
-            log(
-                f"[geocode] Overpass landmark check switched off for the rest of this run: "
-                f"{self._landmark_failures_in_a_row} lookups in a row failed on every attempt. The places "
-                "after this keep Nominatim's own name and are not cached, so a later run tries the check again.",
-                file=sys.stderr,
-            )
+        self._landmark_breaker.record(ok)
         return name, ok
 
     def _save_cache(self) -> None:

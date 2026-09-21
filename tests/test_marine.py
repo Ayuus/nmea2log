@@ -4,6 +4,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime
 
+from nmea2log import open_meteo
 from nmea2log.marine import HourlyMarine, MarineFetcher, NoMarine
 
 
@@ -152,7 +153,7 @@ def test_failed_request_is_not_cached(monkeypatch, tmp_path):
     assert not cache_file.exists()
 
     fetcher.hour(47.5, -2.5, datetime(2026, 8, 5, 8, 0))
-    assert call_count == 2 * (5 + 1)  # both lookups retried the full _MAX_RETRIES + 1 attempts
+    assert call_count == 2 * (open_meteo._MAX_RETRIES + 1)  # both lookups used the full retry budget
 
 
 def test_remote_disconnected_is_treated_as_a_failed_lookup_not_a_crash(monkeypatch, tmp_path):
