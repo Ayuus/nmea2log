@@ -67,7 +67,7 @@ _RPM_BUCKET = 50  # round RPM to the nearest multiple of this before taking the 
 # data until the affected trips aged out of the cache on their own -- on a real device, that's
 # potentially never. Included in config_signature() specifically so a bump here always forces a
 # one-time full rebuild instead.
-TRIP_LOGIC_VERSION = 4
+TRIP_LOGIC_VERSION = 5
 _RPM_STABLE_MINUTES = 2.0  # a run at the typical RPM bucket must last at least this long to
 # count as steady cruising rather than a brief pass-through while accelerating/decelerating
 
@@ -807,6 +807,8 @@ def _merge_negligible_trips(
     parameter -- both ask the same underlying question ("did the boat stay confined to about this
     radius the whole time"), and this stays off automatically when lock/bridge detection itself is
     off (``lock_radius_m=None``), consistent with that setting's existing on/off behavior.
+    Such a confined run is never spliced onto the preceding trip (it reaches nowhere new, so
+    there is no route to extend): it just becomes part of the stay it sits in.
 
     Falls back to just relabelling it "stationary" -- merged into the surrounding stay, same as
     any other stationary period, contributing to its averaged position -- when there's no
@@ -834,11 +836,15 @@ def _merge_negligible_trips(
             last_moving_group = None  # a real data gap -- never splice/merge across it
         prev_end_time = _group_end_time(samples, group)
 
-        is_negligible = _trip_distance_nm(samples, group) < min_leg_distance_nm or (
-            lock_radius_m is not None and _spatial_spread_m(samples, group) <= lock_radius_m
-        )
+        confined = lock_radius_m is not None and _spatial_spread_m(samples, group) <= lock_radius_m
+        is_negligible = confined or _trip_distance_nm(samples, group) < min_leg_distance_nm
         if label == "moving" and is_negligible:
-            if last_moving_group is not None:
+            # A confined run is idle-at-the-quay noise: it reaches nowhere new, so there is no
+            # route to extend, and splicing it onto the earlier trip would add its whole duration
+            # and path length to a trip that ended before the boat sat there (found in practice:
+            # a 21-minute trip reported as 0:54 because 33 minutes of SOG noise 27 minutes after
+            # arriving were appended to it).
+            if last_moving_group is not None and not confined:
                 last_moving_group.extend(group)
                 continue
             label = "stationary"

@@ -1282,6 +1282,34 @@ def test_noisy_low_speed_blip_is_folded_by_spatial_spread_even_though_its_path_l
     assert trips == []  # no bogus trip -- folded entirely into one continuous stay
 
 
+def test_confined_blip_after_a_stay_is_not_added_to_the_preceding_trip():
+    """Regression test for a real bug found on the tablet (Arzal, 2026-09-12): a 21-minute trip was
+    reported with a 0:54 duration. After arriving and sitting still, 33 minutes of SOG noise
+    (boat confined within a few metres) counted as a "negligible" moving run and got spliced onto
+    the end of the *earlier* trip, adding its duration and path length to it -- even though the
+    boat had already arrived. A confined run just belongs to the stay it sits in."""
+    fixes, sogs, engine_samples = _build_scenario()  # stay, 30 min trip (m 12..41), stay from m 42
+    for m in range(54, 54 + 60):  # idle at the quay: SOG noise just over the threshold, ~4.5 m jitter
+        lat = 52.40 if m % 2 == 0 else 52.40 + 0.00004
+        fixes.append(PositionFix(_dt(m), lat, 4.95))
+        sogs.append(SogSample(_dt(m), 0.6))
+        engine_samples.append(EngineSample(_dt(m), 0, 0.5, 3600 * 100 + m * 60))
+    for m in range(114, 114 + 12):
+        fixes.append(PositionFix(_dt(m), 52.40, 4.95))
+        sogs.append(SogSample(_dt(m), 0.0))
+        engine_samples.append(EngineSample(_dt(m), 0, 0.5, 3600 * 100 + m * 60))
+
+    trips = build_trips(
+        fixes, sogs, engine_samples, speed_threshold_kn=0.5, min_stop_minutes=10,
+        min_leg_distance_nm=0.2, lock_radius_m=10.0,
+    )
+
+    assert len(trips) == 1
+    assert trips[0].arrive_time == _dt(42)
+    assert trips[0].duration == timedelta(minutes=29)  # the underway stretch only, m 12..41
+    assert trips[0].distance_nm == pytest.approx(6.28, abs=0.05)  # the underway leg only (0.10 deg lat, 0.05 deg lon)
+
+
 def test_noisy_low_speed_blip_is_not_folded_when_lock_radius_m_is_none():
     """Same scenario as above, but without lock/bridge detection opted in (lock_radius_m=None,
     build_trips()'s own default): the new spatial-spread check stays off, same as before this fix
