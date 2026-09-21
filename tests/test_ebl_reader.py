@@ -4,7 +4,7 @@ from pathlib import Path
 
 import random
 
-from nmea2log.ebl_reader import _iter_raw_records, iter_frames, restore_time_state, snapshot_time_state
+from nmea2log.ebl_reader import _iter_raw_records, _parse_can_id, iter_frames, restore_time_state, snapshot_time_state
 
 _ESC = 0x1B
 _SOH = 0x01
@@ -376,6 +376,36 @@ def test_raw_record_framing_matches_a_byte_by_byte_reference_on_arbitrary_stream
     for _ in range(3000):
         data = bytes(rng.choice(alphabet) for _ in range(rng.randint(0, 60)))
         assert list(_iter_raw_records(data)) == list(_reference_raw_records(data)), data.hex()
+
+
+def test_raw_record_pgn_filter_equals_filtering_the_reference_records_afterwards():
+    """With wanted_pgns the framing drops the other records before making a bytes object for them:
+    that must yield exactly the records a full read would have, filtered by their PGN."""
+    rng = random.Random(7)
+    wanted = frozenset({129025, 126992, 127257})
+    pgn_bytes = [  # (PS, PF, data page): the three wanted PGNs and a few that are not
+        (0x01, 0xF8, 0x01), (0x10, 0xF0, 0x01), (0x19, 0xF1, 0x01),  # 129025, 126992, 127257
+        (0x02, 0xF8, 0x01), (0xFF, 0xEA, 0x00), (0x21, 0xFD, 0x00), (0x03, 0xF5, 0x01),  # not wanted
+    ]
+    data = bytearray()
+    for _ in range(800):
+        ps, pf, dp = rng.choice(pgn_bytes)
+        priority = rng.randint(0, 7)
+        header = bytes([0x07, 0x95, 0x00, rng.randint(0, 255), rng.choice([0x1B, 0x00, 0x33]),
+                        rng.choice([0x1B, 0x05]), ps, pf, (priority << 2) | dp])  # source/time may be ESC
+        record = header + bytes(rng.choice([0x1B, 0x0A, 0x00, 0x41]) for _ in range(rng.randint(0, 8)))
+        data += b"\x1b\x01" + record.replace(b"\x1b", b"\x1b\x1b") + b"\x1b\n"
+        if rng.random() < 0.05:
+            data += bytes(rng.choice([0x00, 0x41, 0x1B]) for _ in range(rng.randint(1, 4)))  # noise between records
+    data = bytes(data)
+
+    def pgn(record):
+        can_id = record[5] | (record[6] << 8) | (record[7] << 16) | (record[8] << 24)
+        return _parse_can_id(can_id)[1]
+
+    expected = [r for r in _reference_raw_records(data) if len(r) >= 9 and pgn(r) in wanted]
+    assert len(expected) > 50  # the test actually exercises the filter
+    assert list(_iter_raw_records(data, wanted)) == expected
 
 
 def test_raw_record_framing_handles_a_literal_esc_followed_by_a_newline_byte():

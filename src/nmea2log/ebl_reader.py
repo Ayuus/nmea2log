@@ -61,13 +61,28 @@ _ESC_SOH = bytes([_ESC, _SOH])
 _ESC_BYTE = bytes([_ESC])
 
 
-def _iter_raw_records(data: bytes) -> Iterator[bytes]:
+def _pgn_of_record(record: bytes) -> int:
+    """The PGN of an unstuffed record (07 95 | length | time counter (2) | CAN ID (4) | data),
+    straight from its CAN ID bytes: record[6] = PS, [7] = PF, [8] = priority/data page. Same
+    arithmetic as _decode_bst95_record, without unpacking the rest. Needs len(record) >= 9."""
+    pf = record[7]
+    return ((record[8] & 1) << 16) | (pf << 8) | (record[6] if pf >= 240 else 0)
+
+
+def _iter_raw_records(data: bytes, wanted_pgns: Optional[FrozenSet[int]] = None) -> Iterator[bytes]:
     """Extracts ESC/SOH/NL-wrapped records from the raw file bytes (with byte stuffing).
 
     Same state machine as a byte-by-byte loop would implement, but scans for the next ESC byte
     with ``bytes.find`` (a C-level memory scan) and bulk-copies whole runs of non-ESC bytes via
     slicing, instead of a Python-level loop appending one byte at a time -- real logs run into
-    the hundreds of millions of bytes, where the per-byte version dominates total runtime."""
+    the hundreds of millions of bytes, where the per-byte version dominates total runtime.
+
+    ``wanted_pgns``: if given, only records whose PGN (see _pgn_of_record) is in it are yielded,
+    and the others are dropped right here -- before a bytes object is even made for them. A file
+    holds ~240k records of which often only one in eight is decoded at all, so a generator
+    resumption plus slice per unwanted record was a large part of the whole parse. Records too
+    short to hold a CAN ID are dropped too (they could never decode). Without it every record is
+    yielded, as before."""
     pos = 0
     n = len(data)
     find = data.find
@@ -91,7 +106,14 @@ def _iter_raw_records(data: bytes) -> Iterator[bytes]:
         # simply the slice up to the ESC+NL that closes it -- no buffer to build and copy.
         if following == _NL:
             if esc - body > 4:
-                yield data[body:esc]
+                if wanted_pgns is None:
+                    yield data[body:esc]
+                elif esc - body >= 9:
+                    # The same arithmetic as _pgn_of_record, on the file bytes directly: no slice
+                    # is made for a record that is dropped.
+                    pf = data[body + 7]
+                    if ((data[body + 8] & 1) << 16 | pf << 8 | (data[body + 6] if pf >= 240 else 0)) in wanted_pgns:
+                        yield data[body:esc]
             continue
         if following != _ESC:
             continue  # unknown ESC+??? sequence: discard this record, wait for a new start
@@ -113,7 +135,9 @@ def _iter_raw_records(data: bytes) -> Iterator[bytes]:
                 message.append(_ESC)
                 continue
             if following == _NL:  # ESC+NL = end of record
-                if len(message) > 4:
+                if len(message) > 4 and (
+                    wanted_pgns is None or (len(message) >= 9 and _pgn_of_record(message) in wanted_pgns)
+                ):
                     yield bytes(message)
             break  # end of record, or an unknown ESC+??? sequence (record discarded)
 
@@ -286,23 +310,14 @@ def iter_frames(
     data = Path(path).read_bytes()
     fast_packet_state: Dict[Tuple[int, int], _FastPacketAssembly] = {}
 
-    for record in _iter_raw_records(data):
+    # PGN 126992 always passes the filter: it is needed for the time reference (see below).
+    wanted = None if wanted_pgns is None else wanted_pgns | {PGN_SYSTEM_TIME}
+
+    for record in _iter_raw_records(data, wanted):
         # _iter_raw_records only ever yields records with len(message) > 4 (see its "> 4" check),
         # so record is always at least 5 bytes here -- no need to re-check the length.
         if record[0] != 0x07 or record[1] != _CMD_RAW_ACTISENSE_MESSAGE_RECEIVED:
             continue
-        if wanted_pgns is not None:
-            # Cheap pre-filter on the PGN alone, straight from the CAN ID bytes (record[6] = PS,
-            # [7] = PF, [8] = priority/data page) -- most records (often 7 in 8) are ones this app
-            # never decodes, and unpacking all of source/priority/destination/payload for them
-            # first (see _decode_bst95_record) was the bulk of the whole parse. A record too short
-            # to hold a CAN ID is dropped by _decode_bst95_record anyway.
-            if len(record) < 9:
-                continue
-            pf = record[7]
-            pgn = ((record[8] & 1) << 16) | (pf << 8) | (record[6] if pf >= 240 else 0)
-            if pgn not in wanted_pgns and pgn != PGN_SYSTEM_TIME:
-                continue
         decoded = _decode_bst95_record(record[2:])
         if decoded is None:
             continue
