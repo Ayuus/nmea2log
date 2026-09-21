@@ -18,17 +18,17 @@ logbook.html
 nmea2log.log
 .claude/
 
-# lokale W2K-2-downloadconfiguratie/data -- bevat inloggegevens, hoort nooit in git
+# local W2K-2 download configuration/data -- contains credentials, must never go into git
 nmea2log.ini
 Actisense/
 downloads/
 
-# optionele lokale overrides voor nmea2log.bat/nmea2log-no-download.bat (bv. VIEW_URL) -- zie de
-# rem-comment in die bestanden zelf; hetzelfde idee als nmea2log.ini, alleen dan voor .bat-only
-# instellingen die geen ConfigParser-sectie hebben.
+# optional local overrides for nmea2log.bat/nmea2log-no-download.bat (e.g. VIEW_URL) -- see the
+# rem comment in those files themselves; the same idea as nmea2log.ini, but for .bat-only
+# settings that have no ConfigParser section.
 nmea2log-local.bat
 
-# alleen lokaal bewaren, niet in git en niet op de live site
+# keep locally only: not in git and not on the live site
 docs/autopilot-analysis.html
 docs/autopilot-analysis.pdf
 
