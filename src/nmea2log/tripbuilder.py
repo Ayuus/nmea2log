@@ -31,6 +31,7 @@ from .fix_array import (
     SogArray,
     TripFuelArray,
     WaterTempArray,
+    _from_epoch,
     _log_time_anomaly,
     _to_epoch,
 )
@@ -258,6 +259,57 @@ _SOG_CHECK_MAX_DT_S = 30.0
 
 _CLOCK_JUMP_THRESHOLD_HOURS = _CLOCK_JUMP_THRESHOLD_S / 3600.0  # see fix_array.py
 
+# The outlier log lines say *when* the dropped fixes were, so a start-up glitch can be told from a
+# jump in the middle of a trip: fixes at most this far apart are one stretch, and only the first
+# few stretches are spelled out (a broken source could otherwise produce a very long line).
+_STRETCH_GAP_S = 30.0
+_MAX_STRETCHES_LOGGED = 8
+
+# A receiver keeps settling on its position for a while after power-on even though it already
+# reports a good fix (found in practice: fix mode 3D and HDOP 1.1-1.8 while the reported position
+# still glided ~16 m per second for 30 s, so a fix-quality rule can't catch it -- only the
+# plausibility checks below do). Fixes dropped within _POWER_ON_SETTLE_S of a power-on -- the first
+# fix after at least _POWER_ON_GAP_S without any accepted one, or the very first fix -- are that
+# known behaviour and logged as plain info; anything dropped elsewhere is a real [anomaly].
+_POWER_ON_GAP_S = 300.0
+_POWER_ON_SETTLE_S = 120.0
+
+
+@dataclass
+class _Stretch:
+    first: float
+    last: float
+    count: int
+
+
+class _DroppedTimes:
+    """The times (epoch seconds) of the fixes one outlier check dropped, kept as stretches."""
+
+    def __init__(self) -> None:
+        self.stretches: List[_Stretch] = []
+        self.total = 0
+
+    def add(self, epoch: float) -> None:
+        self.total += 1
+        if self.stretches and epoch - self.stretches[-1].last <= _STRETCH_GAP_S:
+            self.stretches[-1].last = epoch
+            self.stretches[-1].count += 1
+        else:
+            self.stretches.append(_Stretch(epoch, epoch, 1))
+
+    def describe(self) -> str:
+        """``2026-07-30 12:39:12 until 2026-07-30 12:39:41 UTC (258 fixes); ...``"""
+        parts = []
+        for stretch in self.stretches[:_MAX_STRETCHES_LOGGED]:
+            text = f"{_from_epoch(stretch.first):%Y-%m-%d %H:%M:%S}"
+            if stretch.last != stretch.first:
+                text += f" until {_from_epoch(stretch.last):%Y-%m-%d %H:%M:%S}"
+            parts.append(f"{text} UTC ({stretch.count} {'fix' if stretch.count == 1 else 'fixes'})")
+        more = len(self.stretches) - _MAX_STRETCHES_LOGGED
+        if more > 0:
+            parts.append(f"and {more} more")
+        return "; ".join(parts)
+
 
 def _reject_gps_outliers_array(fixes: FixArray, sogs: Optional[SogArray] = None) -> FixArray:
     """Drops a position fix that implies an impossible speed from the last *accepted* fix.
@@ -318,7 +370,10 @@ def _reject_gps_outliers_array(fixes: FixArray, sogs: Optional[SogArray] = None)
     accepted = FixArray()
     prev_i = 0
     accepted.append_raw(fixes.time_at(0), fixes.lat_at(0), fixes.lon_at(0))
-    backward_dropped = clock_resets = implausible_dropped = sog_inconsistent_dropped = 0
+    backward_dropped = clock_resets = 0
+    implausible_times, sog_inconsistent_times = _DroppedTimes(), _DroppedTimes()
+    implausible_startup, sog_inconsistent_startup = _DroppedTimes(), _DroppedTimes()
+    session_start = fixes.time_at(0)  # the last power-on: see _POWER_ON_GAP_S
     max_backward_s = 0.0
     first_backward_at: Optional[float] = None
     sog_idx = 0
@@ -351,30 +406,38 @@ def _reject_gps_outliers_array(fixes: FixArray, sogs: Optional[SogArray] = None)
             sog_idx += 1
         distance_nm = _haversine_nm(fixes.lat_at(prev_i), fixes.lon_at(prev_i), fixes.lat_at(i), fixes.lon_at(i))
         if distance_nm / dt_hours > _MAX_PLAUSIBLE_SPEED_KN:
-            implausible_dropped += 1
+            (implausible_startup if fix_time - session_start <= _POWER_ON_SETTLE_S else implausible_times).add(fix_time)
             continue
         dt_s = dt_hours * 3600
         if current_sog_ms is not None and dt_s <= _SOG_CHECK_MAX_DT_S:
             allowed_m = _SOG_CHECK_SLACK_M + dt_s * (_SOG_CHECK_FACTOR * current_sog_ms + _SOG_CHECK_SLACK_MS)
             if distance_nm * 1852.0 > allowed_m:
-                sog_inconsistent_dropped += 1
+                (
+                    sog_inconsistent_startup if fix_time - session_start <= _POWER_ON_SETTLE_S else sog_inconsistent_times
+                ).add(fix_time)
                 continue
+        if fix_time - fixes.time_at(prev_i) >= _POWER_ON_GAP_S:
+            session_start = fix_time
         accepted.append_raw(fix_time, fixes.lat_at(i), fixes.lon_at(i))
         prev_i = i
     if backward_dropped or clock_resets:
         _log_time_anomaly("Position fixes", backward_dropped, max_backward_s, first_backward_at, clock_resets)
-    if implausible_dropped:
-        log(
-            f"[anomaly] Position fixes: dropped {implausible_dropped} fix(es) implying more than "
-            f"{_MAX_PLAUSIBLE_SPEED_KN:.0f} kn from the previous accepted one -- a GPS position "
-            f"jump or corrupted position data in the source, worth a look if it keeps happening."
-        )
-    if sog_inconsistent_dropped:
-        log(
-            f"[anomaly] Position fixes: dropped {sog_inconsistent_dropped} fix(es) that moved much "
-            f"further than the receiver's own speed over ground allows -- typically a receiver "
-            f"still settling on its position shortly after power-on."
-        )
+    implausible_what = f"implying more than {_MAX_PLAUSIBLE_SPEED_KN:.0f} kn from the previous accepted one"
+    sog_what = "that moved much further than the receiver's own speed over ground allows"
+    for startup, elsewhere, what in (
+        (implausible_startup, implausible_times, implausible_what),
+        (sog_inconsistent_startup, sog_inconsistent_times, sog_what),
+    ):
+        if startup.total:
+            log(
+                f"[info] Position fixes: dropped {startup.total} fix(es) {what}, at {startup.describe()}, within "
+                f"{_POWER_ON_SETTLE_S:.0f} s of a power-on -- the receiver still settling on its position (expected)."
+            )
+        if elsewhere.total:
+            log(
+                f"[anomaly] Position fixes: dropped {elsewhere.total} fix(es) {what}, at {elsewhere.describe()} -- "
+                f"a GPS position jump or corrupted position data in the source, worth a look if it keeps happening."
+            )
     # Written back into `fixes`' own columns (see FixArray.replace_columns_with's own docstring)
     # rather than simply `return accepted` -- the caller passed `fixes` in by reference and, on
     # every real caller (via pipeline.py), still holds its own separate reference to the
