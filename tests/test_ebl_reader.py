@@ -2,7 +2,9 @@ import struct
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from nmea2log.ebl_reader import iter_frames, restore_time_state, snapshot_time_state
+import random
+
+from nmea2log.ebl_reader import _iter_raw_records, iter_frames, restore_time_state, snapshot_time_state
 
 _ESC = 0x1B
 _SOH = 0x01
@@ -334,6 +336,55 @@ def test_restore_time_state_accepts_the_bare_datetime_older_caches_stored():
     assert state == {"current": datetime(2026, 8, 18, 8, 0, 0)}
     restore_time_state(state, None)
     assert state == {}
+
+
+def _reference_raw_records(data: bytes):
+    """The framing as a plain byte-by-byte state machine -- the obviously-correct version that
+    _iter_raw_records (which scans in bulk and has a fast lane for records without escapes) must
+    agree with on any input, well-formed or not."""
+    ESC, SOH, NL = 0x1B, 0x01, 0x0A
+    state, message, i, n = "waiting", bytearray(), 0, len(data)
+    while i < n:
+        b = data[i]
+        i += 1
+        if state == "waiting":
+            if b == ESC and i < n and data[i] == SOH:
+                i += 1
+                state, message = "reading", bytearray()
+        elif state == "reading":
+            if b == ESC:
+                state = "escaping"
+            else:
+                message.append(b)
+        else:  # escaping
+            if b == ESC:
+                message.append(ESC)
+                state = "reading"
+            elif b == NL:
+                if len(message) > 4:
+                    yield bytes(message)
+                state = "waiting"
+            else:
+                state = "waiting"  # unknown escape: discard the record
+
+
+def test_raw_record_framing_matches_a_byte_by_byte_reference_on_arbitrary_streams():
+    """Random streams heavy on ESC/SOH/NL, so every branch is hit: doubled ESC (a literal 0x1B in
+    the record), unknown escapes, records that never close, trailing ESCs, garbage between records."""
+    rng = random.Random(20260921)
+    alphabet = [0x1B, 0x1B, 0x1B, 0x01, 0x0A, 0x07, 0x95, 0x00, 0x41, 0xFF]
+    for _ in range(3000):
+        data = bytes(rng.choice(alphabet) for _ in range(rng.randint(0, 60)))
+        assert list(_iter_raw_records(data)) == list(_reference_raw_records(data)), data.hex()
+
+
+def test_raw_record_framing_handles_a_literal_esc_followed_by_a_newline_byte():
+    """ESC ESC NL is a literal 0x1B and a data byte 0x0A, not the end of the record."""
+    stuffed = bytes([0x1B, 0x01, 0x07, 0x95, 0x1B, 0x1B, 0x1B, 0x1B, 0x0A, 0x41, 0x42, 0x1B, 0x0A])
+
+    # 1B 01 (start) | 07 95 | 1B 1B (a literal ESC) | 1B 1B (another) | 0A 41 42 | 1B 0A (end):
+    # the 0A right after the doubled ESCs is data, only the final 1B 0A ends the record.
+    assert list(_iter_raw_records(stuffed)) == [bytes([0x07, 0x95, 0x1B, 0x1B, 0x0A, 0x41, 0x42])]
 
 
 def test_iter_frames_carries_time_across_files_via_time_state(tmp_path: Path):

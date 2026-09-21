@@ -70,35 +70,52 @@ def _iter_raw_records(data: bytes) -> Iterator[bytes]:
     the hundreds of millions of bytes, where the per-byte version dominates total runtime."""
     pos = 0
     n = len(data)
-    message = bytearray()
+    find = data.find
 
     while pos < n:
-        # STATE_WAITING: look for the next ESC+SOH marker (start of a record).
-        start = data.find(_ESC_SOH, pos)
+        # STATE_WAITING: look for the next ESC+SOH marker (start of a record). Records normally
+        # follow each other directly, so check the very next bytes before scanning for it.
+        start = pos if data.startswith(_ESC_SOH, pos) else find(_ESC_SOH, pos)
         if start == -1:
             return
-        pos = start + 2
-        message = bytearray()
+        body = start + 2
+        esc = find(_ESC_BYTE, body)
+        if esc == -1:
+            return  # ESC (or the whole record) never closes -- nothing left to yield
+        if esc + 1 >= n:
+            return  # trailing ESC with nothing after it at EOF
+        following = data[esc + 1]
+        pos = esc + 2
 
-        # STATE_READING / STATE_ESCAPING: copy bytes up to the next ESC in bulk, then handle
-        # the byte right after it (literal ESC, end-of-record, or an unknown/malformed escape).
+        # The common case (by far): the record contains no escaped byte at all, so its bytes are
+        # simply the slice up to the ESC+NL that closes it -- no buffer to build and copy.
+        if following == _NL:
+            if esc - body > 4:
+                yield data[body:esc]
+            continue
+        if following != _ESC:
+            continue  # unknown ESC+??? sequence: discard this record, wait for a new start
+
+        # STATE_READING / STATE_ESCAPING for a record with a double ESC (= a literal 0x1B data
+        # byte) in it: copy bytes up to the next ESC in bulk, then handle the byte right after it.
+        message = bytearray(data[body:esc])
+        message.append(_ESC)
         while True:
-            esc = data.find(_ESC_BYTE, pos)
+            esc = find(_ESC_BYTE, pos)
             if esc == -1:
-                return  # ESC (or the whole record) never closes -- nothing left to yield
+                return  # the record never closes -- nothing left to yield
             message.extend(data[pos:esc])
             if esc + 1 >= n:
                 return  # trailing ESC with nothing after it at EOF
             following = data[esc + 1]
             pos = esc + 2
-            if following == _ESC:  # double ESC = literal 0x1B data byte
+            if following == _ESC:
                 message.append(_ESC)
                 continue
             if following == _NL:  # ESC+NL = end of record
                 if len(message) > 4:
                     yield bytes(message)
-                break
-            break  # unknown ESC+??? sequence: discard this record, wait for a new start
+            break  # end of record, or an unknown ESC+??? sequence (record discarded)
 
 
 def _parse_can_id(can_id: int) -> Tuple[int, int, int, int]:
@@ -274,13 +291,22 @@ def iter_frames(
         # so record is always at least 5 bytes here -- no need to re-check the length.
         if record[0] != 0x07 or record[1] != _CMD_RAW_ACTISENSE_MESSAGE_RECEIVED:
             continue
+        if wanted_pgns is not None:
+            # Cheap pre-filter on the PGN alone, straight from the CAN ID bytes (record[6] = PS,
+            # [7] = PF, [8] = priority/data page) -- most records (often 7 in 8) are ones this app
+            # never decodes, and unpacking all of source/priority/destination/payload for them
+            # first (see _decode_bst95_record) was the bulk of the whole parse. A record too short
+            # to hold a CAN ID is dropped by _decode_bst95_record anyway.
+            if len(record) < 9:
+                continue
+            pf = record[7]
+            pgn = ((record[8] & 1) << 16) | (pf << 8) | (record[6] if pf >= 240 else 0)
+            if pgn not in wanted_pgns and pgn != PGN_SYSTEM_TIME:
+                continue
         decoded = _decode_bst95_record(record[2:])
         if decoded is None:
             continue
         priority, pgn, source, destination, payload = decoded
-
-        if wanted_pgns is not None and pgn not in wanted_pgns and pgn != PGN_SYSTEM_TIME:
-            continue
 
         if pgn in _FAST_PACKET_PGNS:
             payload = _reassemble_fast_packet((source, pgn), payload, fast_packet_state)
