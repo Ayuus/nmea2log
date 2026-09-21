@@ -215,7 +215,7 @@ class _SortableSampleArray(_SampleArray):
         log_time_anomaly(self._LABEL, dropped, max_backward_s, first_dropped_at, clock_resets)
         for column_name in self.__slots__:
             column = getattr(self, column_name)
-            setattr(self, column_name, array.array("d", itertools.compress(column, keep)))
+            setattr(self, column_name, array.array(column.typecode, itertools.compress(column, keep)))
         return self
 
 
@@ -521,6 +521,13 @@ class AttitudeArray(_SortableSampleArray):
     """Same idea as FixArray, for AttitudeSample. pitch_deg/roll_deg are Optional -- stored as
     NaN when absent.
 
+    Pitch and roll are single-precision ('f') columns, not doubles like everything else: a real
+    season has ~37 million of these rows (more than 13x the GPS fixes), so this is the biggest
+    single block of memory in a full decode, and the values don't need the precision -- they come
+    off the bus as a 16-bit number in steps of 0.0001 rad (~0.0057 deg), where a float32 is off by
+    ~1e-6 deg at most. Only the time column has to stay a double (a float32 can't hold an epoch
+    to the second).
+
     Also supports integer AND slice indexing (unlike the other array types above) -- unlike
     depth/water_temp/battery, which just get iterated in full, _motion_variation() in
     tripbuilder.py narrows this one down to a single trip's own time window with
@@ -533,8 +540,8 @@ class AttitudeArray(_SortableSampleArray):
 
     def __init__(self, samples: Iterable[AttitudeSample] = ()) -> None:
         self._time: "array.array[float]" = array.array("d")
-        self._pitch_deg: "array.array[float]" = array.array("d")
-        self._roll_deg: "array.array[float]" = array.array("d")
+        self._pitch_deg: "array.array[float]" = array.array("f")
+        self._roll_deg: "array.array[float]" = array.array("f")
         self.extend(samples)
 
     def append(self, sample: AttitudeSample) -> None:

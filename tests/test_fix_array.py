@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta
 
+import pytest
+
 from nmea2log.fix_array import AttitudeArray, FixArray, NavSampleArray, SogArray, to_epoch
 from nmea2log.model import AttitudeSample, PositionFix, SogSample
 
@@ -157,6 +159,45 @@ def test_sog_array_drop_time_regressions_is_a_true_noop_when_already_sorted():
 
     assert result is array
     assert list(result) == original
+
+
+def test_attitude_array_stores_pitch_and_roll_as_single_precision_and_time_as_double():
+    """A season has ~37 million of these rows (the biggest block of memory in a full decode), and
+    the bus only gives ~0.0057 deg resolution: 16 bytes per row instead of 24."""
+    base = datetime(2026, 8, 18, 8, 0, 0)
+    samples = AttitudeArray([AttitudeSample(base + timedelta(seconds=i), 1.2345, -2.3456) for i in range(3)])
+
+    assert samples._time.typecode == "d"  # a float32 could not hold an epoch to the second
+    assert samples._pitch_deg.typecode == samples._roll_deg.typecode == "f"
+    assert sum(c.itemsize for c in (samples._time, samples._pitch_deg, samples._roll_deg)) == 16
+    # float32 is ~1e-7 accurate at these magnitudes
+    assert samples[1].pitch_deg == pytest.approx(1.2345, abs=1e-6)
+    assert samples[1].roll_deg == pytest.approx(-2.3456, abs=1e-6)
+    assert samples[1].time == base + timedelta(seconds=1)
+
+
+def test_attitude_array_keeps_single_precision_columns_when_it_has_to_drop_rows():
+    """drop_time_regressions rebuilds the columns -- it must not silently widen them back to doubles."""
+    base = datetime(2026, 8, 18, 8, 0, 0)
+    samples = AttitudeArray([
+        AttitudeSample(base, 1.0, 2.0),
+        AttitudeSample(base + timedelta(seconds=10), 1.5, 2.5),
+        AttitudeSample(base + timedelta(seconds=5), 9.9, 9.9),  # steps backward: dropped
+        AttitudeSample(base + timedelta(seconds=11), 1.75, 2.75),
+    ])
+
+    kept = samples.drop_time_regressions()
+
+    assert len(kept) == 3
+    assert kept._pitch_deg.typecode == kept._roll_deg.typecode == "f"
+    assert [s.pitch_deg for s in kept] == [1.0, 1.5, 1.75]  # exactly representable in float32
+
+
+def test_attitude_array_missing_values_survive_single_precision():
+    base = datetime(2026, 8, 18, 8, 0, 0)
+    samples = AttitudeArray([AttitudeSample(base, None, 3.0)])
+
+    assert samples[0].pitch_deg is None and samples[0].roll_deg == 3.0
 
 
 def test_attitude_array_drop_time_regressions_drops_a_backward_jumping_row():
