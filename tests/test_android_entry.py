@@ -145,8 +145,23 @@ def test_run_pipeline_writes_html_and_reports_trip_count(tmp_path, monkeypatch):
         call_sign="PA1234",
     )
 
-    assert result == {"ok": True, "trip_count": 1, "html_path": str(html_path)}
+    assert {key: result[key] for key in ("ok", "trip_count", "html_path")} == {
+        "ok": True, "trip_count": 1, "html_path": str(html_path)
+    }
     assert html_path.exists()
+    # Where the boat stands at the end of the data, for the "on the boat" mode: the scenario ends
+    # with a 12-minute stay (the fixes 08:42-08:53), no engine data.
+    assert result["boat_state"] == {
+        "last_data_at": "2026-07-15T08:53:00",
+        "latitude": 52.40,
+        "longitude": 4.95,
+        "underway": False,
+        "stationary_since": "2026-07-15T08:42:00",
+        "stationary_seconds": 660,
+        "engine_running": None,
+        "engine_off_since": None,
+        "engine_off_seconds": None,
+    }
 
 
 def test_run_pipeline_honors_a_min_stop_minutes_override(tmp_path, monkeypatch):

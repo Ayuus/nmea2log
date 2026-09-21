@@ -169,6 +169,81 @@ class Stay:
 
 
 @dataclass(frozen=True, slots=True)
+class BoatState:
+    """Where things stand at the *end* of the data that was just processed -- what an automatic
+    "on the boat" mode needs to decide whether the boat has reached a harbour: is it still underway,
+    since when has it been stationary, and is the engine off.
+
+    Derived from the same runs the trips are built from (see ``_classify_trip_runs``), so it
+    agrees with them: a lock pause or a short reposition inside the harbour is not "stopped" or
+    "underway" here any more than it is in the logbook. Everything is measured in *data* time
+    (``last_data_at``), not the wall clock -- the data can lag behind by however long the last
+    download was ago.
+
+    ``engine_running`` is None when there was no engine data at all in the processed window (a
+    boat without engine PGNs); ``engine_off_since`` is then None too. Otherwise the engine counts
+    as running while its last "on" reading is at most a minute old (see ``_ENGINE_OFF_GAP_S``), and
+    ``engine_off_since`` is the end of its last "on" stretch -- or the start of the window when it
+    never ran in it, i.e. "off for at least this long"."""
+
+    last_data_at: datetime
+    latitude: float
+    longitude: float
+    underway: bool
+    stationary_since: Optional[datetime]  # start of the trailing stay; None while underway
+    engine_running: Optional[bool]
+    engine_off_since: Optional[datetime]  # None while running or when there is no engine data
+
+    @property
+    def stationary_for(self) -> Optional[timedelta]:
+        return None if self.stationary_since is None else self.last_data_at - self.stationary_since
+
+    @property
+    def engine_off_for(self) -> Optional[timedelta]:
+        return None if self.engine_off_since is None else self.last_data_at - self.engine_off_since
+
+    def to_dict(self) -> Dict[str, object]:
+        """Plain values only (ISO timestamps in UTC, whole seconds), for the Android side."""
+
+        def iso(when: Optional[datetime]) -> Optional[str]:
+            return None if when is None else when.isoformat(timespec="seconds")
+
+        def seconds(span: Optional[timedelta]) -> Optional[int]:
+            return None if span is None else int(span.total_seconds())
+
+        return {
+            "last_data_at": iso(self.last_data_at),
+            "latitude": self.latitude,
+            "longitude": self.longitude,
+            "underway": self.underway,
+            "stationary_since": iso(self.stationary_since),
+            "stationary_seconds": seconds(self.stationary_for),
+            "engine_running": self.engine_running,
+            "engine_off_since": iso(self.engine_off_since),
+            "engine_off_seconds": seconds(self.engine_off_for),
+        }
+
+    def describe(self) -> str:
+        """One log line's worth, e.g. ``stationary since 2026-09-12 12:37:29 UTC (23 min), engine
+        off since 2026-09-12 12:31:40 UTC (29 min)``."""
+
+        def minutes(span: Optional[timedelta]) -> int:
+            return int(span.total_seconds() // 60) if span is not None else 0
+
+        if self.underway:
+            text = "underway"
+        else:
+            text = f"stationary since {self.stationary_since:%Y-%m-%d %H:%M:%S} UTC ({minutes(self.stationary_for)} min)"
+        if self.engine_running is None:
+            text += ", no engine data"
+        elif self.engine_running:
+            text += ", engine running"
+        else:
+            text += f", engine off since {self.engine_off_since:%Y-%m-%d %H:%M:%S} UTC ({minutes(self.engine_off_for)} min)"
+        return text
+
+
+@dataclass(frozen=True, slots=True)
 class EngineHealth:
     oil_pressure_bar_avg: Optional[float]
     oil_temperature_c_avg: Optional[float]
@@ -1340,6 +1415,39 @@ def _as_array(samples, array_type):
     return array_type(samples if samples is not None else ())
 
 
+def _boat_state(
+    samples: NavSampleArray,
+    runs: List[Tuple[str, Group]],
+    on_intervals: List[Tuple[datetime, datetime]],
+    has_engine_data: bool,
+) -> BoatState:
+    """The BoatState at the end of ``samples`` (at least one run, as _classify_runs guarantees)."""
+    last_index = len(samples) - 1
+    last_time = samples.datetime_at(last_index)
+    label, group = runs[-1]
+    underway = label == "moving"
+
+    if not has_engine_data:
+        engine_running: Optional[bool] = None
+        engine_off_since: Optional[datetime] = None
+    elif not on_intervals:
+        engine_running, engine_off_since = False, samples.datetime_at(0)  # off for the whole window, at least
+    else:
+        last_on = max(end for _, end in on_intervals)
+        engine_running = last_time - last_on <= timedelta(seconds=_ENGINE_OFF_GAP_S)
+        engine_off_since = None if engine_running else last_on
+
+    return BoatState(
+        last_data_at=last_time,
+        latitude=samples.lat_at(last_index),
+        longitude=samples.lon_at(last_index),
+        underway=underway,
+        stationary_since=None if underway else _group_start_time(samples, group),
+        engine_running=engine_running,
+        engine_off_since=engine_off_since,
+    )
+
+
 @dataclass
 class _SeasonData:
     """The season-wide data every trip's statistics are drawn from -- bucketed and sorted once
@@ -1523,7 +1631,7 @@ def _build_trip(
     )
 
 
-def build_trips(
+def build_trips_with_state(
     fixes: Union[FixArray, Iterable[PositionFix]],
     sogs: Union[SogArray, Iterable[SogSample]],
     engine_samples: Union[EngineArray, Iterable[EngineSample]],
@@ -1541,8 +1649,11 @@ def build_trips(
     min_leg_distance_nm: Optional[float] = None,
     lock_radius_m: Optional[float] = None,
     lock_max_duration_minutes: Optional[float] = None,
-) -> List[TripLeg]:
-    """``max_gap_minutes``: how long there can be no data at most before a trip's reported
+) -> Tuple[List[TripLeg], Optional[BoatState]]:
+    """The trips, and the BoatState at the end of the data (None when there are too few navigation
+    samples to say anything). See ``build_trips`` for the trips alone.
+
+    ``max_gap_minutes``: how long there can be no data at most before a trip's reported
     duration gets cut off (see ``_moving_duration``). Defaults to the same value as
     ``min_stop_minutes`` -- the same number, but two different meanings: one is "how long do
     you have to be stationary", the other "how long can there be no data". Ports are still
@@ -1593,7 +1704,7 @@ def build_trips(
 
     samples = _merge_nav_samples(fixes, sogs, depth_samples, water_temp_samples)
     if len(samples) < 2:
-        return []
+        return [], None
     log(f"[info] ...{len(samples)} navigation samples merged, classifying trips...")
 
     speed_threshold_ms = speed_threshold_kn * _KNOT_IN_MS
@@ -1630,6 +1741,7 @@ def build_trips(
         lock_max_duration_minutes=lock_max_duration_minutes,
     )
     log(f"[info] ...{len(runs)} run(s) classified, computing per-trip statistics...")
+    state = _boat_state(samples, runs, on_intervals, has_engine_data=len(engine_samples) > 0)
 
     stays = _build_stays(samples, runs, speed_threshold_ms, on_intervals, lock_radius_m)
 
@@ -1642,7 +1754,12 @@ def build_trips(
         next_stay = stays[idx + 1] if idx + 1 < len(stays) else None
         trips.append(_build_trip(samples, group, prev_stay, next_stay, max_gap, season))
         log(f"[info] ......trip {len(trips)}/{total_trips} processed")
-    return [trip for trip in trips if trip.distance_nm >= min_trip_distance_nm]
+    return [trip for trip in trips if trip.distance_nm >= min_trip_distance_nm], state
+
+
+def build_trips(*args, **kwargs) -> List[TripLeg]:
+    """The trips of ``build_trips_with_state`` (same parameters), without the BoatState."""
+    return build_trips_with_state(*args, **kwargs)[0]
 
 
 def resolve_trip_places(trips: List[TripLeg], geocoder: object) -> List[TripLeg]:

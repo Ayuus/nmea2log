@@ -68,7 +68,7 @@ from .pgn_decode import (
 )
 from .sample_cache import SampleCache
 from .trip_cache import TripCache, choose_resume_index, config_signature, find_resume_index
-from .tripbuilder import TRIP_LOGIC_VERSION, TripLeg, build_trips, resolve_trip_places
+from .tripbuilder import TRIP_LOGIC_VERSION, BoatState, TripLeg, build_trips_with_state, resolve_trip_places
 
 _T = TypeVar("_T")
 _ArrayT = TypeVar("_ArrayT")  # one of fix_array.py's array.array-backed sample collections
@@ -317,6 +317,9 @@ class PipelineCancelled(Exception):
 class SeasonTrips:
     trips: List[TripLeg]
     latest_position: Optional[PositionFix]  # the newest GPS fix decoded this run, if any
+    # Where the boat stands at the end of the data decoded this run (see BoatState); None when this
+    # run decoded no new position data at all -- e.g. a resumed window with nothing new after it.
+    boat_state: Optional[BoatState] = None
 
 
 def _trip_config_signature(args: argparse.Namespace) -> str:
@@ -535,15 +538,18 @@ def _select_trip_inputs(samples: _SeasonSamples) -> _TripInputs:
     return inputs
 
 
-def _build_fresh_trips(inputs: _TripInputs, args: argparse.Namespace) -> List[TripLeg]:
-    """The trips of the decoded window, built by build_trips() with the CLI's own thresholds."""
+def _build_fresh_trips(
+    inputs: _TripInputs, args: argparse.Namespace
+) -> Tuple[List[TripLeg], Optional[BoatState]]:
+    """The trips of the decoded window (and the boat's state at its end), built by build_trips()
+    with the CLI's own thresholds."""
     if not inputs.fixes:
         # The reprocessed window (from the last known trip's own departure onward, see
         # resume_index in build_season_trips) happened to contain no position data at all -- e.g.
         # everything since then is still exactly the one already-fully-decoded file it resumed
         # from, with nothing new after it yet. Nothing left to (re)build; the settled trips alone
         # are still a perfectly good result.
-        return []
+        return [], None
     # Found in practice: build_trips() (and write_html_logbook() after it) can run for a
     # real stretch of time on a full multi-year archive (millions of merged GPS fixes)
     # with zero log output in between -- decode's own progress logging (see
@@ -551,7 +557,7 @@ def _build_fresh_trips(inputs: _TripInputs, args: argparse.Namespace) -> List[Tr
     # on screen to distinguish "still working" from "hung" or "already crashed silently"
     # for however long this phase takes (much longer on a phone's CPU).
     log(f"[info] Building trips from {len(inputs.fixes)} GPS position(s)...", file=sys.stderr)
-    return build_trips(
+    return build_trips_with_state(
         inputs.fixes,
         inputs.sogs,
         inputs.engine,
@@ -719,7 +725,7 @@ def build_season_trips(
                 inputs.engine, inputs.trip_fuel, inputs.rpm
             )
 
-        fresh_trips = _build_fresh_trips(inputs, args)
+        fresh_trips, boat_state = _build_fresh_trips(inputs, args)
 
         if _resumed_window_started_mid_transit(resume_index, fresh_trips, widen_attempts):
             resume_index, settled_trips, widen_attempts = _widen_resume_window(
@@ -733,6 +739,8 @@ def build_season_trips(
     gc.collect()
 
     trips = settled_trips + fresh_trips
+    if boat_state is not None:
+        log(f"[info] Boat at {boat_state.last_data_at:%Y-%m-%d %H:%M:%S} UTC: {boat_state.describe()}.", file=sys.stderr)
 
     if not trips:
         raise PipelineError("No trips found (maybe never stopped or underway long enough relative to the thresholds).")
@@ -755,4 +763,4 @@ def build_season_trips(
     del inputs
     gc.collect()
 
-    return SeasonTrips(trips, latest_position)
+    return SeasonTrips(trips, latest_position, boat_state)

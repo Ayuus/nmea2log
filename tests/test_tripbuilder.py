@@ -18,6 +18,7 @@ from nmea2log.tripbuilder import (
     _POWER_ON_SETTLE_S,
     _reject_gps_outliers_array,
     build_trips,
+    build_trips_with_state,
     resolve_trip_places,
 )
 
@@ -104,6 +105,143 @@ def test_trip_departure_is_the_first_time_the_boat_was_seen_moving_when_a_data_g
     assert len(trips) == 1
     assert trips[0].depart_time == _dt(resume)  # first sample of the trip's own track, not _dt(11)
     assert trips[0].depart_lat == pytest.approx(52.30, abs=1e-4)  # place still linked across the gap
+
+
+# --- BoatState: where the boat stands at the end of the data (for the "on the boat" mode) ---------
+
+
+def _scenario_with_engine(engine_fuel_after_arrival: float = 0.0, arrival_minutes: int = 12):
+    """12 min stay -> 30 min underway (engine on) -> ``arrival_minutes`` stay, engine at
+    ``engine_fuel_after_arrival`` l/h from arrival on."""
+    fixes, sogs, engine_samples = [], [], []
+    for m in range(0, 12):
+        fixes.append(PositionFix(_dt(m), 52.30, 4.90))
+        sogs.append(SogSample(_dt(m), 0.0))
+    for i, m in enumerate(range(12, 42)):
+        frac = i / 29
+        fixes.append(PositionFix(_dt(m), 52.30 + 0.10 * frac, 4.90 + 0.05 * frac))
+        sogs.append(SogSample(_dt(m), 3.0))
+    for m in range(42, 42 + arrival_minutes):
+        fixes.append(PositionFix(_dt(m), 52.40, 4.95))
+        sogs.append(SogSample(_dt(m), 0.0))
+    for m in range(0, 42 + arrival_minutes):
+        fuel = 8.0 if 12 <= m < 42 else (engine_fuel_after_arrival if m >= 42 else 0.0)
+        engine_samples.append(EngineSample(_dt(m), 0, fuel, 3600 * 100 + m * 60))
+    return fixes, sogs, engine_samples
+
+
+def test_boat_state_after_arrival_is_stationary_with_the_engine_off():
+    fixes, sogs, engine = _scenario_with_engine(engine_fuel_after_arrival=0.0, arrival_minutes=40)
+
+    _, state = build_trips_with_state(fixes, sogs, engine, speed_threshold_kn=0.5, min_stop_minutes=10)
+
+    assert state is not None
+    assert state.underway is False
+    assert state.last_data_at == _dt(81)
+    assert state.stationary_since == _dt(42)
+    assert state.stationary_for == timedelta(minutes=39)
+    assert state.engine_running is False
+    assert state.engine_off_since == _dt(41)  # the last minute the engine was on
+    assert state.engine_off_for == timedelta(minutes=40)
+    assert (state.latitude, state.longitude) == (52.40, 4.95)
+
+
+def test_boat_state_while_the_engine_still_runs_after_arrival():
+    """Stationary, but the engine idles on (0.5 l/h, above the 0.3 l/h "off" limit)."""
+    fixes, sogs, engine = _scenario_with_engine(engine_fuel_after_arrival=0.5, arrival_minutes=20)
+
+    _, state = build_trips_with_state(fixes, sogs, engine, speed_threshold_kn=0.5, min_stop_minutes=10)
+
+    assert state.underway is False and state.stationary_for == timedelta(minutes=19)
+    assert state.engine_running is True
+    assert state.engine_off_since is None and state.engine_off_for is None
+
+
+def test_boat_state_while_underway_has_no_stationary_time():
+    fixes, sogs, engine = _scenario_with_engine()
+    cut = 12 + 20  # data stops 20 minutes into the passage
+    fixes, sogs, engine = fixes[:cut], sogs[:cut], engine[:cut]
+
+    _, state = build_trips_with_state(fixes, sogs, engine, speed_threshold_kn=0.5, min_stop_minutes=10)
+
+    assert state.underway is True
+    assert state.stationary_since is None and state.stationary_for is None
+    assert state.engine_running is True
+
+
+def test_boat_state_without_any_engine_data_leaves_the_engine_unknown():
+    fixes, sogs, _ = _scenario_with_engine(arrival_minutes=20)
+
+    _, state = build_trips_with_state(fixes, sogs, [], speed_threshold_kn=0.5, min_stop_minutes=10)
+
+    assert state.engine_running is None and state.engine_off_since is None and state.engine_off_for is None
+
+
+def test_boat_state_engine_that_never_ran_in_the_window_is_off_for_the_whole_window():
+    """Engine data is there (idle readings) but never above the "on" limit: off since the window start."""
+    fixes, sogs, _ = _scenario_with_engine(arrival_minutes=20)
+    engine = [EngineSample(_dt(m), 0, 0.0, 3600 * 100 + m * 60) for m in range(0, 62)]
+
+    _, state = build_trips_with_state(fixes, sogs, engine, speed_threshold_kn=0.5, min_stop_minutes=10)
+
+    assert state.engine_running is False
+    assert state.engine_off_since == _dt(0)
+
+
+def test_boat_state_ignores_a_short_reposition_inside_the_harbour():
+    """A short leg (0.14 nm, under min_leg_distance_nm) after arriving is part of the stay, as it is
+    in the trips -- the boat is not "underway" just because it moved to its final berth."""
+    fixes, sogs, engine = _scenario_with_engine(arrival_minutes=12)
+    for i, m in enumerate(range(54, 57)):  # the short reposition, engine on
+        fixes.append(PositionFix(_dt(m), 52.40 + 0.002246 * (i / 2), 4.95))
+        sogs.append(SogSample(_dt(m), 2.0))
+        engine.append(EngineSample(_dt(m), 0, 3.0, 3600 * 100 + m * 60))
+    for m in range(57, 69):  # then at rest at the new berth
+        fixes.append(PositionFix(_dt(m), 52.402246, 4.95))
+        sogs.append(SogSample(_dt(m), 0.0))
+        engine.append(EngineSample(_dt(m), 0, 0.0, 3600 * 100 + m * 60))
+
+    _, state = build_trips_with_state(
+        fixes, sogs, engine, speed_threshold_kn=0.5, min_stop_minutes=10, min_leg_distance_nm=0.2, lock_radius_m=10.0
+    )
+
+    assert state.underway is False
+    assert state.stationary_since == _dt(42)  # folded into the one stay that began on arrival
+
+
+def test_boat_state_is_none_for_too_little_data():
+    _, state = build_trips_with_state([PositionFix(_dt(0), 52.3, 4.9)], [], [])
+
+    assert state is None
+
+
+def test_build_trips_returns_the_same_trips_as_build_trips_with_state():
+    fixes, sogs, engine = _scenario_with_engine(arrival_minutes=20)
+
+    trips = build_trips(fixes, sogs, engine, speed_threshold_kn=0.5, min_stop_minutes=10)
+    trips_with_state, _ = build_trips_with_state(fixes, sogs, engine, speed_threshold_kn=0.5, min_stop_minutes=10)
+
+    assert trips == trips_with_state and len(trips) == 1
+
+
+def test_boat_state_to_dict_and_describe():
+    fixes, sogs, engine = _scenario_with_engine(engine_fuel_after_arrival=0.0, arrival_minutes=40)
+    _, state = build_trips_with_state(fixes, sogs, engine, speed_threshold_kn=0.5, min_stop_minutes=10)
+
+    assert state.to_dict() == {
+        "last_data_at": "2026-07-15T09:21:00",
+        "latitude": 52.40,
+        "longitude": 4.95,
+        "underway": False,
+        "stationary_since": "2026-07-15T08:42:00",
+        "stationary_seconds": 39 * 60,
+        "engine_running": False,
+        "engine_off_since": "2026-07-15T08:41:00",
+        "engine_off_seconds": 40 * 60,
+    }
+    assert state.describe() == (
+        "stationary since 2026-07-15 08:42:00 UTC (39 min), engine off since 2026-07-15 08:41:00 UTC (40 min)"
+    )
 
 
 def test_build_trips_single_leg():

@@ -86,7 +86,9 @@ def run_pipeline(
     _sync_from_w2k2()) ever checked it. A long decode (1000+ files, especially on a phone's
     slower CPU) could then run on for many more minutes after the user thought they'd stopped it.
 
-    Returns {"ok": True, "trip_count": N, "html_path": ...} on success,
+    Returns {"ok": True, "trip_count": N, "html_path": ..., "boat_state": {...} or None} on success
+    (``boat_state`` = tripbuilder.BoatState.to_dict(): underway/stationary since, engine off since,
+    last position, all as of the end of the data just processed),
     {"ok": False, "error": "Sync cancelled.", "cancelled": True} if should_cancel() said so
     partway through, or {"ok": False, "error": "..."} for the same failure conditions cli.py's
     _run() already checks for (missing file, no position data, no trips)."""
@@ -174,7 +176,14 @@ def run_pipeline(
     )
     log(f"[ok] Logbook written: {html_path} ({len(trips)} trip(s))")
 
-    return {"ok": True, "trip_count": len(trips), "html_path": str(html_path)}
+    return {
+        "ok": True,
+        "trip_count": len(trips),
+        "html_path": str(html_path),
+        # Where the boat stands at the end of the data just processed (see tripbuilder.BoatState),
+        # for the "on the boat" mode's harbour detection; None when there was no new position data.
+        "boat_state": season.boat_state.to_dict() if season.boat_state is not None else None,
+    }
 
 
 def build_from_local_files(
