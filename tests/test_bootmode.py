@@ -17,6 +17,7 @@ from nmea2log.bootmode import (
     RoundFinished,
     RoundNotFound,
     RoundOk,
+    Resume,
     ScheduleTick,
     Start,
     StartRound,
@@ -468,6 +469,41 @@ def test_events_after_stopping_are_ignored():
     assert m.handle(PublishFinished(T0 + 3, ok=True)) == []
     assert m.handle(Tick(T0 + 4)) == []
     assert m.handle(ProbeResult(T0 + 5, found=True)) == []
+
+
+# --- the process was killed and restarted --------------------------------------------------------------
+
+
+def test_resuming_an_interrupted_round_starts_it_again():
+    m = machine()
+    aboard(m)  # a round is running, and then the process dies
+
+    actions = m.handle(Resume(T0 + minutes(5)))
+
+    assert actions == [Notify(Status.ROUND_STARTED), StartRound()]
+    assert m.state.working is Work.ROUND
+
+
+def test_resuming_an_interrupted_publish_publishes_again():
+    m = machine()
+    aboard(m)
+    finish_round(m, T0, boat=harbour_boat())  # the final round: the publish is running
+
+    assert m.state.working is Work.PUBLISH
+    actions = m.handle(Resume(T0 + minutes(5)))
+
+    assert actions == [Notify(Status.PUBLISH_STARTED), Publish()]
+    assert m.state.working is Work.PUBLISH
+
+
+def test_resuming_while_idle_looks_for_the_w2k2():
+    m = idle_machine()
+
+    assert m.handle(Resume(T0 + minutes(90))) == [ProbeW2k()]
+
+
+def test_resuming_when_the_mode_is_off_does_nothing():
+    assert machine().handle(Resume(T0)) == []
 
 
 # --- the JSON boundary the Android service uses -------------------------------------------------------

@@ -162,6 +162,13 @@ class Tick:
 
 
 @dataclass(frozen=True)
+class Resume:
+    """The process was killed and restarted with the persisted state: whatever was running is gone."""
+
+    at: int
+
+
+@dataclass(frozen=True)
 class ProbeResult:
     """Answer to ProbeW2k: is the W2K-2 reachable, and does it hold files not downloaded yet."""
 
@@ -182,7 +189,7 @@ class PublishFinished:
     ok: bool
 
 
-Event = Union[Start, Stop, Tick, ProbeResult, RoundFinished, PublishFinished]
+Event = Union[Start, Stop, Tick, Resume, ProbeResult, RoundFinished, PublishFinished]
 
 
 # --- actions ---------------------------------------------------------------------------------------
@@ -277,6 +284,8 @@ class BootModeMachine:
             return self._on_stop()
         if isinstance(event, Tick):
             return self._on_tick(event)
+        if isinstance(event, Resume):
+            return self._on_resume(event)
         if isinstance(event, ProbeResult):
             return self._on_probe(event)
         if isinstance(event, RoundFinished):
@@ -310,6 +319,14 @@ class BootModeMachine:
         if self.state.phase is Phase.ABOARD:
             return self._start_round()
         return [ProbeW2k()]  # SEARCHING or IDLE
+
+    def _on_resume(self, event: Resume) -> List[Action]:
+        if self.state.phase is Phase.OFF:
+            return []
+        # A round or publish that was running died with the process; the timer did too. Carry on as if
+        # the tick had just fired (an interrupted publish is still pending, so it is redone).
+        self.state = replace(self.state, working=None)
+        return self._on_tick(Tick(event.at))
 
     def _on_probe(self, event: ProbeResult) -> List[Action]:
         if self.state.phase is Phase.OFF or self.state.working is not None:
@@ -446,6 +463,8 @@ def _event_from_dict(data: Dict[str, object]) -> Event:
         return Stop(at)
     if kind == "tick":
         return Tick(at, bool(data.get("busy", False)))
+    if kind == "resume":
+        return Resume(at)
     if kind == "probe":
         return ProbeResult(at, bool(data["found"]), bool(data.get("has_new_files", False)))
     if kind == "round":
