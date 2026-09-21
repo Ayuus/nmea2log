@@ -1340,6 +1340,189 @@ def _as_array(samples, array_type):
     return array_type(samples if samples is not None else ())
 
 
+@dataclass
+class _SeasonData:
+    """The season-wide data every trip's statistics are drawn from -- bucketed and sorted once
+    (see _InstanceIndex) rather than re-scanned per trip, which is exactly what made this phase
+    slow in practice once the earlier OOM/sort issues were fixed (found in practice: a single
+    trip taking minutes with ~400k engine + ~1.75M RPM samples for a full season)."""
+
+    engine: "_InstanceIndex"
+    rpm: "_InstanceIndex"
+    battery: "_InstanceIndex"
+    trip_fuel: "_InstanceIndex"
+    on_intervals_by_instance: Dict[int, List[Tuple[datetime, datetime]]]
+    attitude: AttitudeArray  # already in time order, see build_trips
+
+
+def _classify_trip_runs(
+    samples: NavSampleArray,
+    on_intervals: List[Tuple[datetime, datetime]],
+    *,
+    speed_threshold_ms: float,
+    min_stop: timedelta,
+    max_gap: timedelta,
+    min_leg_distance_nm: float,
+    lock_radius_m: Optional[float],
+    lock_max_duration_minutes: Optional[float],
+) -> List[Tuple[str, Group]]:
+    """The merged navigation samples as alternating "stationary"/"moving" runs: classified by
+    speed, then folded/merged by the stop, lock/bridge, data-gap and negligible-leg rules."""
+    runs = _classify_runs(samples, speed_threshold_ms)
+    runs = _merge_short_stops(samples, runs, min_stop, max_gap)
+    if lock_radius_m is not None and lock_max_duration_minutes is not None:
+        lock_max_duration = timedelta(minutes=lock_max_duration_minutes)
+        runs = _reclassify_locks(samples, runs, on_intervals, lock_radius_m, lock_max_duration)
+        runs = _merge_adjacent(runs)
+    runs = _split_runs_on_gaps(samples, runs, max_gap)
+    return _merge_negligible_trips(samples, runs, min_leg_distance_nm, max_gap, lock_radius_m)
+
+
+def _build_stays(
+    samples: NavSampleArray,
+    runs: List[Tuple[str, Group]],
+    speed_threshold_ms: float,
+    on_intervals: List[Tuple[datetime, datetime]],
+    lock_radius_m: Optional[float],
+) -> List[Optional[Stay]]:
+    """One entry per run, parallel to ``runs``: the Stay for a "stationary" run, None for a
+    "moving" one."""
+    # A cheap, offline placeholder -- never the real geocoder. Actually resolving place names
+    # here would get them baked straight into a "settled" TripLeg (see trip_cache.py), frozen in
+    # the cache forever the moment this trip stops being freshly rebuilt every run: a real
+    # lookup failure (a rate-limited geocoding service, no internet that one time, ...) would
+    # otherwise permanently stick a wrong/degraded name on that trip, with no way for a later,
+    # working run to ever correct it short of clearing the whole trip cache and re-decoding
+    # everything (found in practice). resolve_trip_places() below is the real, always-rerun
+    # resolution step instead -- run once, every run, over every trip (settled or fresh alike),
+    # right before a trip is actually shown/written -- so a fixed connection or an unrelated
+    # geocode-cache clear fixes it on the very next run, no full rebuild required.
+    placeholder_geocoder = NoGeocoder()
+    stays: List[Optional[Stay]] = []
+    total_stays = sum(1 for label, _ in runs if label == "stationary")
+    stays_done = 0
+    for label, group in runs:
+        if label != "stationary":
+            stays.append(None)
+            continue
+        track = _materialize(samples, group)
+        lat, lon = _settled_position(track, speed_threshold_ms, on_intervals, lock_radius_m)
+        place = placeholder_geocoder.place_name(lat, lon)
+        stays.append(Stay(track[0].time, track[-1].time, lat, lon, place))
+        stays_done += 1
+        log(f"[info] ......stay {stays_done}/{total_stays} processed")
+    return stays
+
+
+@dataclass(frozen=True)
+class _Endpoints:
+    """Where and when one trip departs and arrives."""
+
+    depart_time: datetime
+    arrive_time: datetime
+    depart_place: str
+    arrive_place: str
+    depart_lat: float
+    depart_lon: float
+    arrive_lat: float
+    arrive_lon: float
+
+
+def _trip_endpoints(
+    track: List[NavSample], prev_stay: Optional[Stay], next_stay: Optional[Stay], max_gap: timedelta
+) -> _Endpoints:
+    depart_time = prev_stay.end if prev_stay else track[0].time
+    if prev_stay is not None and track[0].time - depart_time >= max_gap:
+        # Mirror image of the arrival case below: the logger was off for a real data gap
+        # between the last sample of the previous stay and the first sample of this trip, so
+        # the boat was only *seen* leaving when data resumed. The previous stay still supplies
+        # the departure *place*, but not a departure time from before the gap. Found in
+        # practice: a trip reported as departing at 08:56 local, when the logger only came
+        # back on at 10:21 and the boat moved from there.
+        depart_time = track[0].time
+    arrive_time = next_stay.start if next_stay else track[-1].time
+    if next_stay is not None and arrive_time - track[-1].time >= max_gap:
+        # The next stay only starts after a real data gap (e.g. the logger was switched off
+        # right after arriving): it still supplies the arrival *place* (ports are linked across
+        # a gap, see _merge_short_stops), but the boat was last seen at the end of this track,
+        # not hours later when data resumed. Found in practice: a trip that ended at 12:14
+        # local was reported as arriving at 14:39, when the logger came back on.
+        arrive_time = track[-1].time
+    return _Endpoints(
+        depart_time=depart_time,
+        arrive_time=arrive_time,
+        depart_place=prev_stay.place if prev_stay else "Unknown (start outside log file)",
+        arrive_place=next_stay.place if next_stay else "Unknown (end outside log file)",
+        depart_lat=prev_stay.lat if prev_stay else track[0].lat,
+        depart_lon=prev_stay.lon if prev_stay else track[0].lon,
+        arrive_lat=next_stay.lat if next_stay else track[-1].lat,
+        arrive_lon=next_stay.lon if next_stay else track[-1].lon,
+    )
+
+
+def _build_trip(
+    samples: NavSampleArray,
+    group: Group,
+    prev_stay: Optional[Stay],
+    next_stay: Optional[Stay],
+    max_gap: timedelta,
+    season: _SeasonData,
+) -> TripLeg:
+    """One "moving" run as a TripLeg, with the stays on either side (if any) for its endpoints."""
+    track = _materialize(samples, group)
+    end = _trip_endpoints(track, prev_stay, next_stay, max_gap)
+    depart_time, arrive_time = end.depart_time, end.arrive_time
+
+    distance_nm = _trip_distance_nm(samples, group)
+    avg_speed_kn, max_speed_kn, max_speed_at = _speed_stats_kn(track)
+    max_speed_rpm = _rpm_at_time(season.rpm, max_speed_at, depart_time, arrive_time) if max_speed_at else {}
+    min_depth_m, min_depth_lat, min_depth_lon = _min_depth(track)
+    avg_water_temp_c, min_water_temp_c, max_water_temp_c = _water_temp_stats(track)
+    roll_variation_deg, pitch_variation_deg, roll_range_deg, pitch_range_deg = _motion_variation(
+        season.attitude, depart_time, arrive_time
+    )
+
+    return TripLeg(
+        depart_time=depart_time,
+        arrive_time=arrive_time,
+        depart_place=end.depart_place,
+        arrive_place=end.arrive_place,
+        depart_lat=end.depart_lat,
+        depart_lon=end.depart_lon,
+        arrive_lat=end.arrive_lat,
+        arrive_lon=end.arrive_lon,
+        duration=_moving_duration(track, max_gap),
+        distance_nm=distance_nm,
+        avg_speed_kn=avg_speed_kn,
+        max_speed_kn=max_speed_kn,
+        fuel_liters=_fuel_liters(season.engine, depart_time, arrive_time),
+        fuel_liters_device=_device_fuel_delta(season.trip_fuel, depart_time, arrive_time),
+        engine_hours=_engine_hours_delta(
+            season.engine, depart_time, arrive_time, prev_stay, next_stay, season.on_intervals_by_instance
+        ),
+        engine_hours_total=_engine_hours_total(season.engine, depart_time, arrive_time),
+        engine_health=_engine_health(season.engine, depart_time, arrive_time),
+        typical_rpm=_typical_rpm(season.rpm, depart_time, arrive_time),
+        typical_rpm_speed_kn=_typical_rpm_speed_range(season.rpm, season.engine, track, depart_time, arrive_time),
+        battery_health=_battery_health(season.battery, depart_time, arrive_time),
+        min_depth_m=min_depth_m,
+        min_depth_lat=min_depth_lat,
+        min_depth_lon=min_depth_lon,
+        avg_water_temp_c=avg_water_temp_c,
+        min_water_temp_c=min_water_temp_c,
+        max_water_temp_c=max_water_temp_c,
+        roll_variation_deg=roll_variation_deg,
+        pitch_variation_deg=pitch_variation_deg,
+        roll_range_deg=roll_range_deg,
+        pitch_range_deg=pitch_range_deg,
+        track=_track_reaching_markers(
+            track, depart_time, end.depart_lat, end.depart_lon, arrive_time, end.arrive_lat, end.arrive_lon
+        ),
+        max_speed_at=max_speed_at,
+        max_speed_rpm=max_speed_rpm,
+    )
+
+
 def build_trips(
     fixes: Union[FixArray, Iterable[PositionFix]],
     sogs: Union[SogArray, Iterable[SogSample]],
@@ -1427,145 +1610,38 @@ def build_trips(
     # ...), not yet genuinely at rest, regardless of what the instantaneous SOG says.
     on_intervals, on_intervals_by_instance = _engine_on_intervals(engine_samples)
 
-    # Bucketed+sorted once here rather than inside each per-trip "leaf" function below (see
-    # _InstanceIndex) -- otherwise every one of them re-scans the *entire* season's engine/
-    # RPM/battery/trip-fuel samples from scratch, once per trip, which is exactly what made this
-    # phase slow in practice once the earlier OOM/sort issues were fixed (found in practice: a
-    # single trip taking minutes with ~400k engine + ~1.75M RPM samples for a full season).
-    engine_by_instance = _InstanceIndex(engine_samples)
-    rpm_by_instance = _InstanceIndex(rpm_samples)
-    battery_by_instance = _InstanceIndex(battery_samples)
-    trip_fuel_by_instance = _InstanceIndex(trip_fuel_samples)
-
-    runs = _classify_runs(samples, speed_threshold_ms)
-    runs = _merge_short_stops(samples, runs, min_stop, max_gap)
-    if lock_radius_m is not None and lock_max_duration_minutes is not None:
-        lock_max_duration = timedelta(minutes=lock_max_duration_minutes)
-        runs = _reclassify_locks(samples, runs, on_intervals, lock_radius_m, lock_max_duration)
-        runs = _merge_adjacent(runs)
-    runs = _split_runs_on_gaps(samples, runs, max_gap)
-    effective_min_leg_distance_nm = (
-        min_leg_distance_nm if min_leg_distance_nm is not None else min_trip_distance_nm
+    season = _SeasonData(
+        engine=_InstanceIndex(engine_samples),
+        rpm=_InstanceIndex(rpm_samples),
+        battery=_InstanceIndex(battery_samples),
+        trip_fuel=_InstanceIndex(trip_fuel_samples),
+        on_intervals_by_instance=on_intervals_by_instance,
+        attitude=attitude_samples,
     )
-    runs = _merge_negligible_trips(samples, runs, effective_min_leg_distance_nm, max_gap, lock_radius_m)
+
+    runs = _classify_trip_runs(
+        samples,
+        on_intervals,
+        speed_threshold_ms=speed_threshold_ms,
+        min_stop=min_stop,
+        max_gap=max_gap,
+        min_leg_distance_nm=min_leg_distance_nm if min_leg_distance_nm is not None else min_trip_distance_nm,
+        lock_radius_m=lock_radius_m,
+        lock_max_duration_minutes=lock_max_duration_minutes,
+    )
     log(f"[info] ...{len(runs)} run(s) classified, computing per-trip statistics...")
 
-    # A cheap, offline placeholder -- never the real geocoder. Actually resolving place names
-    # here would get them baked straight into a "settled" TripLeg (see trip_cache.py), frozen in
-    # the cache forever the moment this trip stops being freshly rebuilt every run: a real
-    # lookup failure (a rate-limited geocoding service, no internet that one time, ...) would
-    # otherwise permanently stick a wrong/degraded name on that trip, with no way for a later,
-    # working run to ever correct it short of clearing the whole trip cache and re-decoding
-    # everything (found in practice). resolve_trip_places() below is the real, always-rerun
-    # resolution step instead -- run once, every run, over every trip (settled or fresh alike),
-    # right before a trip is actually shown/written -- so a fixed connection or an unrelated
-    # geocode-cache clear fixes it on the very next run, no full rebuild required.
-    placeholder_geocoder = NoGeocoder()
-    stays: List[Optional[Stay]] = []
-    total_stays = sum(1 for label, _ in runs if label == "stationary")
-    stays_done = 0
-    for label, group in runs:
-        if label != "stationary":
-            stays.append(None)
-            continue
-        track = _materialize(samples, group)
-        lat, lon = _settled_position(track, speed_threshold_ms, on_intervals, lock_radius_m)
-        place = placeholder_geocoder.place_name(lat, lon)
-        stays.append(Stay(track[0].time, track[-1].time, lat, lon, place))
-        stays_done += 1
-        log(f"[info] ......stay {stays_done}/{total_stays} processed")
+    stays = _build_stays(samples, runs, speed_threshold_ms, on_intervals, lock_radius_m)
 
     trips: List[TripLeg] = []
     total_trips = sum(1 for label, _ in runs if label == "moving")
-    trips_done = 0
     for idx, (label, group) in enumerate(runs):
         if label != "moving":
             continue
         prev_stay = stays[idx - 1] if idx > 0 else None
         next_stay = stays[idx + 1] if idx + 1 < len(stays) else None
-
-        track = _materialize(samples, group)
-
-        depart_time = prev_stay.end if prev_stay else track[0].time
-        if prev_stay is not None and track[0].time - depart_time >= max_gap:
-            # Mirror image of the arrival case below: the logger was off for a real data gap
-            # between the last sample of the previous stay and the first sample of this trip, so
-            # the boat was only *seen* leaving when data resumed. The previous stay still supplies
-            # the departure *place*, but not a departure time from before the gap. Found in
-            # practice: a trip reported as departing at 08:56 local, when the logger only came
-            # back on at 10:21 and the boat moved from there.
-            depart_time = track[0].time
-        arrive_time = next_stay.start if next_stay else track[-1].time
-        if next_stay is not None and arrive_time - track[-1].time >= max_gap:
-            # The next stay only starts after a real data gap (e.g. the logger was switched off
-            # right after arriving): it still supplies the arrival *place* (ports are linked across
-            # a gap, see _merge_short_stops), but the boat was last seen at the end of this track,
-            # not hours later when data resumed. Found in practice: a trip that ended at 12:14
-            # local was reported as arriving at 14:39, when the logger came back on.
-            arrive_time = track[-1].time
-        depart_place = prev_stay.place if prev_stay else "Unknown (start outside log file)"
-        arrive_place = next_stay.place if next_stay else "Unknown (end outside log file)"
-        depart_lat = prev_stay.lat if prev_stay else track[0].lat
-        depart_lon = prev_stay.lon if prev_stay else track[0].lon
-        arrive_lat = next_stay.lat if next_stay else track[-1].lat
-        arrive_lon = next_stay.lon if next_stay else track[-1].lon
-
-        distance_nm = _trip_distance_nm(samples, group)
-        avg_speed_kn, max_speed_kn, max_speed_at = _speed_stats_kn(track)
-        max_speed_rpm = (
-            _rpm_at_time(rpm_by_instance, max_speed_at, depart_time, arrive_time) if max_speed_at else {}
-        )
-        min_depth_m, min_depth_lat, min_depth_lon = _min_depth(track)
-        avg_water_temp_c, min_water_temp_c, max_water_temp_c = _water_temp_stats(track)
-        roll_variation_deg, pitch_variation_deg, roll_range_deg, pitch_range_deg = _motion_variation(
-            attitude_samples, depart_time, arrive_time
-        )
-
-        trips.append(
-            TripLeg(
-                depart_time=depart_time,
-                arrive_time=arrive_time,
-                depart_place=depart_place,
-                arrive_place=arrive_place,
-                depart_lat=depart_lat,
-                depart_lon=depart_lon,
-                arrive_lat=arrive_lat,
-                arrive_lon=arrive_lon,
-                duration=_moving_duration(track, max_gap),
-                distance_nm=distance_nm,
-                avg_speed_kn=avg_speed_kn,
-                max_speed_kn=max_speed_kn,
-                fuel_liters=_fuel_liters(engine_by_instance, depart_time, arrive_time),
-                fuel_liters_device=_device_fuel_delta(trip_fuel_by_instance, depart_time, arrive_time),
-                engine_hours=_engine_hours_delta(
-                    engine_by_instance, depart_time, arrive_time, prev_stay, next_stay, on_intervals_by_instance
-                ),
-                engine_hours_total=_engine_hours_total(engine_by_instance, depart_time, arrive_time),
-                engine_health=_engine_health(engine_by_instance, depart_time, arrive_time),
-                typical_rpm=_typical_rpm(rpm_by_instance, depart_time, arrive_time),
-                typical_rpm_speed_kn=_typical_rpm_speed_range(
-                    rpm_by_instance, engine_by_instance, track, depart_time, arrive_time
-                ),
-                battery_health=_battery_health(battery_by_instance, depart_time, arrive_time),
-                min_depth_m=min_depth_m,
-                min_depth_lat=min_depth_lat,
-                min_depth_lon=min_depth_lon,
-                avg_water_temp_c=avg_water_temp_c,
-                min_water_temp_c=min_water_temp_c,
-                max_water_temp_c=max_water_temp_c,
-                roll_variation_deg=roll_variation_deg,
-                pitch_variation_deg=pitch_variation_deg,
-                roll_range_deg=roll_range_deg,
-                pitch_range_deg=pitch_range_deg,
-                track=_track_reaching_markers(
-                    track, depart_time, depart_lat, depart_lon, arrive_time, arrive_lat, arrive_lon
-                ),
-                max_speed_at=max_speed_at,
-                max_speed_rpm=max_speed_rpm,
-            )
-        )
-        trips_done += 1
-        log(f"[info] ......trip {trips_done}/{total_trips} processed")
+        trips.append(_build_trip(samples, group, prev_stay, next_stay, max_gap, season))
+        log(f"[info] ......trip {len(trips)}/{total_trips} processed")
     return [trip for trip in trips if trip.distance_nm >= min_trip_distance_nm]
 
 
