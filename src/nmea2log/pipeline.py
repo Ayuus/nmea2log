@@ -31,6 +31,7 @@ from .fix_array import (
     WaterTempArray,
 )
 from .gnss_gate import GnssFixGate
+from .logfile_layout import log_logfile_layout
 from .log import log
 from .model import (
     AttitudeSample,
@@ -407,6 +408,42 @@ class _ResumeInfo:
     ebl_time_state_before_file: Dict[int, object]
 
 
+def _log_decoded_file_counts(logfiles: List[Path], resume_index: int, sample_cache: SampleCache) -> None:
+    """The count of decoded files per folder, checked like the .ebl files themselves (see
+    logfile_layout.py): every file this run decoded (``logfiles[resume_index:]``) must have its samples on
+    disk in the sample cache -- one entry file per .ebl file, named by a hash of its path -- folder by
+    folder. Loud for a folder where one is missing (the next run would decode it again; a write that
+    failed silently would look like that), and a note about entries that belong to none of the archive's
+    .ebl files any more (a file removed or moved)."""
+    decoded = logfiles[resume_index:]
+    total_by_folder: Dict[str, int] = {}
+    missing_by_folder: Dict[str, List[str]] = {}
+    for path in decoded:
+        folder = path.parent.name
+        total_by_folder[folder] = total_by_folder.get(folder, 0) + 1
+        if not sample_cache.has_entry(path):
+            missing_by_folder.setdefault(folder, []).append(path.name)
+    for folder, names in missing_by_folder.items():
+        shown = ", ".join(names[:6]) + (f" and {len(names) - 6} more" if len(names) > 6 else "")
+        log(
+            f"[anomaly] Decoded samples: {folder}: {total_by_folder[folder] - len(names)}/{total_by_folder[folder]} "
+            f"file(s) are in the sample cache, missing: {shown}",
+            file=sys.stderr,
+        )
+    if decoded and not missing_by_folder:
+        log(
+            f"[info] Decoded samples: {len(decoded)}/{len(decoded)} file(s) in {len(total_by_folder)} folder(s) "
+            "are in the sample cache.",
+            file=sys.stderr,
+        )
+    orphans = sample_cache.orphan_entry_count(logfiles)
+    if orphans:
+        log(
+            f"[info] Sample cache: {orphans} entrie(s) belong to .ebl files that are no longer in the archive.",
+            file=sys.stderr,
+        )
+
+
 def _decode_logfiles(
     logfiles: List[Path],
     resume_index: int,
@@ -507,6 +544,8 @@ def _decode_logfiles(
     log(f"[info] ...decoded {len(logfiles)}/{len(logfiles)} logfile(s) so far", file=sys.stderr)
 
     decoded_file_count = len(logfiles) - resume_index
+    if sample_cache is not None:
+        _log_decoded_file_counts(logfiles, resume_index, sample_cache)
     if sample_cache is not None and cache_hits:
         log(
             f"[cache] reused decoded samples for {cache_hits}/{decoded_file_count} file(s), "
@@ -698,6 +737,7 @@ def build_season_trips(
 
     Raises PipelineError/PipelineCancelled instead of returning an error, so each caller can
     report it its own way."""
+    log_logfile_layout(logfiles)
     trip_signature = _trip_config_signature(args)
     trip_cache_store = None if trip_cache_path is None else TripCache(trip_cache_path)
     # resume_index: first file index this run actually needs to decode -- 0 unless a usable trip

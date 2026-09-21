@@ -24,7 +24,7 @@ import shutil
 import zlib
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional, Sequence, Tuple
+from typing import Dict, Iterable, Optional, Sequence, Tuple
 
 from .fix_array import scan_time_regressions, to_epoch
 from .log import log
@@ -202,6 +202,15 @@ class SampleCache:
         self.cache_dir = cache_dir
         _migrate_legacy_cache(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def has_entry(self, path: Path) -> bool:
+        """Whether an entry file exists for this .ebl file (not whether it is still valid: get() decides that)."""
+        return _entry_path(self.cache_dir, _cache_key(path)).exists()
+
+    def orphan_entry_count(self, logfiles: Iterable[Path]) -> int:
+        """How many entry files belong to none of ``logfiles`` (an .ebl file that was removed or moved)."""
+        expected = {_entry_path(self.cache_dir, _cache_key(path)).name for path in logfiles}
+        return sum(1 for entry in self.cache_dir.glob("*.pkl.zz") if entry.name not in expected)
 
     def _load_entry(self, path: Path) -> Optional[dict]:
         """The raw (still encoded) entry of this exact file (by size), or None on a miss."""
