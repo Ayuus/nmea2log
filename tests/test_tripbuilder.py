@@ -80,6 +80,31 @@ def test_trip_arrival_is_the_last_time_the_boat_was_seen_when_a_data_gap_follows
     assert trips[0].arrive_lat == pytest.approx(52.4001, abs=1e-4)  # place still linked across the gap
 
 
+def test_trip_departure_is_the_first_time_the_boat_was_seen_moving_when_a_data_gap_precedes():
+    """Mirror of the arrival case above (real incident, Arzal 2026-09-12): the logger was off for
+    ~85 minutes after the boat's last stationary sample, so the trip was reported as departing at
+    08:56 local when the boat was only seen moving at 10:21. The previous stay still supplies the
+    departure place; only the time is clamped to the start of the trip's own track."""
+    fixes, sogs = [], []
+    for m in range(0, 12):  # stay, then the logger goes off
+        fixes.append(PositionFix(_dt(m), 52.30, 4.90))
+        sogs.append(SogSample(_dt(m), 0.0))
+    resume = 100  # a gap of well over max_gap
+    for i, m in enumerate(range(resume, resume + 30)):  # data resumes with the boat already underway
+        frac = i / 29
+        fixes.append(PositionFix(_dt(m), 52.30 + 0.10 * frac, 4.90 + 0.05 * frac))
+        sogs.append(SogSample(_dt(m), 3.0))
+    for m in range(resume + 30, resume + 42):  # arrives and stops
+        fixes.append(PositionFix(_dt(m), 52.40, 4.95))
+        sogs.append(SogSample(_dt(m), 0.0))
+
+    trips = build_trips(fixes, sogs, [], speed_threshold_kn=0.5, min_stop_minutes=10)
+
+    assert len(trips) == 1
+    assert trips[0].depart_time == _dt(resume)  # first sample of the trip's own track, not _dt(11)
+    assert trips[0].depart_lat == pytest.approx(52.30, abs=1e-4)  # place still linked across the gap
+
+
 def test_build_trips_single_leg():
     fixes, sogs, engine_samples = _build_scenario()
 

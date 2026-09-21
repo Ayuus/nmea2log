@@ -67,7 +67,7 @@ _RPM_BUCKET = 50  # round RPM to the nearest multiple of this before taking the 
 # data until the affected trips aged out of the cache on their own -- on a real device, that's
 # potentially never. Included in config_signature() specifically so a bump here always forces a
 # one-time full rebuild instead.
-TRIP_LOGIC_VERSION = 5
+TRIP_LOGIC_VERSION = 6
 _RPM_STABLE_MINUTES = 2.0  # a run at the typical RPM bucket must last at least this long to
 # count as steady cruising rather than a brief pass-through while accelerating/decelerating
 
@@ -1451,6 +1451,14 @@ def build_trips(
         track = _materialize(samples, group)
 
         depart_time = prev_stay.end if prev_stay else track[0].time
+        if prev_stay is not None and track[0].time - depart_time >= max_gap:
+            # Mirror image of the arrival case below: the logger was off for a real data gap
+            # between the last sample of the previous stay and the first sample of this trip, so
+            # the boat was only *seen* leaving when data resumed. The previous stay still supplies
+            # the departure *place*, but not a departure time from before the gap. Found in
+            # practice: a trip reported as departing at 08:56 local, when the logger only came
+            # back on at 10:21 and the boat moved from there.
+            depart_time = track[0].time
         arrive_time = next_stay.start if next_stay else track[-1].time
         if next_stay is not None and arrive_time - track[-1].time >= max_gap:
             # The next stay only starts after a real data gap (e.g. the logger was switched off
