@@ -19,6 +19,7 @@ Two transports:
 from __future__ import annotations
 
 import base64
+import json
 import subprocess
 import tempfile
 import urllib.error
@@ -54,7 +55,8 @@ def upload_via_rest(html_content: bytes, url: str, user: str, app_password: str)
     )
     try:
         with urllib.request.urlopen(request, timeout=60) as response:
-            response.read()
+            body = response.read()
+            final_url = response.geturl()
     # HTTPError first: it's a URLError subclass, so the broader except below would otherwise
     # catch it too, but without the response body the server actually sent (e.g. this plugin's
     # own WP_Error message, like "Uploaded content looks incomplete") -- exactly the detail
@@ -65,6 +67,25 @@ def upload_via_rest(html_content: bytes, url: str, user: str, app_password: str)
         raise UploadError(f"HTTP {exc.code}: {body or exc.reason}") from exc
     except (urllib.error.URLError, OSError) as exc:
         raise UploadError(str(exc)) from exc
+
+    # A 2xx response alone isn't proof anything was actually uploaded -- found in practice, for
+    # real: a misconfigured url pointing at the site's own page (not the REST endpoint) got a
+    # 301/302 back, which urllib follows *silently*, converting the POST to a GET as it does so --
+    # the login page it landed on then answered 200, with the logbook itself dropped on the floor
+    # by the redirect, and this function returning normally as if it had succeeded. The plugin's
+    # own success response is always exactly ``{"ok": true, "bytes": <int>}`` (see
+    # nmea2log_logbook_upload() in wordpress-plugin/nmea2log-remarks.php), so anything else --
+    # wrong content type, a login form, an unrelated JSON shape -- is treated as a failure here,
+    # regardless of the HTTP status code that got it there.
+    if final_url != url:
+        raise UploadError(f"Redirected to {final_url} instead of uploading -- check the configured URL")
+    try:
+        result = json.loads(body)
+    except ValueError:
+        result = None
+    if not isinstance(result, dict) or result.get("ok") is not True:
+        preview = body[:200].decode("utf-8", errors="replace")
+        raise UploadError(f"Unexpected response, not the plugin's own success reply -- check the configured URL: {preview!r}")
 
 
 def _sftp_error_message(result: subprocess.CompletedProcess) -> str:

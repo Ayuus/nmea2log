@@ -189,8 +189,9 @@ def test_upload_file_raises_with_the_sftp_error_message(tmp_path: Path, monkeypa
 
 
 class _FakeHttpResponse:
-    def __init__(self, body: bytes = b'{"ok":true}'):
+    def __init__(self, body: bytes = b'{"ok":true}', url: str = "https://example.org/wp-json/nmea2log/v1/logbook"):
         self._body = body
+        self._url = url
 
     def __enter__(self):
         return self
@@ -200,6 +201,9 @@ class _FakeHttpResponse:
 
     def read(self):
         return self._body
+
+    def geturl(self):
+        return self._url
 
 
 def test_upload_via_rest_sends_basic_auth_and_the_raw_body(monkeypatch):
@@ -249,4 +253,33 @@ def test_upload_via_rest_raises_on_a_network_error(monkeypatch):
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
 
     with pytest.raises(UploadError, match="Connection refused"):
+        upload_via_rest(b"x", url="https://example.org/wp-json/nmea2log/v1/logbook", user="alice", app_password="pw")
+
+
+def test_upload_via_rest_raises_when_silently_redirected_elsewhere(monkeypatch):
+    # Found in practice, for real: a url misconfigured as the site's own page (not the REST
+    # endpoint) got a 301, which urllib follows on its own, converting the POST to a GET -- the
+    # page it lands on (here, WordPress's own login screen) then answers 200, with the logbook
+    # itself dropped by the redirect. Without checking response.geturl(), this used to read as a
+    # plain success.
+    def fake_urlopen(request, timeout=None):
+        return _FakeHttpResponse(body=b"<html>login form</html>", url="https://example.org/wp-login.php?redirect_to=...")
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(UploadError, match="Redirected"):
+        upload_via_rest(b"x", url="https://example.org/wp-json/nmea2log/v1/logbook", user="alice", app_password="pw")
+
+
+def test_upload_via_rest_raises_on_a_response_that_isnt_the_plugins_own_success_reply(monkeypatch):
+    # No redirect this time (geturl() matches the requested url), but the body isn't the
+    # plugin's own {"ok": true, "bytes": N} either -- still not proof anything was uploaded, same
+    # reasoning as the redirect case above, just via a different failure mode (a caching layer, a
+    # maintenance page, ...).
+    def fake_urlopen(request, timeout=None):
+        return _FakeHttpResponse(body=b"<html>maintenance</html>")
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(UploadError, match="Unexpected response"):
         upload_via_rest(b"x", url="https://example.org/wp-json/nmea2log/v1/logbook", user="alice", app_password="pw")
