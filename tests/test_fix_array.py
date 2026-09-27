@@ -239,8 +239,7 @@ def test_sog_array_reports_an_anomaly_when_it_has_to_drop_a_backward_jumping_row
     SogArray([SogSample(base + timedelta(seconds=5), 1.0, None), SogSample(base, 2.0, None)]).drop_time_regressions()
 
     out = "\n".join(log_lines)
-    assert "[anomaly] Speed (SOG) samples: dropped 1 row(s)" in out
-    assert "needs investigating" in out
+    assert "[anomaly] Not in time order (Speed (SOG) samples) -- ignored 1 row(s)" in out
     assert "[warning]" not in out  # the Android app turns every [warning] line into a lost-connection notice
 
 
@@ -250,7 +249,7 @@ def test_attitude_array_reports_an_anomaly_when_it_accepts_a_large_backward_jump
         [AttitudeSample(base, 1.0, 2.0), AttitudeSample(base - timedelta(days=40), 3.0, 4.0)]
     ).drop_time_regressions()
 
-    assert "[anomaly] Attitude samples: accepted 1 large backward jump(s) as a clock reset" in "\n".join(log_lines)
+    assert "[anomaly] Not in time order (Attitude samples) -- 1 clock reset(s)" in "\n".join(log_lines)
 
 
 def test_sorted_arrays_report_nothing(log_lines):

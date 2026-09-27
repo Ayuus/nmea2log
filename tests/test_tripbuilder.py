@@ -15,7 +15,6 @@ from nmea2log.model import (
 )
 from nmea2log.fix_array import FixArray, SogArray
 from nmea2log.tripbuilder import (
-    _POWER_ON_SETTLE_S,
     _reject_gps_outliers_array,
     build_trips,
     build_trips_with_state,
@@ -495,10 +494,9 @@ def test_reject_gps_outliers_array_reports_time_anomalies_and_corrupted_fixes(lo
     _reject_gps_outliers_array(FixArray(fixes))
 
     out = "\n".join(log_lines)
-    assert "[anomaly] Position fixes: dropped 1 row(s) that went backward in time" in out
-    assert "[anomaly] Position fixes: dropped 1 fix(es) implying more than 60 kn" in out
-    assert "at 2026-08-25 08:20:36 UTC (1 fix)" in out  # when: a start-up glitch vs. mid-trip
-    assert "more than 300 s after a power-on" in out  # and what "later" means
+    assert "[anomaly] Not in time order (Position fixes) -- ignored 1 row(s)" in out
+    assert "[anomaly] Speed outlier (not start-up) -- ignored 1 fix(es)" in out
+    assert "(2026-08-25 08:20:36 UTC)" in out  # when: a start-up glitch vs. mid-trip
 
 
 def test_reject_gps_outliers_array_stays_quiet_for_equal_timestamps(log_lines):
@@ -532,13 +530,13 @@ def test_reject_gps_outliers_array_drops_a_fix_far_further_than_the_reported_spe
 
     assert len(kept) == 1
     text = "\n".join(log_lines)
-    assert "dropped 2 fix(es) that moved much further than the receiver's own speed" in text
-    assert "at 2026-07-30 12:39:01 until 2026-07-30 12:39:02 UTC (2 fixes)" in text
+    assert "Speed outlier (start-up) -- ignored 2 fix(es)" in text
+    assert "(2026-07-30 12:39:01/2026-07-30 12:39:02 UTC)" in text
 
 
-def test_outlier_log_lines_list_separate_stretches_and_cap_how_many(log_lines):
-    """Each stretch (fixes within 30 s of each other) is spelled out with its own count; a source
-    that keeps glitching must not produce an unbounded line."""
+def test_outlier_log_lines_list_each_stretch_on_its_own_line(log_lines):
+    """Each stretch (fixes within 30 s of each other) gets its own short log line, same one-
+    line-per-stretch format as gnss_gate.py's own GnssFixGate.finish()."""
     fixes = [_fix_north_of(47.83745, 0, 0)]
     for k in range(1, 11):  # ten separate one-fix jumps, an hour apart, each well after its power-on
         for seconds in (0, 100, 200, 300, 400):
@@ -547,9 +545,7 @@ def test_outlier_log_lines_list_separate_stretches_and_cap_how_many(log_lines):
     _reject_gps_outliers_array(FixArray(fixes), None)
 
     out = "\n".join(log_lines)
-    assert "[anomaly] Position fixes: dropped 10 fix(es) implying more than 60 kn" in out
-    assert out.count(" UTC (1 fix)") == 8  # only the first eight stretches are spelled out
-    assert "and 2 more" in out
+    assert out.count("[anomaly] Speed outlier (not start-up) -- ignored 1 fix(es)") == 10
 
 
 def test_drops_right_after_power_on_are_info_not_an_anomaly(log_lines):
@@ -562,8 +558,7 @@ def test_drops_right_after_power_on_are_info_not_an_anomaly(log_lines):
     _reject_gps_outliers_array(fixes, sogs)
 
     out = "\n".join(log_lines)
-    assert "[info] Position fixes: dropped 2 fix(es) that moved much further" in out
-    assert f"within {_POWER_ON_SETTLE_S:.0f} s of a power-on" in out
+    assert "[info] Speed outlier (start-up) -- ignored 2 fix(es)" in out
     assert "[anomaly]" not in out
 
 
@@ -575,8 +570,7 @@ def test_a_drop_well_after_power_on_is_still_an_anomaly(log_lines):
     _reject_gps_outliers_array(fixes, sogs)
 
     out = "\n".join(log_lines)
-    assert "[anomaly] Position fixes: dropped 1 fix(es) that moved much further" in out
-    assert "more than 300 s after a power-on" in out
+    assert "[anomaly] Speed outlier (not start-up) -- ignored 1 fix(es)" in out
     assert "[info]" not in out
 
 
@@ -593,7 +587,7 @@ def test_a_long_gap_starts_a_new_power_on_window(log_lines):
     _reject_gps_outliers_array(fixes, sogs)
 
     out = "\n".join(log_lines)
-    assert "[info] Position fixes: dropped 1 fix(es) that moved much further" in out
+    assert "[info] Speed outlier (start-up) -- ignored 1 fix(es)" in out
     assert "[anomaly]" not in out
 
 

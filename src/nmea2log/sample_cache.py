@@ -104,7 +104,6 @@ class AttitudeSummary:
     first_time: datetime
     last_time: datetime
     dropped: int = 0
-    max_backward_s: float = 0.0
     first_dropped_at: Optional[float] = None
     clock_resets: int = 0
 
@@ -115,7 +114,7 @@ def _summarize_times(times: Sequence[datetime]) -> AttitudeSummary:
         return summary  # in order, the normal case: nothing more to find out
     scan = scan_time_regressions([to_epoch(t) for t in times])
     return dataclasses.replace(
-        summary, dropped=scan.dropped, max_backward_s=scan.max_backward_s,
+        summary, dropped=scan.dropped,
         first_dropped_at=scan.first_dropped_at, clock_resets=scan.clock_resets,
     )
 

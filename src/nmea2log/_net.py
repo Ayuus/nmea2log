@@ -102,10 +102,9 @@ class FailureBreaker:
     real 25-trip run), and the places or days involved are not cached when their lookup failed, so a later run
     simply tries again. A lookup that works starts the count over. Logs once when it switches off."""
 
-    def __init__(self, service: str, tag: str, consequence: str, limit: int = 3) -> None:
+    def __init__(self, service: str, tag: str, limit: int = 3) -> None:
         self._service = service
         self._tag = tag
-        self._consequence = consequence
         self._limit = limit
         self._failed_in_a_row = 0
         self.off = False
@@ -118,7 +117,6 @@ class FailureBreaker:
         if self._failed_in_a_row >= self._limit and not self.off:
             self.off = True
             log(
-                f"[{self._tag}] {self._service} switched off for the rest of this run: {self._failed_in_a_row} "
-                f"lookups in a row failed on every attempt. {self._consequence}",
+                f"[{self._tag}] {self._failed_in_a_row} failed lookups in a row -- {self._service} off for this run.",
                 file=sys.stderr,
             )

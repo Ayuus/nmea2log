@@ -28,7 +28,7 @@ class _FakeResponse:
 
 
 def _breaker(limit: int = 3) -> _net.FailureBreaker:
-    return _net.FailureBreaker("Some service", "tag", "What happens next.", limit=limit)
+    return _net.FailureBreaker("Some service", "tag", limit=limit)
 
 
 def test_the_breaker_switches_off_after_the_limit_of_failures_in_a_row(capsys):
@@ -40,7 +40,7 @@ def test_the_breaker_switches_off_after_the_limit_of_failures_in_a_row(capsys):
     breaker.record(False)
 
     assert breaker.off
-    assert "[tag] Some service switched off for the rest of this run: 3 lookups in a row failed" in capsys.readouterr().err
+    assert "[tag] 3 failed lookups in a row -- Some service off for this run." in capsys.readouterr().err
 
 
 def test_a_lookup_that_worked_starts_the_count_over():
@@ -59,7 +59,7 @@ def test_the_breaker_says_so_only_once(capsys):
     for _ in range(5):
         breaker.record(False)
 
-    assert capsys.readouterr().err.count("switched off") == 1
+    assert capsys.readouterr().err.count("off for this run") == 1
 
 
 @pytest.fixture
@@ -119,7 +119,7 @@ def test_open_meteo_is_left_alone_after_three_days_in_a_row_failed(monkeypatch, 
 
     assert results == [None] * 5
     assert len(asked) == 3 * (open_meteo._MAX_RETRIES + 1)  # three days with all their attempts, then no more requests
-    assert f"[{tag}] Open-Meteo switched off for the rest of this run" in capsys.readouterr().err
+    assert f"[{tag}] 3 failed lookups in a row -- Open-Meteo off for this run." in capsys.readouterr().err
     assert not (tmp_path / "cache.json").exists()
 
 

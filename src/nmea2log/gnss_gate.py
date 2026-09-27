@@ -15,7 +15,7 @@ from typing import Dict, List, Optional, Set
 
 from .log import log
 from .model import PositionFix
-from .stretches import Stretch, StretchLog
+from .stretches import StretchLog, format_stretch_times
 
 # canboat's GNSS_MODE values that mean the receiver has a position solution (1D/2D/3D/Auto);
 # anything else (6 = Error, or "not available") means it doesn't.
@@ -24,16 +24,6 @@ _GNSS_FIX_MODES = frozenset({0, 1, 2, 3})
 # HDOP a receiver reports as a placeholder while it has no satellites yet -- 99.00 on the real boat
 # above, for the first seconds after power-on.
 _NO_FIX_HDOP = 50.0
-
-
-def _format_stretch_times(stretch: Stretch) -> str:
-    """Just the times, slash-separated between a first/last pair -- this module's own log line
-    format (see GnssFixGate.finish()), deliberately not stretches.py's shared format_stretch()
-    (its "until"-based wording is also used by tripbuilder.py's speed-outlier message, which
-    keeps that phrasing; asked for explicitly to shorten only this one)."""
-    if stretch.last != stretch.first:
-        return f"{stretch.first:%Y-%m-%d %H:%M:%S}/{stretch.last:%Y-%m-%d %H:%M:%S} UTC"
-    return f"{stretch.first:%Y-%m-%d %H:%M:%S} UTC"
 
 
 def gnss_fix_usable(actual_mode: Optional[int], hdop: Optional[float], ever_reported_valid: bool) -> bool:
@@ -91,7 +81,7 @@ class GnssFixGate:
             for stretch in ignored.stretches:
                 log(
                     f"[info] No GNSS fix (start-up/shutdown) -- source {source} ignored "
-                    f"{stretch.count} fix(es) ({_format_stretch_times(stretch)}).",
+                    f"{stretch.count} fix(es) ({format_stretch_times(stretch)}).",
                     file=sys.stderr,
                 )
 

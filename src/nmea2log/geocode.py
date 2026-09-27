@@ -261,15 +261,11 @@ class Geocoder:
         self.precision = precision
         self._cache: dict[str, str] = {}
         self._last_request = 0.0
-        # See FailureBreaker: what happens to the places once a service has been given up on for this run.
-        self._nominatim_breaker = FailureBreaker(
-            "Nominatim", "geocode",
-            "The places after this show only their coordinates and are not cached, so a later run looks them up again.",
-        )
-        self._landmark_breaker = FailureBreaker(
-            "Overpass landmark check", "geocode",
-            "The places after this keep Nominatim's own name and are not cached, so a later run tries the check again.",
-        )
+        # See FailureBreaker: once given up on for this run, the places involved show only their
+        # coordinates (Nominatim) or keep Nominatim's own name (the Overpass landmark check), and
+        # aren't cached, so a later run tries them again.
+        self._nominatim_breaker = FailureBreaker("Nominatim", "geocode")
+        self._landmark_breaker = FailureBreaker("Overpass landmark check", "geocode")
         if cache_file is not None and cache_file.exists():
             self._cache = self._migrate_cache_precision(json.loads(cache_file.read_text(encoding="utf-8")))
 

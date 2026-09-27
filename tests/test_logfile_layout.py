@@ -101,7 +101,7 @@ def test_problems_are_logged_as_anomalies(tmp_path: Path, logged):
     log_logfile_layout(_archive(tmp_path, {0: [s for s in _full() if s != 3], 1: _full(2)}))
 
     assert len(logged) == 1
-    assert logged[0].startswith("[anomaly] Log files: EBL000000: 1 file(s) missing: 000000_003.ebl")
+    assert logged[0].startswith("[anomaly] Season may be incomplete -- EBL000000: 1 file(s) missing: 000000_003.ebl")
 
 
 def test_files_outside_an_ebl_folder_are_not_checked(tmp_path: Path, logged):
@@ -139,7 +139,7 @@ def test_a_decoded_file_without_a_cache_entry_is_reported_per_folder(tmp_path: P
 
     pipeline._log_decoded_file_counts(files, 0, _cache_with(tmp_path, files, skip={"000001_001.ebl"}))
 
-    assert logged == ["[anomaly] Decoded samples: EBL000001: 1/2 file(s) are in the sample cache, missing: 000001_001.ebl"]
+    assert logged == ["[anomaly] Sample cache missing entries (EBL000001) -- 1/2 decoded: 000001_001.ebl"]
 
 
 def test_files_before_the_resume_point_are_not_expected_to_have_been_decoded(tmp_path: Path, logged):

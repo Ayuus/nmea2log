@@ -76,7 +76,7 @@ def _is_sorted(time_column: "array.array[float]") -> bool:
     return all(time_column[i] <= time_column[i + 1] for i in range(len(time_column) - 1))
 
 
-def log_time_anomaly(label: str, dropped: int, max_backward_s: float, first_epoch: Optional[float], clock_resets: int) -> None:
+def log_time_anomaly(label: str, dropped: int, first_epoch: Optional[float], clock_resets: int) -> None:
     """Called whenever a time column turned out *not* to be in order -- which, with the decoder
     picking one consistent System Time source (see ebl_reader.py), should never happen on real
     data any more. Loud on purpose (its own ``[anomaly]`` tag, not ``[warning]``: the Android app
@@ -85,18 +85,11 @@ def log_time_anomaly(label: str, dropped: int, max_backward_s: float, first_epoc
     wrong clock), so an unexpected reappearance should be visible, not swallowed."""
     parts = []
     if dropped:
-        parts.append(
-            f"dropped {dropped} row(s) that went backward in time (largest jump {max_backward_s:.1f}s"
-            + (f", first at {from_epoch(first_epoch)}" if first_epoch is not None else "")
-            + ")"
-        )
+        when = f" ({from_epoch(first_epoch):%Y-%m-%d %H:%M:%S} UTC)" if first_epoch is not None else ""
+        parts.append(f"ignored {dropped} row(s){when}")
     if clock_resets:
-        parts.append(f"accepted {clock_resets} large backward jump(s) as a clock reset")
-    log(
-        f"[anomaly] {label}: " + "; ".join(parts) + " -- the source data is not in time order. "
-        "This should not happen and needs investigating (a second device broadcasting a "
-        "different clock was the cause last time); the affected rows were repaired, not trusted."
-    )
+        parts.append(f"{clock_resets} clock reset(s)")
+    log(f"[anomaly] Not in time order ({label}) -- " + "; ".join(parts) + ".")
 
 
 @dataclasses.dataclass
@@ -106,7 +99,6 @@ class TimeRegressionScan:
 
     keep: bytearray
     dropped: int
-    max_backward_s: float
     first_dropped_at: Optional[float]
     clock_resets: int
 
@@ -118,20 +110,18 @@ def scan_time_regressions(times) -> TimeRegressionScan:
     keep = bytearray(len(times))
     last_time = None
     dropped = clock_resets = 0
-    max_backward_s = 0.0
     first_dropped_at: Optional[float] = None
     for i, t in enumerate(times):
         if last_time is not None and t < last_time:
             if last_time - t < CLOCK_JUMP_THRESHOLD_S:
                 dropped += 1  # small backward jitter/duplicate -- drop it
-                max_backward_s = max(max_backward_s, last_time - t)
                 if first_dropped_at is None:
                     first_dropped_at = t
                 continue
             clock_resets += 1
         keep[i] = 1
         last_time = t
-    return TimeRegressionScan(keep, dropped, max_backward_s, first_dropped_at, clock_resets)
+    return TimeRegressionScan(keep, dropped, first_dropped_at, clock_resets)
 
 
 class _SampleArray:
@@ -234,7 +224,7 @@ class _SortableSampleArray(_SampleArray):
             return self
         scan = scan_time_regressions(self._time)
         if report:
-            log_time_anomaly(self._LABEL, scan.dropped, scan.max_backward_s, scan.first_dropped_at, scan.clock_resets)
+            log_time_anomaly(self._LABEL, scan.dropped, scan.first_dropped_at, scan.clock_resets)
         keep = scan.keep
         for column_name in self.__slots__:
             column = getattr(self, column_name)

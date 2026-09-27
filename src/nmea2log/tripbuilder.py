@@ -49,7 +49,7 @@ from .model import (
     TripFuelSample,
     WaterTempSample,
 )
-from .stretches import StretchLog
+from .stretches import StretchLog, format_stretch_times
 
 _KNOT_IN_MS = 0.514444
 _EARTH_RADIUS_NM = 3440.065
@@ -350,10 +350,13 @@ _POWER_ON_SETTLE_S = 300.0
 class _DropLog:
     """The fixes one plausibility check of _reject_gps_outliers_array dropped, and the log lines
     about them: those within _POWER_ON_SETTLE_S of a power-on are known receiver behaviour ([info]),
-    those anywhere else are a source-data problem ([anomaly]) -- see _POWER_ON_SETTLE_S."""
+    those anywhere else are a source-data problem ([anomaly]) -- see _POWER_ON_SETTLE_S. One short
+    line per stretch, same format as gnss_gate.py's own GnssFixGate.finish() -- asked for
+    explicitly, shortened the same way: no longer distinguishes *which* of the two plausibility
+    checks (_reject_gps_outliers_array's own "implausible"/"off_sog") a given drop came from, only
+    that it was a speed outlier -- that distinction wasn't worth the length it cost the line."""
 
-    def __init__(self, what: str) -> None:
-        self.what = what  # completes "dropped N fix(es) ..."
+    def __init__(self) -> None:
         self._at_power_on = StretchLog()
         self._elsewhere = StretchLog()
 
@@ -362,17 +365,15 @@ class _DropLog:
         log_.add(from_epoch(fix_time))
 
     def report(self) -> None:
-        if self._at_power_on.total:
+        for stretch in self._at_power_on.stretches:
             log(
-                f"[info] Position fixes: dropped {self._at_power_on.total} fix(es) {self.what}, at "
-                f"{self._at_power_on.describe()}, within {_POWER_ON_SETTLE_S:.0f} s of a power-on -- the "
-                f"receiver still settling on its position (expected)."
+                f"[info] Speed outlier (start-up) -- ignored {stretch.count} fix(es) "
+                f"({format_stretch_times(stretch)})."
             )
-        if self._elsewhere.total:
+        for stretch in self._elsewhere.stretches:
             log(
-                f"[anomaly] Position fixes: dropped {self._elsewhere.total} fix(es) {self.what}, at "
-                f"{self._elsewhere.describe()}, more than {_POWER_ON_SETTLE_S:.0f} s after a power-on -- "
-                f"a GPS position jump or corrupted position data in the source, worth a look if it keeps happening."
+                f"[anomaly] Speed outlier (not start-up) -- ignored {stretch.count} fix(es) "
+                f"({format_stretch_times(stretch)})."
             )
 
 
@@ -436,10 +437,9 @@ def _reject_gps_outliers_array(fixes: FixArray, sogs: Optional[SogArray] = None)
     prev_i = 0
     accepted.append_raw(fixes.time_at(0), fixes.lat_at(0), fixes.lon_at(0))
     backward_dropped = clock_resets = 0
-    implausible = _DropLog(f"implying more than {_MAX_PLAUSIBLE_SPEED_KN:.0f} kn from the previous accepted one")
-    off_sog = _DropLog("that moved much further than the receiver's own speed over ground allows")
+    implausible = _DropLog()
+    off_sog = _DropLog()
     session_start = fixes.time_at(0)  # the last power-on: see _POWER_ON_GAP_S
-    max_backward_s = 0.0
     first_backward_at: Optional[float] = None
     sog_idx = 0
     current_sog_ms: Optional[float] = None
@@ -462,7 +462,6 @@ def _reject_gps_outliers_array(fixes: FixArray, sogs: Optional[SogArray] = None)
             # same time) and quietly dropped; only a genuine step backward is worth reporting.
             if dt_hours < 0:
                 backward_dropped += 1
-                max_backward_s = max(max_backward_s, -dt_hours * 3600)
                 if first_backward_at is None:
                     first_backward_at = fix_time
             continue  # duplicate/out-of-order timestamp -- keep whichever came first
@@ -484,7 +483,7 @@ def _reject_gps_outliers_array(fixes: FixArray, sogs: Optional[SogArray] = None)
         accepted.append_raw(fix_time, fixes.lat_at(i), fixes.lon_at(i))
         prev_i = i
     if backward_dropped or clock_resets:
-        log_time_anomaly("Position fixes", backward_dropped, max_backward_s, first_backward_at, clock_resets)
+        log_time_anomaly("Position fixes", backward_dropped, first_backward_at, clock_resets)
     implausible.report()
     off_sog.report()
     # Written back into `fixes`' own columns (see FixArray.replace_columns_with's own docstring)

@@ -75,10 +75,9 @@ class OpenMeteoDayFetcher:
         self.user_agent = user_agent
         self._cache: Dict[str, Optional[DayData]] = {}
         self._last_request = 0.0
-        self._breaker = FailureBreaker(
-            "Open-Meteo", self._LOG_TAG,
-            "The days after this show no data and are not cached, so a later run fetches them again.",
-        )
+        # See FailureBreaker: once given up on for this run, the days involved show no data and
+        # aren't cached, so a later run fetches them again.
+        self._breaker = FailureBreaker("Open-Meteo", self._LOG_TAG)
         if cache_file is not None and cache_file.exists():
             self._cache = json.loads(cache_file.read_text(encoding="utf-8"))
 

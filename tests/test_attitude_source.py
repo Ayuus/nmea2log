@@ -136,7 +136,7 @@ def test_a_file_missing_from_the_cache_is_decoded_again_with_its_own_time_state(
 
     assert list(window) == files["a.ebl"][10]
     assert calls == [("a.ebl", {"time": "a.ebl"})]
-    assert any("Decoding a.ebl again" in line for line in logged)
+    assert any("decoding a.ebl again" in line for line in logged)
 
 
 def test_a_file_that_cannot_be_decoded_again_is_reported_and_left_out(tmp_path: Path, logged):
@@ -166,7 +166,7 @@ def test_rows_going_back_in_time_are_reported_once_for_the_season(tmp_path: Path
 
     anomalies = [line for line in logged if "[anomaly]" in line and "Attitude samples" in line]
     assert len(anomalies) == 1
-    assert "dropped 1 row(s)" in anomalies[0]
+    assert "ignored 1 row(s)" in anomalies[0]
 
 
 def test_a_file_starting_before_the_previous_one_ended_is_reported(tmp_path: Path, logged):
@@ -175,7 +175,7 @@ def test_a_file_starting_before_the_previous_one_ended_is_reported(tmp_path: Pat
 
     _segments_from_cache(tmp_path, files, cache).dominant_source()
 
-    assert any("start before the previous file ended" in line for line in logged)
+    assert any("Not in time order across files" in line and "ignored 1 file(s)" in line for line in logged)
 
 
 def test_a_file_in_order_reports_nothing(tmp_path: Path, logged):

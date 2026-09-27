@@ -426,8 +426,8 @@ def _log_decoded_file_counts(logfiles: List[Path], resume_index: int, sample_cac
     for folder, names in missing_by_folder.items():
         shown = ", ".join(names[:6]) + (f" and {len(names) - 6} more" if len(names) > 6 else "")
         log(
-            f"[anomaly] Decoded samples: {folder}: {total_by_folder[folder] - len(names)}/{total_by_folder[folder]} "
-            f"file(s) are in the sample cache, missing: {shown}",
+            f"[anomaly] Sample cache missing entries ({folder}) -- "
+            f"{total_by_folder[folder] - len(names)}/{total_by_folder[folder]} decoded: {shown}",
             file=sys.stderr,
         )
     if decoded and not missing_by_folder:

@@ -572,7 +572,7 @@ def test_switching_overpass_off_is_logged_once(monkeypatch, tmp_path, capsys):
     for i in range(6):
         geocoder.place_name(47.50 + i * 0.1, -2.88)
 
-    assert capsys.readouterr().err.count("Overpass landmark check switched off") == 1
+    assert capsys.readouterr().err.count("Overpass landmark check off for this run") == 1
 
 
 def test_place_name_ignores_a_failed_landmark_check(monkeypatch, tmp_path):

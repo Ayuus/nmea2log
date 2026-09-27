@@ -80,8 +80,7 @@ def log_logfile_layout(logfiles: Sequence[Path]) -> None:
     problems = check_logfile_layout(logfiles)
     for problem in problems:
         log(
-            f"[anomaly] Log files: {problem} -- the season may be incomplete; download again, or check the "
-            "folder on the W2K-2.",
+            f"[anomaly] Season may be incomplete -- {problem}; check the W2K-2 or download again.",
             file=sys.stderr,
         )
     if not problems:

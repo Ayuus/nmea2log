@@ -90,14 +90,11 @@ class AttitudeSegments:
         )
         if dropped or resets:
             first = min((info.first_dropped_at for info in infos if info.first_dropped_at is not None), default=None)
-            log_time_anomaly(
-                AttitudeArray._LABEL, dropped, max((info.max_backward_s for info in infos), default=0.0), first, resets
-            )
+            log_time_anomaly(AttitudeArray._LABEL, dropped, first, resets)
         if seam_overlaps:
             log(
-                f"[anomaly] {AttitudeArray._LABEL}: {seam_overlaps} file(s) start before the previous file ended -- "
-                "the source data is not in time order across files. This should not happen and needs "
-                "investigating; the affected rows were repaired, not trusted."
+                f"[anomaly] Not in time order across files ({AttitudeArray._LABEL}) -- "
+                f"ignored {seam_overlaps} file(s)."
             )
 
 
@@ -141,11 +138,10 @@ class SourceAttitude:
             by_source = self._sample_cache.get_attitude(segment.path) if self._sample_cache is not None else None
             if by_source is None and self._redecode is not None:
                 # The entry is gone (deleted, or written by another version): decode the file again.
-                log(f"[info] Decoding {segment.path.name} again for its attitude samples (not in the sample cache any more).")
+                log(f"[info] Not in sample cache -- decoding {segment.path.name} again.")
                 by_source = self._redecode(segment.path, segment.time_state_before)
             if by_source is None:
-                log(f"[anomaly] The attitude samples of {segment.path.name} are not in the sample cache and cannot be "
-                    "decoded again; the trip statistics that use them leave that file out.")
+                log(f"[anomaly] Not in sample cache, cannot decode {segment.path.name} -- ignored for trip statistics.")
                 continue
             window.extend(item for item in by_source.get(self._source, ()) if start <= item.time <= end)
         # Silent: the season-wide report above already said whatever there was to say.
