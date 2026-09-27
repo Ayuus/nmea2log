@@ -1014,12 +1014,12 @@ def test_the_ignored_fixes_log_line_says_when_each_stretch_happened(log_lines):
 
     _collect_samples(frames)
 
-    lines = [line for line in log_lines if "Ignored" in line]
+    lines = [line for line in log_lines if "No GNSS fix" in line]
     assert len(lines) == 2
-    assert f"Ignored 3 position fix(es) from source 11 at {_T0:%Y-%m-%d %H:%M:%S} until " in lines[0]
-    assert f"{_T0 + timedelta(seconds=3):%Y-%m-%d %H:%M:%S} UTC" in lines[0]
-    assert f"Ignored 2 position fix(es) from source 11 at {_T0 + timedelta(seconds=7200):%Y-%m-%d %H:%M:%S} until " in lines[1]
-    assert f"{_T0 + timedelta(seconds=7220):%Y-%m-%d %H:%M:%S} UTC" in lines[1]
+    assert f"source 11 ignored 3 fix(es) ({_T0:%Y-%m-%d %H:%M:%S}/" in lines[0]
+    assert f"{_T0 + timedelta(seconds=3):%Y-%m-%d %H:%M:%S} UTC)" in lines[0]
+    assert f"source 11 ignored 2 fix(es) ({_T0 + timedelta(seconds=7200):%Y-%m-%d %H:%M:%S}/" in lines[1]
+    assert f"{_T0 + timedelta(seconds=7220):%Y-%m-%d %H:%M:%S} UTC)" in lines[1]
 
 
 def test_collect_samples_keeps_everything_when_no_dop_message_was_seen():
