@@ -32,6 +32,40 @@ class UploadError(Exception):
     pass
 
 
+_REST_ROUTE_SUFFIX = "/wp-json/nmea2log/v1/logbook"
+
+
+def normalize_rest_upload_url(value: str) -> str:
+    """Fills in the plugin's own fixed REST route (see wordpress-plugin/nmea2log-remarks.php's
+    own ``register_rest_route('nmea2log/v1', '/logbook', ...)``) and the ``https://`` scheme when
+    [value] looks like just the site's own bare address (e.g. "ayuus.com"), so entering the
+    upload URL only ever needs the one thing that actually varies between sites -- asked for
+    explicitly, found in practice: typing out the full
+    ``https://your-site.example/wp-json/nmea2log/v1/logbook`` by hand (or trying to edit only the
+    "your-site.example" part of that placeholder) is exactly the kind of fiddly, easy-to-get-wrong
+    step this project otherwise tries hard to avoid.
+
+    Also lowercases the whole result (asked for explicitly) -- a domain name is case-insensitive
+    regardless, and this sidesteps a device that capitalized the first letter on the way in (a
+    phone keyboard's default "capitalize the first letter of a new field" behaviour) ever silently
+    changing what gets saved.
+
+    WordPress mounts every plugin's REST routes under its own site's ``/wp-json/`` base -- that
+    part is WordPress core behaviour, not something this (or any) plugin controls, so a value that
+    already contains "/wp-json/" is assumed to already be a complete REST URL (typed by hand, or
+    carried over from before this normalization existed) and is returned unchanged (beyond
+    lowercasing) rather than risking a doubled-up path. Blank input stays blank -- nothing to fill
+    in yet."""
+    stripped = value.strip().lower()
+    if not stripped:
+        return stripped
+    if "/wp-json/" in stripped:
+        return stripped
+    if not stripped.startswith(("http://", "https://")):
+        stripped = "https://" + stripped
+    return stripped.rstrip("/") + _REST_ROUTE_SUFFIX
+
+
 def upload_via_rest(html_content: bytes, url: str, user: str, app_password: str) -> None:
     """Posts the built HTML logbook to a WordPress REST endpoint (see wordpress-plugin/
     nmea2log-remarks.php's ``nmea2log_logbook_upload()``) instead of over SFTP -- no SSH key

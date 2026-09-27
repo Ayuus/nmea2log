@@ -7,7 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from nmea2log.upload import UploadError, _local_to_sftp_path, upload_file, upload_via_rest
+from nmea2log.upload import (
+    UploadError,
+    _local_to_sftp_path,
+    normalize_rest_upload_url,
+    upload_file,
+    upload_via_rest,
+)
 
 
 class _FakeCompletedProcess:
@@ -15,6 +21,63 @@ class _FakeCompletedProcess:
         self.returncode = returncode
         self.stdout = stdout
         self.stderr = stderr
+
+
+def test_normalize_rest_upload_url_fills_in_the_fixed_route_for_a_bare_site_address():
+    assert (
+        normalize_rest_upload_url("https://ayuus.com")
+        == "https://ayuus.com/wp-json/nmea2log/v1/logbook"
+    )
+
+
+def test_normalize_rest_upload_url_adds_the_https_scheme_when_missing():
+    assert (
+        normalize_rest_upload_url("ayuus.com")
+        == "https://ayuus.com/wp-json/nmea2log/v1/logbook"
+    )
+
+
+def test_normalize_rest_upload_url_keeps_an_explicit_http_scheme():
+    assert (
+        normalize_rest_upload_url("http://ayuus.com")
+        == "http://ayuus.com/wp-json/nmea2log/v1/logbook"
+    )
+
+
+def test_normalize_rest_upload_url_lowercases_everything_including_the_first_letter():
+    assert (
+        normalize_rest_upload_url("Ayuus.com")
+        == "https://ayuus.com/wp-json/nmea2log/v1/logbook"
+    )
+    assert (
+        normalize_rest_upload_url("HTTPS://Ayuus.Com")
+        == "https://ayuus.com/wp-json/nmea2log/v1/logbook"
+    )
+
+
+def test_normalize_rest_upload_url_strips_a_trailing_slash_before_appending():
+    assert (
+        normalize_rest_upload_url("https://ayuus.com/")
+        == "https://ayuus.com/wp-json/nmea2log/v1/logbook"
+    )
+
+
+def test_normalize_rest_upload_url_leaves_an_already_complete_url_unchanged_beyond_lowercasing():
+    full_url = "https://ayuus.com/wp-json/nmea2log/v1/logbook"
+    assert normalize_rest_upload_url(full_url) == full_url
+    assert normalize_rest_upload_url(full_url.upper()) == full_url
+
+
+def test_normalize_rest_upload_url_leaves_blank_input_blank():
+    assert normalize_rest_upload_url("") == ""
+    assert normalize_rest_upload_url("   ") == ""
+
+
+def test_normalize_rest_upload_url_strips_surrounding_whitespace():
+    assert (
+        normalize_rest_upload_url("  https://ayuus.com  ")
+        == "https://ayuus.com/wp-json/nmea2log/v1/logbook"
+    )
 
 
 def test_upload_file_raises_if_key_file_is_missing(tmp_path: Path):
