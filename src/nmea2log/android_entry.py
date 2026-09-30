@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, List, Optional
 
-from . import w2k2_download
+from . import import_ebl, w2k2_download
 from .cli import build_arg_parser
 from .geocode import Geocoder
 from .html_writer import write_html_logbook
@@ -447,3 +447,23 @@ def probe_w2k2(user: str, password: str, subnet_prefix: str, download_dir: str, 
     except Exception:
         pass
     progress_callback.onProbeResult(True, has_new_files)
+
+
+def import_staged_ebl_files_json(staged_paths: List[str], dest_dir: str, progress_callback=None) -> str:
+    """Chaquopy-friendly wrapper around import_ebl.import_staged_ebl_files(): returns a JSON
+    string instead of the raw dict, read back with JSONObject(...) on the Kotlin side (see
+    BootModeController.kt's own step() call for the same pattern) -- the same fix as
+    _report_result()'s own doc comment describes for run_pipeline() above, for the same
+    underlying reason: reading a returned PyObject's own fields after callAttr() has already
+    returned is unreliable in practice, while a plain string comes back intact.
+
+    progress_callback, if given, is a Kotlin object with a report(current, total, name, outcome)
+    method -- the same shape as SyncController.report(current, total, fileName) a download's own
+    controller already uses, plus the file's own outcome -- called during this call, straight
+    through from import_ebl.import_staged_ebl_files()'s own per-file callback (see its own doc
+    comment for why that live, during-the-work timing is the actual point of this parameter, not
+    an afterthought)."""
+    callback = None if progress_callback is None else (
+        lambda current, total, name, outcome: progress_callback.report(current, total, name, outcome)
+    )
+    return json.dumps(import_ebl.import_staged_ebl_files(staged_paths, dest_dir, callback))
