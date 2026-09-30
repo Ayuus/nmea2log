@@ -338,6 +338,16 @@ def _sync_from_w2k2(
             session, config.download_dir, should_cancel=should_cancel
         )
         to_download_total = len(to_download)
+        # Same one-time phase-transition line main()'s own desktop CLI path already has (see
+        # w2k2_download.py's own matching log() call) -- missing here until now, which left the
+        # Android log frozen on "Found W2K-2 at ..." for the whole download loop below (found in
+        # practice, asked for explicitly, "logregel blijft staan ... terwijl balk loopt" -- the
+        # per-file report() callback right below deliberately has no log line of its own, only
+        # progress-bar/notification updates, same reasoning as w2k2_download.py's own "[skip] ...
+        # already complete locally" being debug-only: hundreds of files would flood the log for no
+        # benefit). This single line at least marks the transition itself.
+        total_mb = sum(info["file_size"] for info in to_download) / 1e6
+        log(f"[info] {to_download_total} file(s) need downloading ({total_mb:.0f} MB)")
 
         downloaded_count = 0
         for folder_name, info in plan:
