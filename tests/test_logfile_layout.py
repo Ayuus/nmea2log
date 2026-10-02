@@ -119,7 +119,9 @@ def test_files_outside_an_ebl_folder_are_not_checked(tmp_path: Path, logged):
 
 def _cache_with(tmp_path: Path, files: List[Path], skip=()) -> SampleCache:
     cache = SampleCache(tmp_path / "cache")
-    samples = ({10: [PositionFix(datetime(2026, 7, 15, 9, 0), 52.3, 4.9)]}, {}, [], [], {}, {}, {}, [], {})
+    samples = (
+        {10: [PositionFix(datetime(2026, 7, 15, 9, 0), 52.3, 4.9)]}, {}, [], [], {}, {}, {}, [], {}, {}, {}, {}, {}
+    )
     for path in files:
         if path.name not in skip:
             cache.put(path, samples, None)

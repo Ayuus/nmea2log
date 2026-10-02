@@ -335,7 +335,7 @@ def _stub_one_trip_samples(monkeypatch):
         fixes.append(PositionFix(_dt(m), 52.40, 4.95))
         sogs.append(SogSample(_dt(m), 0.0))
 
-    fixed_samples = ({10: fixes}, {10: sogs}, [], [], {}, {}, {}, [], {})
+    fixed_samples = ({10: fixes}, {10: sogs}, [], [], {}, {}, {}, [], {}, {}, {}, {}, {})
     monkeypatch.setattr(
         "nmea2log.pipeline._collect_samples", lambda frames: fixed_samples
     )
@@ -394,6 +394,10 @@ def test_main_reuses_cached_samples_on_a_second_run(tmp_path, monkeypatch, capsy
         {},
         {},
         [],
+        {},
+        {},
+        {},
+        {},
         {},
     )
 
@@ -455,6 +459,10 @@ def _run_with_one_trip(tmp_path: Path, monkeypatch, extra_args=()):
         {},
         {},
         [],
+        {},
+        {},
+        {},
+        {},
         {},
     )
     monkeypatch.setattr(
@@ -620,11 +628,11 @@ def _make_trip_cache_fixture(tmp_path: Path):
     paths = {name: tmp_path / f"{name}.ebl" for name in ("f0", "f1", "f2", "f3", "f4")}
 
     samples_by_name = {
-        "f0": ({10: f0_fixes}, {10: f0_sogs}, [], [], {}, {}, {}, [], {}),
-        "f1": ({10: f1_fixes}, {10: f1_sogs}, [], [], {}, {}, {}, [], {}),
-        "f2": ({10: f2_fixes}, {10: f2_sogs}, [], [], {}, {}, {}, [], {}),
-        "f3": ({10: f3_fixes}, {10: f3_sogs}, [], [], {}, {}, {}, [], {}),
-        "f4": ({10: f4_fixes}, {10: f4_sogs}, [], [], {}, {}, {}, [], {}),
+        "f0": ({10: f0_fixes}, {10: f0_sogs}, [], [], {}, {}, {}, [], {}, {}, {}, {}, {}),
+        "f1": ({10: f1_fixes}, {10: f1_sogs}, [], [], {}, {}, {}, [], {}, {}, {}, {}, {}),
+        "f2": ({10: f2_fixes}, {10: f2_sogs}, [], [], {}, {}, {}, [], {}, {}, {}, {}, {}),
+        "f3": ({10: f3_fixes}, {10: f3_sogs}, [], [], {}, {}, {}, [], {}, {}, {}, {}, {}),
+        "f4": ({10: f4_fixes}, {10: f4_sogs}, [], [], {}, {}, {}, [], {}, {}, {}, {}, {}),
     }
     return paths, samples_by_name
 
@@ -740,11 +748,11 @@ def _make_mid_transit_resume_fixture(tmp_path: Path):
     paths = {name: tmp_path / f"{name}.ebl" for name in ("f0", "f1", "f2", "f3", "f4")}
 
     samples_by_name = {
-        "f0": ({10: f0_fixes}, {10: f0_sogs}, [], [], {}, {}, {}, [], {}),
-        "f1": ({10: f1_fixes}, {10: f1_sogs}, [], [], {}, {}, {}, [], {}),
-        "f2": ({10: f2_fixes}, {10: f2_sogs}, [], [], {}, {}, {}, [], {}),
-        "f3": ({10: f3_fixes}, {10: f3_sogs}, [], [], {}, {}, {}, [], {}),
-        "f4": ({10: f4_fixes}, {10: f4_sogs}, [], [], {}, {}, {}, [], {}),
+        "f0": ({10: f0_fixes}, {10: f0_sogs}, [], [], {}, {}, {}, [], {}, {}, {}, {}, {}),
+        "f1": ({10: f1_fixes}, {10: f1_sogs}, [], [], {}, {}, {}, [], {}, {}, {}, {}, {}),
+        "f2": ({10: f2_fixes}, {10: f2_sogs}, [], [], {}, {}, {}, [], {}, {}, {}, {}, {}),
+        "f3": ({10: f3_fixes}, {10: f3_sogs}, [], [], {}, {}, {}, [], {}, {}, {}, {}, {}),
+        "f4": ({10: f4_fixes}, {10: f4_sogs}, [], [], {}, {}, {}, [], {}, {}, {}, {}, {}),
     }
     return paths, samples_by_name
 
@@ -797,7 +805,7 @@ def test_main_trip_cache_widen_retries_more_than_once_when_needed(tmp_path, monk
     paths, samples_by_name = _make_mid_transit_resume_fixture(tmp_path)
     # Cut f1 down to nothing (an empty file) so the first widen attempt (which would normally
     # land on f1, all-moving) still finds no stay -- forcing a second widen, all the way to f0.
-    samples_by_name["f1"] = ({10: []}, {10: []}, [], [], {}, {}, {}, [], {})
+    samples_by_name["f1"] = ({10: []}, {10: []}, [], [], {}, {}, {}, [], {}, {}, {}, {}, {})
 
     call_log: list = []
     _stub_samples_by_path(monkeypatch, paths, samples_by_name, call_log)

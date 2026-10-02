@@ -25,10 +25,14 @@ from .fix_array import (
     DepthArray,
     EngineArray,
     FixArray,
+    HumidityArray,
+    OutsideTempArray,
     RpmArray,
     SogArray,
+    StwArray,
     TripFuelArray,
     WaterTempArray,
+    WindArray,
 )
 from .gnss_gate import GnssFixGate
 from .logfile_layout import log_logfile_layout
@@ -40,10 +44,14 @@ from .model import (
     EngineRpmSample,
     EngineSample,
     Frame,
+    HumiditySample,
+    OutsideTempSample,
     PositionFix,
     SogSample,
+    StwSample,
     TripFuelSample,
     WaterTempSample,
+    WindSample,
 )
 from .pgn_decode import (
     PGN_ATTITUDE,
@@ -52,21 +60,28 @@ from .pgn_decode import (
     PGN_ENGINE_DYNAMIC,
     PGN_ENGINE_RAPID,
     PGN_GNSS_DOPS,
+    PGN_HUMIDITY,
     PGN_POSITION_RAPID,
+    PGN_SPEED,
     PGN_TEMPERATURE,
     PGN_TRIP_FUEL_ENGINE,
     PGN_WATER_DEPTH,
+    PGN_WIND,
     decode_attitude,
     decode_battery_status,
     decode_cog,
     decode_engine_dynamic,
     decode_engine_rapid,
     decode_gnss_dops,
+    decode_humidity,
+    decode_outside_air_temperature,
     decode_position_rapid,
     decode_sea_temperature,
     decode_sog,
+    decode_speed_through_water,
     decode_trip_fuel_engine,
     decode_water_depth,
+    decode_wind,
 )
 from .sample_cache import ATTITUDE_PART, SampleCache
 from .trip_cache import TripCache, choose_resume_index, config_signature, find_resume_index
@@ -107,6 +122,9 @@ _WANTED_PGNS = frozenset(
         PGN_TEMPERATURE,
         PGN_BATTERY_STATUS,
         PGN_ATTITUDE,
+        PGN_WIND,
+        PGN_SPEED,
+        PGN_HUMIDITY,
     }
 )
 
@@ -205,6 +223,10 @@ def _collect_samples(
     Dict[int, List[BatterySample]],
     List[EngineRpmSample],
     Dict[int, List[AttitudeSample]],
+    Dict[int, List[WindSample]],
+    Dict[int, List[StwSample]],
+    Dict[int, List[OutsideTempSample]],
+    Dict[int, List[HumiditySample]],
 ]:
     """Processes frames into samples, grouped by source address for PGNs that can come from
     multiple devices at once. Stops cleanly on Ctrl+C, so an interrupted run still produces a
@@ -214,6 +236,10 @@ def _collect_samples(
     water_temp_by_source: Dict[int, List[WaterTempSample]] = {}
     battery_by_source: Dict[int, List[BatterySample]] = {}
     attitude_by_source: Dict[int, List[AttitudeSample]] = {}
+    wind_by_source: Dict[int, List[WindSample]] = {}
+    stw_by_source: Dict[int, List[StwSample]] = {}
+    outside_temp_by_source: Dict[int, List[OutsideTempSample]] = {}
+    humidity_by_source: Dict[int, List[HumiditySample]] = {}
     engine_samples: List[EngineSample] = []
     trip_fuel_samples: List[TripFuelSample] = []
     rpm_samples: List[EngineRpmSample] = []
@@ -253,9 +279,32 @@ def _collect_samples(
                 if depth_m is not None:
                     depth_by_source.setdefault(frame.source, []).append(DepthSample(frame.time, depth_m))
             elif frame.pgn == PGN_TEMPERATURE:
+                # Sea and outside-air temperature ride the same PGN, told apart only by the
+                # "Source" field each decoder filters on -- not mutually exclusive elif branches,
+                # since a single frame can (in principle) be tried against both.
                 temp_c = decode_sea_temperature(frame.data)
                 if temp_c is not None:
                     water_temp_by_source.setdefault(frame.source, []).append(WaterTempSample(frame.time, temp_c))
+                outside_temp_c = decode_outside_air_temperature(frame.data)
+                if outside_temp_c is not None:
+                    outside_temp_by_source.setdefault(frame.source, []).append(
+                        OutsideTempSample(frame.time, outside_temp_c)
+                    )
+            elif frame.pgn == PGN_WIND:
+                decoded = decode_wind(frame.data)
+                if decoded is not None:
+                    speed_ms, angle_deg, reference = decoded
+                    wind_by_source.setdefault(frame.source, []).append(
+                        WindSample(frame.time, speed_ms, angle_deg, reference)
+                    )
+            elif frame.pgn == PGN_SPEED:
+                stw_ms = decode_speed_through_water(frame.data)
+                if stw_ms is not None:
+                    stw_by_source.setdefault(frame.source, []).append(StwSample(frame.time, stw_ms))
+            elif frame.pgn == PGN_HUMIDITY:
+                humidity_pct = decode_humidity(frame.data)
+                if humidity_pct is not None:
+                    humidity_by_source.setdefault(frame.source, []).append(HumiditySample(frame.time, humidity_pct))
             elif frame.pgn == PGN_BATTERY_STATUS:
                 decoded = decode_battery_status(frame.data)
                 if decoded is not None:
@@ -284,6 +333,10 @@ def _collect_samples(
         battery_by_source,
         rpm_samples,
         attitude_by_source,
+        wind_by_source,
+        stw_by_source,
+        outside_temp_by_source,
+        humidity_by_source,
     )
 
 
@@ -396,6 +449,10 @@ class _SeasonSamples:
     engine: EngineArray
     trip_fuel: TripFuelArray
     rpm: RpmArray
+    wind_by_source: Dict[int, WindArray]
+    stw_by_source: Dict[int, StwArray]
+    outside_temp_by_source: Dict[int, OutsideTempArray]
+    humidity_by_source: Dict[int, HumidityArray]
 
 
 @dataclass
@@ -465,7 +522,8 @@ def _decode_logfiles(
         return decoded[ATTITUDE_PART]
 
     samples_all = _SeasonSamples(
-        {}, {}, {}, {}, {}, AttitudeSegments(sample_cache, redecode_attitude), EngineArray(), TripFuelArray(), RpmArray()
+        {}, {}, {}, {}, {}, AttitudeSegments(sample_cache, redecode_attitude), EngineArray(), TripFuelArray(), RpmArray(),
+        {}, {}, {}, {},
     )
     resume_info = _ResumeInfo({}, {})
 
@@ -499,14 +557,20 @@ def _decode_logfiles(
         cached = sample_cache.get(path, attitude_as_summary=True) if sample_cache is not None else None
         if cached is not None:
             samples, time_state_after = cached
-            fixes, sogs, engine, trip_fuel, depth, water_temp, battery, rpm, attitude_summary = samples
+            (
+                fixes, sogs, engine, trip_fuel, depth, water_temp, battery, rpm, attitude_summary,
+                wind, stw, outside_temp, humidity,
+            ) = samples
             restore_time_state(ebl_time_state, time_state_after)
             samples_all.attitude.add_from_cache(path, attitude_summary, time_state_before)
             cache_hits += 1
         else:
             frames = _iter_frames_for_path(path, ebl_time_state)
             samples = _collect_samples(frames)
-            fixes, sogs, engine, trip_fuel, depth, water_temp, battery, rpm, attitude = samples
+            (
+                fixes, sogs, engine, trip_fuel, depth, water_temp, battery, rpm, attitude,
+                wind, stw, outside_temp, humidity,
+            ) = samples
             if sample_cache is not None:
                 sample_cache.put(path, samples, snapshot_time_state(ebl_time_state))
             samples_all.attitude.add_decoded(
@@ -534,6 +598,10 @@ def _decode_logfiles(
         _merge_array_by_source(samples_all.water_temp_by_source, water_temp, WaterTempArray)
         _merge_array_by_source(samples_all.battery_by_source, battery, BatteryArray)
         samples_all.rpm.extend(rpm)
+        _merge_array_by_source(samples_all.wind_by_source, wind, WindArray)
+        _merge_array_by_source(samples_all.stw_by_source, stw, StwArray)
+        _merge_array_by_source(samples_all.outside_temp_by_source, outside_temp, OutsideTempArray)
+        _merge_array_by_source(samples_all.humidity_by_source, humidity, HumidityArray)
 
     # Unconditional, unlike the in-loop progress line above (which deliberately skips the very
     # last file so it doesn't fire right before this same count gets logged again a few lines
@@ -568,6 +636,10 @@ class _TripInputs:
     engine: EngineArray
     trip_fuel: TripFuelArray
     rpm: RpmArray
+    wind: WindArray
+    stw: StwArray
+    outside_temp: OutsideTempArray
+    humidity: HumidityArray
 
 
 def _select_trip_inputs(samples: _SeasonSamples) -> _TripInputs:
@@ -587,6 +659,10 @@ def _select_trip_inputs(samples: _SeasonSamples) -> _TripInputs:
         engine=samples.engine,
         trip_fuel=samples.trip_fuel,
         rpm=samples.rpm,
+        wind=_dominant_source_only(samples.wind_by_source),
+        stw=_dominant_source_only(samples.stw_by_source),
+        outside_temp=_dominant_source_only(samples.outside_temp_by_source),
+        humidity=_dominant_source_only(samples.humidity_by_source),
     )
     if len(samples.fixes_by_source) > 1:
         log(
@@ -626,6 +702,10 @@ def _build_fresh_trips(
         inputs.battery,
         inputs.rpm,
         inputs.attitude,
+        wind_samples=inputs.wind,
+        stw_samples=inputs.stw,
+        outside_temp_samples=inputs.outside_temp,
+        humidity_samples=inputs.humidity,
         speed_threshold_kn=args.speed_threshold_kn,
         min_stop_minutes=args.min_stop_minutes,
         max_gap_minutes=args.max_gap_minutes,

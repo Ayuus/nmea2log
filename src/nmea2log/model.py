@@ -93,3 +93,31 @@ class AttitudeSample:
     time: datetime
     pitch_deg: Optional[float]  # PGN 127257, degrees
     roll_deg: Optional[float]  # PGN 127257, degrees
+
+
+@dataclass(frozen=True, slots=True)
+class WindSample:
+    time: datetime
+    speed_ms: Optional[float]  # wind speed (PGN 130306), meters/second
+    angle_deg: Optional[float]  # wind angle (PGN 130306), degrees
+    # canboat's WIND_REFERENCE lookup code (0=true/ground, 1=magnetic, 2=apparent, 3=true/boat,
+    # 4=true/water); None = not available
+    reference: Optional[int] = None
+
+
+@dataclass(frozen=True, slots=True)
+class StwSample:
+    time: datetime
+    stw_ms: Optional[float]  # speed through water (PGN 128259), meters/second
+
+
+@dataclass(frozen=True, slots=True)
+class OutsideTempSample:
+    time: datetime
+    temp_c: Optional[float]  # outside (ambient) air temperature (PGN 130312), degrees Celsius
+
+
+@dataclass(frozen=True, slots=True)
+class HumiditySample:
+    time: datetime
+    humidity_pct: Optional[float]  # outside (ambient) relative humidity (PGN 130313), percent

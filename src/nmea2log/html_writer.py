@@ -278,6 +278,28 @@ def _water_temp_detail_text(trip: TripLeg) -> str:
     return text
 
 
+def _outside_temp_detail_text(trip: TripLeg) -> str:
+    """Same idea as _water_temp_detail_text, for outside/ambient air temperature -- a trip-wide
+    aggregate (avg, with a min-max range when it varied enough), same reasoning as water
+    temperature's own detail row."""
+    if trip.avg_outside_temp_c is None:
+        return ""
+    text = f"{nl_num(trip.avg_outside_temp_c)}°C"
+    if trip.max_outside_temp_c - trip.min_outside_temp_c > 0.5:
+        text += f" ({nl_num(trip.min_outside_temp_c)}–{nl_num(trip.max_outside_temp_c)}°C)"
+    return text
+
+
+def _humidity_detail_text(trip: TripLeg) -> str:
+    """Same idea as _water_temp_detail_text, for outside/ambient relative humidity."""
+    if trip.avg_humidity_pct is None:
+        return ""
+    text = f"{nl_num(trip.avg_humidity_pct, 0)}%"
+    if trip.max_humidity_pct - trip.min_humidity_pct > 2.0:
+        text += f" ({nl_num(trip.min_humidity_pct, 0)}–{nl_num(trip.max_humidity_pct, 0)}%)"
+    return text
+
+
 def _motion_detail_text(trip: TripLeg) -> str:
     """HTML (not plain text -- the roll/pitch/peak words are individually re-translatable, see
     _i18n_span), spelling out which number is roll vs. pitch (slingeren/stampen) and the
@@ -528,6 +550,12 @@ def _details_cell_html(
     if len(entries) >= 2:
         rows = []
         last_idx = len(entries) - 1
+        # Only shown for a trip that actually has at least one real instrument reading -- a boat
+        # without a wind instrument/paddlewheel on the bus shouldn't get two permanently-empty
+        # columns in every single trip's log (same "show if present" spirit as the other optional
+        # sensors already in this table, e.g. water temperature's own detail row).
+        has_wind_instrument = any(e.wind_speed_ms is not None or e.wind_angle_deg is not None for e in entries)
+        has_stw = any(e.stw_ms is not None for e in entries)
         for i, entry in enumerate(entries):
             # Same numbering as the map's own numbered markers (see _map_log_points/the
             # log-marker JS, which number only the entries strictly between these two) -- the
@@ -543,6 +571,17 @@ def _details_cell_html(
             cog_text = f"{nl_num(entry.cog_deg, 0)}&deg;" if entry.cog_deg is not None else ""
             sog_text = f"{nl_num(entry.sog_ms / _KNOT_IN_MS)} kn"
             position_text = f"{entry.lat:.4f}, {entry.lon:.4f}"
+            # A real instrument reading from the boat itself (PGN 130306), not the regional
+            # weather-model estimate the existing "Wind" column below already shows -- kept as a
+            # clearly separate column (own header) so the two are never confused, see this
+            # function's own column-building code further down.
+            wind_instrument_parts = []
+            if entry.wind_speed_ms is not None:
+                wind_instrument_parts.append(f"{nl_num(entry.wind_speed_ms / _KNOT_IN_MS)} kn")
+            if entry.wind_angle_deg is not None:
+                wind_instrument_parts.append(f"{nl_num(entry.wind_angle_deg, 0)}&deg;")
+            wind_instrument_text = ", ".join(wind_instrument_parts)
+            stw_text = f"{nl_num(entry.stw_ms / _KNOT_IN_MS)} kn" if entry.stw_ms is not None else ""
             # Not a measurement from the boat itself -- regional weather-model data for the
             # nearest grid cell at this hour (see weather.py), one lookup per log row rather than
             # one per trip, since wind in particular can change a lot over a longer trip (found in
@@ -585,17 +624,27 @@ def _details_cell_html(
                 )
             else:
                 current_text = ""
+            optional_cells = ""
+            if has_stw:
+                optional_cells += f"<td>{stw_text}</td>"
+            if has_wind_instrument:
+                optional_cells += f"<td>{wind_instrument_text}</td>"
             rows.append(
                 f"<tr><td>{number_text}</td><td>{local_time:%H:%M}</td><td>{position_text}</td>"
-                f"<td>{cog_text}</td><td>{sog_text}</td>"
+                f"<td>{cog_text}</td><td>{sog_text}</td>{optional_cells}"
                 f"<td>{wind_text}</td><td>{precip_text}</td><td>{cloud_text}</td>"
                 f"<td>{wave_text}</td><td>{current_text}</td></tr>"
             )
+        optional_headers = ""
+        if has_stw:
+            optional_headers += f"<th>{_i18n_span('log_header_stw')}</th>"
+        if has_wind_instrument:
+            optional_headers += f"<th>{_i18n_span('log_header_wind_instrument')}</th>"
         sections.append(
             "<table class=\"log-table\"><thead><tr>"
             f"<th>{_i18n_span('log_header_number')}</th>"
             f"<th>{_i18n_span('log_header_time')}</th><th>{_i18n_span('log_header_position')}</th>"
-            f"<th>{_i18n_span('log_header_cog')}</th><th>{_i18n_span('log_header_sog')}</th>"
+            f"<th>{_i18n_span('log_header_cog')}</th><th>{_i18n_span('log_header_sog')}</th>{optional_headers}"
             f"<th>{_i18n_span('log_header_wind')}</th><th>{_i18n_span('log_header_precip')}</th>"
             f"<th>{_i18n_span('log_header_cloud')}</th>"
             f"<th>{_i18n_span('log_header_wave')}</th><th>{_i18n_span('log_header_current')}</th>"
@@ -605,6 +654,12 @@ def _details_cell_html(
     water_temp = _water_temp_detail_text(trip)
     if water_temp:
         sections.append(_details_row_html("🌡️", "header_water_temp", escape(water_temp)))
+    outside_temp = _outside_temp_detail_text(trip)
+    if outside_temp:
+        sections.append(_details_row_html("🌤️", "header_outside_temp", escape(outside_temp)))
+    humidity = _humidity_detail_text(trip)
+    if humidity:
+        sections.append(_details_row_html("💧", "header_humidity", escape(humidity)))
     motion = _motion_detail_text(trip)
     if motion:
         sections.append(_details_row_html("〰️", "header_motion", motion))

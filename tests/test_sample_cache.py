@@ -17,9 +17,9 @@ from nmea2log.sample_cache import (
 
 
 def _sample_tuple(lat: float = 52.30) -> tuple:
-    """Shaped like the real 9-tuple _collect_samples returns (see cli.py): a mix of
+    """Shaped like the real 13-part _collect_samples returns (see cli.py): a mix of
     dict-by-source and flat-list parts. Only the first (fixes) part is populated -- enough to
-    exercise the cache's columnar encode/decode without every test needing to spell out all 9."""
+    exercise the cache's columnar encode/decode without every test needing to spell out all 13."""
     return (
         {10: [PositionFix(datetime(2026, 7, 15, 9, 0), lat, 4.90)]},
         {},
@@ -29,6 +29,10 @@ def _sample_tuple(lat: float = 52.30) -> tuple:
         {},
         {},
         [],
+        {},
+        {},
+        {},
+        {},
         {},
     )
 
@@ -215,11 +219,11 @@ def test_encode_decode_samples_preserves_a_dataclass_with_defaulted_fields():
 
 
 def test_encode_decode_samples_tuple_round_trips_dict_and_list_parts():
-    """The full 9-part samples tuple from _collect_samples mixes dict-by-source parts (fixes,
+    """The full 13-part samples tuple from _collect_samples mixes dict-by-source parts (fixes,
     attitude, ...) and flat-list parts (engine, rpm, ...) -- both must round-trip correctly."""
     fixes_by_source = {10: [PositionFix(datetime(2026, 7, 15, 9, 0), 52.30, 4.90)]}
     engine_samples = [EngineSample(datetime(2026, 7, 15, 9, 0), 0, 8.0, 3600)]
-    samples = (fixes_by_source, {}, engine_samples, [], {}, {}, {}, [], {})
+    samples = (fixes_by_source, {}, engine_samples, [], {}, {}, {}, [], {}, {}, {}, {}, {})
 
     assert _decode_samples_tuple(_encode_samples_tuple(samples)) == samples
 

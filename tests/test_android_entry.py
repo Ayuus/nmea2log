@@ -37,7 +37,7 @@ def _stub_one_trip_samples(monkeypatch):
         fixes.append(PositionFix(_dt(m), 52.40, 4.95))
         sogs.append(SogSample(_dt(m), 0.0))
 
-    fixed_samples = ({10: fixes}, {10: sogs}, [], [], {}, {}, {}, [], {})
+    fixed_samples = ({10: fixes}, {10: sogs}, [], [], {}, {}, {}, [], {}, {}, {}, {}, {})
     monkeypatch.setattr(pipeline, "_collect_samples", lambda frames: fixed_samples)
     monkeypatch.setattr(pipeline, "_iter_frames_for_path", lambda path, state: iter([]))
     # run_pipeline() now uses real Geocoder/WeatherFetcher/MarineFetcher instances by default (see
@@ -78,7 +78,7 @@ def test_run_pipeline_returns_error_for_a_missing_file(tmp_path):
 
 def test_run_pipeline_returns_error_when_no_position_data(tmp_path, monkeypatch):
     ebl_path = _write_fake_ebl(tmp_path)
-    empty_samples = ({}, {}, [], [], {}, {}, {}, [], {})
+    empty_samples = ({}, {}, [], [], {}, {}, {}, [], {}, {}, {}, {}, {})
     monkeypatch.setattr(pipeline, "_collect_samples", lambda frames: empty_samples)
     monkeypatch.setattr(pipeline, "_iter_frames_for_path", lambda path, state: iter([]))
 

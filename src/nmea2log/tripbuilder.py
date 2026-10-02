@@ -27,11 +27,15 @@ from .fix_array import (
     DepthArray,
     EngineArray,
     FixArray,
+    HumidityArray,
     NavSampleArray,
+    OutsideTempArray,
     RpmArray,
     SogArray,
+    StwArray,
     TripFuelArray,
     WaterTempArray,
+    WindArray,
     from_epoch,
     log_time_anomaly,
     to_epoch,
@@ -44,10 +48,14 @@ from .model import (
     DepthSample,
     EngineRpmSample,
     EngineSample,
+    HumiditySample,
+    OutsideTempSample,
     PositionFix,
     SogSample,
+    StwSample,
     TripFuelSample,
     WaterTempSample,
+    WindSample,
 )
 from .stretches import StretchLog, format_stretch_times
 
@@ -70,7 +78,11 @@ _RPM_BUCKET = 50  # round RPM to the nearest multiple of this before taking the 
 # data until the affected trips aged out of the cache on their own -- on a real device, that's
 # potentially never. Included in config_signature() specifically so a bump here always forces a
 # one-time full rebuild instead.
-TRIP_LOGIC_VERSION = 8
+TRIP_LOGIC_VERSION = 9  # bumped: TripLeg gained new slots (avg/min/max outside temp + humidity) --
+# an old on-disk trip cache pickled before this change doesn't have those slots set at all, and
+# unpickling a slotted frozen dataclass bypasses __init__ (so the field's own default is never
+# applied) -- without this bump, a settled trip loaded straight from that old cache would raise
+# AttributeError the moment anything (e.g. html_writer.py) reads trip.avg_outside_temp_c.
 _RPM_STABLE_MINUTES = 2.0  # a run at the typical RPM bucket must last at least this long to
 # count as steady cruising rather than a brief pass-through while accelerating/decelerating
 
@@ -92,6 +104,11 @@ class NavSample:
     depth_m: Optional[float] = None
     water_temp_c: Optional[float] = None
     cog_deg: Optional[float] = None
+    stw_ms: Optional[float] = None  # speed through water (PGN 128259)
+    wind_speed_ms: Optional[float] = None  # wind speed (PGN 130306)
+    wind_angle_deg: Optional[float] = None  # wind angle (PGN 130306)
+    # canboat's WIND_REFERENCE lookup code for wind_speed_ms/wind_angle_deg above (PGN 130306)
+    wind_reference: Optional[int] = None
 
 
 # A "run" (a maximal stretch classified 'stationary' or 'moving', see _classify_runs) used to be
@@ -155,6 +172,10 @@ def _materialize(samples: NavSampleArray, group: Group) -> List[NavSample]:
                     samples.depth_at(i),
                     samples.water_temp_at(i),
                     samples.cog_at(i),
+                    samples.stw_at(i),
+                    samples.wind_speed_at(i),
+                    samples.wind_angle_at(i),
+                    samples.wind_reference_at(i),
                 )
             )
     return result
@@ -306,6 +327,16 @@ class TripLeg:
     track: List[NavSample]  # GPS points of this trip, e.g. for GPX export
     max_speed_at: Optional[datetime] = None  # moment the max speed (see max_speed_kn) was recorded
     max_speed_rpm: Dict[int, float] = field(default_factory=dict)  # engine instance -> RPM at that moment
+    # Outside/ambient air temperature (PGN 130312, Source="Outside") during this trip -- a
+    # trip-wide aggregate only (unlike water temperature), see OutsideTempArray's own docstring.
+    avg_outside_temp_c: Optional[float] = None
+    min_outside_temp_c: Optional[float] = None
+    max_outside_temp_c: Optional[float] = None
+    # Outside/ambient relative humidity (PGN 130313, Source="Outside") during this trip -- same
+    # trip-wide-aggregate-only reasoning as outside temperature above.
+    avg_humidity_pct: Optional[float] = None
+    min_humidity_pct: Optional[float] = None
+    max_humidity_pct: Optional[float] = None
 
 
 def _haversine_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -500,9 +531,11 @@ def _merge_nav_samples(
     sogs: SogArray,
     depths: Optional[DepthArray] = None,
     water_temps: Optional[WaterTempArray] = None,
+    winds: Optional[WindArray] = None,
+    stws: Optional[StwArray] = None,
 ) -> NavSampleArray:
-    """Combines position, speed, depth, and water temperature readings chronologically; all are
-    forward-filled.
+    """Combines position, speed, depth, water temperature, wind, and speed-through-water readings
+    chronologically; all are forward-filled.
 
     fixes/sogs are FixArray/SogArray (see fix_array.py) rather than plain lists -- always, by the
     time this is called from build_trips() (the only caller), which wraps whatever it was given
@@ -526,14 +559,22 @@ def _merge_nav_samples(
     # and never reorders what it keeps, so no second sort is needed here.
     depths = (depths if depths is not None else DepthArray()).drop_time_regressions()
     water_temps = (water_temps if water_temps is not None else WaterTempArray()).drop_time_regressions()
+    winds = (winds if winds is not None else WindArray()).drop_time_regressions()
+    stws = (stws if stws is not None else StwArray()).drop_time_regressions()
     samples = NavSampleArray()
     sog_idx = 0
     depth_idx = 0
     water_temp_idx = 0
+    wind_idx = 0
+    stw_idx = 0
     last_sog = 0.0
     last_cog: Optional[float] = None
     last_depth: Optional[float] = None
     last_water_temp: Optional[float] = None
+    last_wind_speed: Optional[float] = None
+    last_wind_angle: Optional[float] = None
+    last_wind_reference: Optional[int] = None
+    last_stw: Optional[float] = None
     for i in range(len(fixes)):
         fix_time = fixes.datetime_at(i)
         fix_epoch = fixes.time_at(i)
@@ -547,7 +588,18 @@ def _merge_nav_samples(
         while water_temp_idx < len(water_temps) and water_temps.time_at(water_temp_idx) <= fix_epoch:
             last_water_temp = water_temps.temp_at(water_temp_idx)
             water_temp_idx += 1
-        samples.append_raw(fix_epoch, fixes.lat_at(i), fixes.lon_at(i), last_sog, last_depth, last_water_temp, last_cog)
+        while wind_idx < len(winds) and winds.time_at(wind_idx) <= fix_epoch:
+            last_wind_speed = winds.speed_at(wind_idx)
+            last_wind_angle = winds.angle_at(wind_idx)
+            last_wind_reference = winds.reference_at(wind_idx)
+            wind_idx += 1
+        while stw_idx < len(stws) and stws.time_at(stw_idx) <= fix_epoch:
+            last_stw = stws.stw_at(stw_idx)
+            stw_idx += 1
+        samples.append_raw(
+            fix_epoch, fixes.lat_at(i), fixes.lon_at(i), last_sog, last_depth, last_water_temp, last_cog,
+            last_stw, last_wind_speed, last_wind_angle, last_wind_reference,
+        )
     return samples
 
 
@@ -1194,6 +1246,31 @@ def _water_temp_stats(track: List[NavSample]) -> Tuple[Optional[float], Optional
     return sum(values) / len(values), min(values), max(values)
 
 
+def _outside_temp_stats(
+    outside_temp: OutsideTempArray, start: datetime, end: datetime
+) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+    """Returns (avg, min, max) outside/ambient air temperature in degrees Celsius during
+    [start, end], or (None, None, None). Unlike _water_temp_stats, reads from the season-wide
+    OutsideTempArray windowed to the trip's own time span, not from ``track`` -- outside
+    temperature is never merged into NavSample (see OutsideTempArray's own docstring)."""
+    values = outside_temp.values_between(start, end)
+    if not values:
+        return None, None, None
+    return sum(values) / len(values), min(values), max(values)
+
+
+def _humidity_stats(
+    humidity: HumidityArray, start: datetime, end: datetime
+) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+    """Returns (avg, min, max) outside/ambient relative humidity in percent during [start, end],
+    or (None, None, None). Same reasoning as _outside_temp_stats for reading a windowed season-wide
+    array instead of ``track``."""
+    values = humidity.values_between(start, end)
+    if not values:
+        return None, None, None
+    return sum(values) / len(values), min(values), max(values)
+
+
 def _engine_health(
     by_instance: Dict[int, List[EngineSample]], start: datetime, end: datetime
 ) -> Dict[int, EngineHealth]:
@@ -1459,6 +1536,8 @@ class _SeasonData:
     trip_fuel: "_InstanceIndex"
     on_intervals_by_instance: Dict[int, List[Tuple[datetime, datetime]]]
     attitude: Union[AttitudeArray, SourceAttitude]  # in time order (see build_trips) or read per window
+    outside_temp: OutsideTempArray  # season-wide, windowed per trip (see _outside_temp_stats)
+    humidity: HumidityArray  # season-wide, windowed per trip (see _humidity_stats)
 
 
 def _classify_trip_runs(
@@ -1584,6 +1663,10 @@ def _build_trip(
     max_speed_rpm = _rpm_at_time(season.rpm, max_speed_at, depart_time, arrive_time) if max_speed_at else {}
     min_depth_m, min_depth_lat, min_depth_lon = _min_depth(track)
     avg_water_temp_c, min_water_temp_c, max_water_temp_c = _water_temp_stats(track)
+    avg_outside_temp_c, min_outside_temp_c, max_outside_temp_c = _outside_temp_stats(
+        season.outside_temp, depart_time, arrive_time
+    )
+    avg_humidity_pct, min_humidity_pct, max_humidity_pct = _humidity_stats(season.humidity, depart_time, arrive_time)
     roll_variation_deg, pitch_variation_deg, roll_range_deg, pitch_range_deg = _motion_variation(
         season.attitude, depart_time, arrive_time
     )
@@ -1617,6 +1700,12 @@ def _build_trip(
         avg_water_temp_c=avg_water_temp_c,
         min_water_temp_c=min_water_temp_c,
         max_water_temp_c=max_water_temp_c,
+        avg_outside_temp_c=avg_outside_temp_c,
+        min_outside_temp_c=min_outside_temp_c,
+        max_outside_temp_c=max_outside_temp_c,
+        avg_humidity_pct=avg_humidity_pct,
+        min_humidity_pct=min_humidity_pct,
+        max_humidity_pct=max_humidity_pct,
         roll_variation_deg=roll_variation_deg,
         pitch_variation_deg=pitch_variation_deg,
         roll_range_deg=roll_range_deg,
@@ -1639,6 +1728,10 @@ def build_trips_with_state(
     battery_samples: Optional[Union[BatteryArray, Iterable[BatterySample]]] = None,
     rpm_samples: Optional[Union[RpmArray, Iterable[EngineRpmSample]]] = None,
     attitude_samples: Optional[Union[AttitudeArray, Iterable[AttitudeSample]]] = None,
+    wind_samples: Optional[Union[WindArray, Iterable[WindSample]]] = None,
+    stw_samples: Optional[Union[StwArray, Iterable[StwSample]]] = None,
+    outside_temp_samples: Optional[Union[OutsideTempArray, Iterable[OutsideTempSample]]] = None,
+    humidity_samples: Optional[Union[HumidityArray, Iterable[HumiditySample]]] = None,
     *,
     speed_threshold_kn: float = 0.5,
     min_stop_minutes: float = 10.0,
@@ -1692,6 +1785,10 @@ def build_trips_with_state(
     water_temp_samples = _as_array(water_temp_samples, WaterTempArray)
     battery_samples = _as_array(battery_samples, BatteryArray)
     rpm_samples = _as_array(rpm_samples, RpmArray)
+    wind_samples = _as_array(wind_samples, WindArray)
+    stw_samples = _as_array(stw_samples, StwArray)
+    outside_temp_samples = _as_array(outside_temp_samples, OutsideTempArray).drop_time_regressions()
+    humidity_samples = _as_array(humidity_samples, HumidityArray).drop_time_regressions()
     # Sorted once up front, in place (see _SortableSampleArray.drop_time_regressions): a plain
     # sorted(...) would iterate it into a fully-materialized list of AttitudeSample objects that
     # then lives for the rest of this function's run (passed to _motion_variation for every
@@ -1701,7 +1798,7 @@ def build_trips_with_state(
     if max_gap_minutes is None:
         max_gap_minutes = min_stop_minutes
 
-    samples = _merge_nav_samples(fixes, sogs, depth_samples, water_temp_samples)
+    samples = _merge_nav_samples(fixes, sogs, depth_samples, water_temp_samples, wind_samples, stw_samples)
     if len(samples) < 2:
         return [], None
     log(f"[info] ...{len(samples)} navigation samples merged, classifying trips...")
@@ -1727,6 +1824,8 @@ def build_trips_with_state(
         trip_fuel=_InstanceIndex(trip_fuel_samples),
         on_intervals_by_instance=on_intervals_by_instance,
         attitude=attitude_samples,
+        outside_temp=outside_temp_samples,
+        humidity=humidity_samples,
     )
 
     runs = _classify_trip_runs(

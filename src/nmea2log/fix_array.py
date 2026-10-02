@@ -37,10 +37,14 @@ from .model import (
     DepthSample,
     EngineRpmSample,
     EngineSample,
+    HumiditySample,
+    OutsideTempSample,
     PositionFix,
     SogSample,
+    StwSample,
     TripFuelSample,
     WaterTempSample,
+    WindSample,
 )
 
 _EPOCH = datetime(1970, 1, 1)
@@ -320,6 +324,76 @@ class SogArray(_SortableSampleArray):
             yield SogSample(from_epoch(t), sog_ms, None if math.isnan(cog) else cog)
 
 
+class WindArray(_SortableSampleArray):
+    """Same idea as FixArray, for WindSample. speed_ms/angle_deg/reference are all Optional --
+    stored as NaN when absent, same as SogArray's own cog_deg. ``reference`` (canboat's
+    WIND_REFERENCE lookup code, a small non-negative integer in practice) is stored as a float
+    column too, the same int-as-float-column trick BatteryArray uses for ``instance`` -- the
+    round-trip through float is exact for the small values this field actually takes."""
+
+    __slots__ = ("_time", "_speed_ms", "_angle_deg", "_reference")
+    _LABEL = "Wind samples"
+
+    def __init__(self, samples: Iterable[WindSample] = ()) -> None:
+        self._time: "array.array[float]" = array.array("d")
+        self._speed_ms: "array.array[float]" = array.array("d")
+        self._angle_deg: "array.array[float]" = array.array("d")
+        self._reference: "array.array[float]" = array.array("d")
+        self.extend(samples)
+
+    def append(self, sample: WindSample) -> None:
+        self._time.append(to_epoch(sample.time))
+        self._speed_ms.append(sample.speed_ms if sample.speed_ms is not None else math.nan)
+        self._angle_deg.append(sample.angle_deg if sample.angle_deg is not None else math.nan)
+        self._reference.append(sample.reference if sample.reference is not None else math.nan)
+
+    def speed_at(self, i: int) -> Optional[float]:
+        speed_ms = self._speed_ms[i]
+        return None if math.isnan(speed_ms) else speed_ms
+
+    def angle_at(self, i: int) -> Optional[float]:
+        angle_deg = self._angle_deg[i]
+        return None if math.isnan(angle_deg) else angle_deg
+
+    def reference_at(self, i: int) -> Optional[int]:
+        reference = self._reference[i]
+        return None if math.isnan(reference) else int(reference)
+
+    def __iter__(self) -> Iterator[WindSample]:
+        for t, speed_ms, angle_deg, reference in zip(self._time, self._speed_ms, self._angle_deg, self._reference):
+            yield WindSample(
+                from_epoch(t),
+                None if math.isnan(speed_ms) else speed_ms,
+                None if math.isnan(angle_deg) else angle_deg,
+                None if math.isnan(reference) else int(reference),
+            )
+
+
+class StwArray(_SortableSampleArray):
+    """Same idea as FixArray, for StwSample (speed through water, PGN 128259). stw_ms is
+    Optional -- stored as NaN when absent."""
+
+    __slots__ = ("_time", "_stw_ms")
+    _LABEL = "Speed through water samples"
+
+    def __init__(self, samples: Iterable[StwSample] = ()) -> None:
+        self._time: "array.array[float]" = array.array("d")
+        self._stw_ms: "array.array[float]" = array.array("d")
+        self.extend(samples)
+
+    def append(self, sample: StwSample) -> None:
+        self._time.append(to_epoch(sample.time))
+        self._stw_ms.append(sample.stw_ms if sample.stw_ms is not None else math.nan)
+
+    def stw_at(self, i: int) -> Optional[float]:
+        stw_ms = self._stw_ms[i]
+        return None if math.isnan(stw_ms) else stw_ms
+
+    def __iter__(self) -> Iterator[StwSample]:
+        for t, stw_ms in zip(self._time, self._stw_ms):
+            yield StwSample(from_epoch(t), None if math.isnan(stw_ms) else stw_ms)
+
+
 class DepthArray(_SortableSampleArray):
     """Same idea as FixArray, for DepthSample. depth_m is Optional -- stored as NaN when absent."""
 
@@ -367,6 +441,76 @@ class WaterTempArray(_SortableSampleArray):
     def __iter__(self) -> Iterator[WaterTempSample]:
         for t, temp_c in zip(self._time, self._temp_c):
             yield WaterTempSample(from_epoch(t), None if math.isnan(temp_c) else temp_c)
+
+
+class OutsideTempArray(_SortableSampleArray):
+    """Same idea as FixArray, for OutsideTempSample (outside/ambient air temperature, PGN 130312,
+    Source="Outside"). temp_c is Optional -- stored as NaN when absent.
+
+    Unlike DepthArray/WaterTempArray, never merged into NavSampleArray -- outside temperature
+    changes slowly and doesn't need per-point resolution, so it stays its own season-wide array,
+    read back only as a trip-wide window (see ``values_between``, used by tripbuilder.py's
+    ``_outside_temp_stats``)."""
+
+    __slots__ = ("_time", "_temp_c")
+    _LABEL = "Outside temperature samples"
+
+    def __init__(self, samples: Iterable[OutsideTempSample] = ()) -> None:
+        self._time: "array.array[float]" = array.array("d")
+        self._temp_c: "array.array[float]" = array.array("d")
+        self.extend(samples)
+
+    def append(self, sample: OutsideTempSample) -> None:
+        self._time.append(to_epoch(sample.time))
+        self._temp_c.append(sample.temp_c if sample.temp_c is not None else math.nan)
+
+    def temp_at(self, i: int) -> Optional[float]:
+        temp_c = self._temp_c[i]
+        return None if math.isnan(temp_c) else temp_c
+
+    def values_between(self, start: datetime, end: datetime) -> List[float]:
+        """The non-missing temp_c values with ``start <= time <= end``, via bisect -- needs this
+        array in time order (see drop_time_regressions). Avoids materializing an OutsideTempSample
+        per row just to read a trip-wide avg/min/max out of them."""
+        lo = bisect.bisect_left(self._time, to_epoch(start))
+        hi = bisect.bisect_right(self._time, to_epoch(end))
+        return [v for v in self._temp_c[lo:hi] if not math.isnan(v)]
+
+    def __iter__(self) -> Iterator[OutsideTempSample]:
+        for t, temp_c in zip(self._time, self._temp_c):
+            yield OutsideTempSample(from_epoch(t), None if math.isnan(temp_c) else temp_c)
+
+
+class HumidityArray(_SortableSampleArray):
+    """Same idea as FixArray, for HumiditySample (outside/ambient relative humidity, PGN 130313,
+    Source="Outside"). humidity_pct is Optional -- stored as NaN when absent. Same reasoning as
+    OutsideTempArray for never being merged into NavSampleArray -- see that class's docstring."""
+
+    __slots__ = ("_time", "_humidity_pct")
+    _LABEL = "Humidity samples"
+
+    def __init__(self, samples: Iterable[HumiditySample] = ()) -> None:
+        self._time: "array.array[float]" = array.array("d")
+        self._humidity_pct: "array.array[float]" = array.array("d")
+        self.extend(samples)
+
+    def append(self, sample: HumiditySample) -> None:
+        self._time.append(to_epoch(sample.time))
+        self._humidity_pct.append(sample.humidity_pct if sample.humidity_pct is not None else math.nan)
+
+    def humidity_at(self, i: int) -> Optional[float]:
+        humidity_pct = self._humidity_pct[i]
+        return None if math.isnan(humidity_pct) else humidity_pct
+
+    def values_between(self, start: datetime, end: datetime) -> List[float]:
+        """Same idea as OutsideTempArray.values_between, for humidity_pct."""
+        lo = bisect.bisect_left(self._time, to_epoch(start))
+        hi = bisect.bisect_right(self._time, to_epoch(end))
+        return [v for v in self._humidity_pct[lo:hi] if not math.isnan(v)]
+
+    def __iter__(self) -> Iterator[HumiditySample]:
+        for t, humidity_pct in zip(self._time, self._humidity_pct):
+            yield HumiditySample(from_epoch(t), None if math.isnan(humidity_pct) else humidity_pct)
 
 
 class BatteryArray(_InstancedSampleArray):
@@ -599,7 +743,8 @@ class AttitudeArray(_SortableSampleArray):
 
 class NavSampleArray:
     """Columnar storage for tripbuilder.py's own merged nav-sample stream (time + position + speed
-    + depth + water-temp + course, one row per accepted GPS fix) -- the single biggest per-season
+    + depth + water-temp + course + speed-through-water + wind, one row per accepted GPS fix) --
+    the single biggest per-season
     Python-object cost left once fixes/sogs themselves are already stored this way (see this
     module's own docstring). build_trips() never keeps more than one of these resident at a time,
     but that one instance spans the *entire* archive being processed, for as long as its whole run
@@ -617,7 +762,19 @@ class NavSampleArray:
     small selection of rows ever gets turned back into real NavSample objects, right before the
     per-trip statistics functions that need real attribute access."""
 
-    __slots__ = ("_time", "_lat", "_lon", "_sog_ms", "_depth_m", "_water_temp_c", "_cog_deg")
+    __slots__ = (
+        "_time",
+        "_lat",
+        "_lon",
+        "_sog_ms",
+        "_depth_m",
+        "_water_temp_c",
+        "_cog_deg",
+        "_stw_ms",
+        "_wind_speed_ms",
+        "_wind_angle_deg",
+        "_wind_reference",
+    )
 
     def __init__(self) -> None:
         self._time: "array.array[float]" = array.array("d")
@@ -627,6 +784,13 @@ class NavSampleArray:
         self._depth_m: "array.array[float]" = array.array("d")
         self._water_temp_c: "array.array[float]" = array.array("d")
         self._cog_deg: "array.array[float]" = array.array("d")
+        # Wind/speed-through-water: per-point, like the columns above -- a future polar diagram
+        # needs these correlated with position/time, not reduced to a trip-wide average the way
+        # outside temperature/humidity are (see OutsideTempArray/HumidityArray).
+        self._stw_ms: "array.array[float]" = array.array("d")
+        self._wind_speed_ms: "array.array[float]" = array.array("d")
+        self._wind_angle_deg: "array.array[float]" = array.array("d")
+        self._wind_reference: "array.array[float]" = array.array("d")
 
     def append_raw(
         self,
@@ -637,6 +801,10 @@ class NavSampleArray:
         depth_m: Optional[float],
         water_temp_c: Optional[float],
         cog_deg: Optional[float],
+        stw_ms: Optional[float] = None,
+        wind_speed_ms: Optional[float] = None,
+        wind_angle_deg: Optional[float] = None,
+        wind_reference: Optional[int] = None,
     ) -> None:
         self._time.append(epoch_seconds)
         self._lat.append(lat)
@@ -645,6 +813,10 @@ class NavSampleArray:
         self._depth_m.append(depth_m if depth_m is not None else math.nan)
         self._water_temp_c.append(water_temp_c if water_temp_c is not None else math.nan)
         self._cog_deg.append(cog_deg if cog_deg is not None else math.nan)
+        self._stw_ms.append(stw_ms if stw_ms is not None else math.nan)
+        self._wind_speed_ms.append(wind_speed_ms if wind_speed_ms is not None else math.nan)
+        self._wind_angle_deg.append(wind_angle_deg if wind_angle_deg is not None else math.nan)
+        self._wind_reference.append(wind_reference if wind_reference is not None else math.nan)
 
     def time_at(self, i: int) -> float:
         return self._time[i]
@@ -672,6 +844,22 @@ class NavSampleArray:
     def cog_at(self, i: int) -> Optional[float]:
         cog = self._cog_deg[i]
         return None if math.isnan(cog) else cog
+
+    def stw_at(self, i: int) -> Optional[float]:
+        stw = self._stw_ms[i]
+        return None if math.isnan(stw) else stw
+
+    def wind_speed_at(self, i: int) -> Optional[float]:
+        speed = self._wind_speed_ms[i]
+        return None if math.isnan(speed) else speed
+
+    def wind_angle_at(self, i: int) -> Optional[float]:
+        angle = self._wind_angle_deg[i]
+        return None if math.isnan(angle) else angle
+
+    def wind_reference_at(self, i: int) -> Optional[int]:
+        reference = self._wind_reference[i]
+        return None if math.isnan(reference) else int(reference)
 
     def index_range_for_time(self, start: datetime, end: datetime) -> Optional[Tuple[int, int]]:
         """First..last index (as a half-open range) whose time falls in [start, end] inclusive,

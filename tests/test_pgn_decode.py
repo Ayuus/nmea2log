@@ -10,12 +10,16 @@ from nmea2log.pgn_decode import (
     decode_cog,
     decode_engine_dynamic,
     decode_engine_rapid,
+    decode_humidity,
+    decode_outside_air_temperature,
     decode_position_rapid,
     decode_sea_temperature,
     decode_sog,
+    decode_speed_through_water,
     decode_system_time,
     decode_trip_fuel_engine,
     decode_water_depth,
+    decode_wind,
 )
 
 
@@ -240,3 +244,93 @@ def test_decode_gnss_dops_reads_not_available_at_power_off():
 
 def test_decode_gnss_dops_none_when_payload_too_short():
     assert decode_gnss_dops(b"") is None
+
+
+def test_decode_outside_air_temperature():
+    # sid(1B) + instance(1B) + source(1B, 1 = outside temperature) + actualTemp(2B, res 0.01K) + setTemp(2B)
+    temp_raw = round((18.42 + 273.15) / 0.01)
+    data = struct.pack("<BBBHH", 0, 0, 1, temp_raw, 0xFFFF)
+
+    assert decode_outside_air_temperature(data) == pytest.approx(18.42, abs=1e-6)
+
+
+def test_decode_outside_air_temperature_ignores_other_sources():
+    # source 0 = sea temperature, not outside (air) -- should be filtered out, not returned
+    temp_raw = round((18.42 + 273.15) / 0.01)
+    data = struct.pack("<BBBHH", 0, 0, 0, temp_raw, 0xFFFF)
+
+    assert decode_outside_air_temperature(data) is None
+
+
+def test_decode_outside_air_temperature_not_available():
+    data = struct.pack("<BBBHH", 0, 0, 1, 0xFFFF, 0xFFFF)
+
+    assert decode_outside_air_temperature(data) is None
+
+
+def test_decode_humidity():
+    # sid(1B) + instance(1B) + source(1B, 1 = outside) + actualHumidity(2B, res 0.004%, signed) + setHumidity(2B)
+    humidity_raw = round(62.5 / 0.004)
+    data = struct.pack("<BBBhh", 0, 0, 1, humidity_raw, 0x7FFF)
+
+    assert decode_humidity(data) == pytest.approx(62.5, abs=1e-2)
+
+
+def test_decode_humidity_ignores_other_sources():
+    # source 0 = inside humidity, not outside -- should be filtered out, not returned
+    humidity_raw = round(62.5 / 0.004)
+    data = struct.pack("<BBBhh", 0, 0, 0, humidity_raw, 0x7FFF)
+
+    assert decode_humidity(data) is None
+
+
+def test_decode_humidity_not_available():
+    data = struct.pack("<BBBhh", 0, 0, 1, 0x7FFF, 0x7FFF)
+
+    assert decode_humidity(data) is None
+
+
+def test_decode_speed_through_water():
+    # sid(1B) + speedWaterReferenced(2B, res 0.01) + speedGroundReferenced(2B) + type(1B) + direction/reserved(2B)
+    stw_raw = round(4.25 / 0.01)
+    data = struct.pack("<BHHBH", 0, stw_raw, 0xFFFF, 0xFF, 0xFFFF)
+
+    assert decode_speed_through_water(data) == pytest.approx(4.25)
+
+
+def test_decode_speed_through_water_not_available():
+    data = struct.pack("<BHHBH", 0, 0xFFFF, 0xFFFF, 0xFF, 0xFFFF)
+
+    assert decode_speed_through_water(data) is None
+
+
+def test_decode_wind():
+    # sid(1B) + windSpeed(2B, res 0.01) + windAngle(2B, res 0.0001 rad) + reference(3 bits)/reserved(2B)
+    speed_raw = round(6.17 / 0.01)
+    angle_raw = round(math.radians(45.0) / 0.0001)
+    reference = 2  # Apparent
+    data = struct.pack("<BHHBH", 0, speed_raw, angle_raw, reference, 0xFFFF)
+
+    speed_ms, angle_deg, ref = decode_wind(data)
+
+    assert speed_ms == pytest.approx(6.17, abs=1e-4)
+    assert angle_deg == pytest.approx(45.0, abs=0.01)
+    assert ref == reference
+
+
+def test_decode_wind_partial_reading_speed_only():
+    # Only speed available -- angle and reference both report "not available".
+    speed_raw = round(3.0 / 0.01)
+    data = struct.pack("<BHHBH", 0, speed_raw, 0xFFFF, 0x07, 0xFFFF)
+
+    speed_ms, angle_deg, ref = decode_wind(data)
+
+    assert speed_ms == pytest.approx(3.0)
+    assert angle_deg is None
+    assert ref is None
+
+
+def test_decode_wind_not_available():
+    data = struct.pack("<BHHBH", 0, 0xFFFF, 0xFFFF, 0x07, 0xFFFF)
+
+    assert decode_wind(data) is None

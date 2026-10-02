@@ -23,6 +23,9 @@ PGN_TEMPERATURE = 130312  # Temperature
 PGN_BATTERY_STATUS = 127508  # Battery Status
 PGN_ATTITUDE = 127257  # Attitude (pitch/roll/yaw)
 PGN_GNSS_DOPS = 129539  # GNSS DOPs (dilution of precision + fix mode)
+PGN_WIND = 130306  # Wind Data (speed/angle relative to the chosen reference)
+PGN_SPEED = 128259  # Speed (water- and ground-referenced boat speed)
+PGN_HUMIDITY = 130313  # Humidity
 
 _EPOCH = date(1970, 1, 1)
 _KELVIN_TO_CELSIUS = 273.15
@@ -30,6 +33,14 @@ _KELVIN_TO_CELSIUS = 273.15
 # canboat's TEMPERATURE_SOURCE lookup enumeration for PGN 130312's "Source" field; 0 is the one
 # we want (sea/outside water temperature, as opposed to e.g. cabin or exhaust gas temperature).
 _TEMPERATURE_SOURCE_SEA = 0
+# Same PGN 130312, same lookup enumeration -- 1 is the outside *air* temperature, a different
+# reading entirely from the sea temperature above (both ride the same PGN, told apart only by
+# this field).
+_TEMPERATURE_SOURCE_OUTSIDE = 1
+
+# canboat's HUMIDITY_SOURCE lookup enumeration for PGN 130313's "Source" field; 1 is outside
+# (ambient) humidity, as opposed to e.g. inside/cabin humidity under the same PGN.
+_HUMIDITY_SOURCE_OUTSIDE = 1
 
 # Bit meanings of the two "Discrete Status" fields in PGN 127489, taken from canboat's
 # ENGINE_STATUS_1 / ENGINE_STATUS_2 lookup enumerations.
@@ -188,6 +199,60 @@ def decode_sea_temperature(data: bytes) -> Optional[float]:
     if temp_raw is None:
         return None
     return temp_raw * 0.01 - _KELVIN_TO_CELSIUS
+
+
+def decode_outside_air_temperature(data: bytes) -> Optional[float]:
+    """PGN 130312: outside (ambient) air temperature, in degrees Celsius. Same PGN and field
+    layout as ``decode_sea_temperature`` -- only the "Source" field differs (see
+    ``_TEMPERATURE_SOURCE_OUTSIDE``), so both decoders read the same payload and each returns
+    None unless it's specifically their own source."""
+    source = _extract(data, 16, 8, signed=False)
+    if source != _TEMPERATURE_SOURCE_OUTSIDE:
+        return None
+    temp_raw = _extract(data, 24, 16, signed=False)
+    if temp_raw is None:
+        return None
+    return temp_raw * 0.01 - _KELVIN_TO_CELSIUS
+
+
+def decode_humidity(data: bytes) -> Optional[float]:
+    """PGN 130313: relative humidity, in percent. Several sources can be reported under this PGN
+    (inside/outside); returns None unless the "Source" field is specifically outside/ambient
+    humidity (see ``_HUMIDITY_SOURCE_OUTSIDE``)."""
+    source = _extract(data, 16, 8, signed=False)
+    if source != _HUMIDITY_SOURCE_OUTSIDE:
+        return None
+    humidity_raw = _extract(data, 24, 16, signed=True)
+    if humidity_raw is None:
+        return None
+    return humidity_raw * 0.004
+
+
+def decode_wind(data: bytes) -> Optional[Tuple[Optional[float], Optional[float], Optional[int]]]:
+    """PGN 130306: wind speed (m/s), wind angle (degrees), and the reference the angle/speed are
+    relative to -- canboat's WIND_REFERENCE lookup code (0=true/ground, 1=magnetic, 2=apparent,
+    3=true/boat, 4=true/water), None when "not available". Returns None only if neither speed nor
+    angle is available, matching ``decode_attitude``'s "return None only if neither is available"
+    style -- a device can report one without the other."""
+    speed_raw = _extract(data, 8, 16, signed=False)
+    angle_raw = _extract(data, 24, 16, signed=False)
+    if speed_raw is None and angle_raw is None:
+        return None
+    speed_ms = speed_raw * 0.01 if speed_raw is not None else None
+    angle_deg = math.degrees(angle_raw * 0.0001) if angle_raw is not None else None
+    reference = _extract(data, 40, 3, signed=False)
+    return speed_ms, angle_deg, reference
+
+
+def decode_speed_through_water(data: bytes) -> Optional[float]:
+    """PGN 128259: speed through water (STW, i.e. water-referenced boat speed, as opposed to the
+    ground-referenced speed already decoded from PGN 129026's SOG), in m/s. The same message also
+    carries a ground-referenced speed field -- redundant with that SOG, so deliberately not
+    decoded here."""
+    stw_raw = _extract(data, 8, 16, signed=False)
+    if stw_raw is None:
+        return None
+    return stw_raw * 0.01
 
 
 def decode_battery_status(data: bytes) -> Optional[Tuple[int, Optional[float]]]:
