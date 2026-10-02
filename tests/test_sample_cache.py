@@ -327,3 +327,23 @@ def test_counting_orphans_also_moves_old_entries_of_files_that_are_still_there(t
 
     assert cache.orphan_entry_count([kept]) == 1  # only the entry of ``gone``
     assert (tmp_path / "cache" / "EBL000001" / "000001_001.pkl.zz").is_file()
+
+
+def test_encoding_a_list_with_a_stray_other_sample_type_says_which_one():
+    """Regression test for a failure seen once on a real device and never reproduced: a bare
+    "'PositionFix' object has no attribute 'sog_ms'" with nothing to say which list it was in."""
+    import pytest
+    from nmea2log.model import SogSample
+
+    samples = [
+        SogSample(datetime(2026, 7, 15, 9, 0, 0), 3.0),
+        SogSample(datetime(2026, 7, 15, 9, 0, 1), 3.1),
+        PositionFix(datetime(2026, 7, 15, 9, 0, 2), 52.3, 4.9),
+    ]
+
+    with pytest.raises(TypeError) as excinfo:
+        _encode_samples(samples)
+
+    message = str(excinfo.value)
+    assert "3 samples start with SogSample" in message
+    assert "#2 is a PositionFix" in message

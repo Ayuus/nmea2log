@@ -12,6 +12,7 @@ window too early (found in practice).
 from __future__ import annotations
 
 import sys
+import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Optional, TextIO
@@ -82,6 +83,22 @@ def _prune_old_lines(path: Path, retention_days: float) -> None:
             kept.append(line)
     if len(kept) != len(lines):
         path.write_text("".join(kept), encoding="utf-8")
+
+
+def log_exception(context: str, exc: Optional[BaseException] = None, *, file: TextIO = sys.stderr) -> None:
+    """Logs ``exc`` (default: the exception currently being handled) -- ``context`` (what was being
+    done, to which file) first, then the full Python traceback, one log line each. Meant for an
+    ``except`` block (or a context manager's ``__exit__``) that lets the exception go on: the one
+    that reaches the Android app's own handler is just ``PyException: <message>``, which on a
+    failure that doesn't reproduce is rarely enough to find the cause (found in practice:
+    "'PositionFix' object has no attribute 'sog_ms'" with nothing to say where). Every line is
+    tagged [error], so the persistent log file keeps all of it."""
+    if exc is None:
+        exc = sys.exc_info()[1]
+    log(f"[error] {context}: {exc!r}", file=file)
+    formatted = traceback.format_exception(type(exc), exc, exc.__traceback__)
+    for line in "".join(formatted).rstrip().splitlines():
+        log(f"[error]   {line}", file=file)
 
 
 def log(message: str, *, file: TextIO = sys.stdout, level: str = "info") -> None:

@@ -36,7 +36,7 @@ from .fix_array import (
 )
 from .gnss_gate import GnssFixGate
 from .logfile_layout import log_logfile_layout
-from .log import log
+from .log import log, log_exception
 from .model import (
     AttitudeSample,
     BatterySample,
@@ -501,6 +501,59 @@ def _log_decoded_file_counts(logfiles: List[Path], resume_index: int, sample_cac
         )
 
 
+_SAMPLE_PART_NAMES = (
+    "fixes", "sogs", "engine", "trip_fuel", "depth", "water_temp", "battery", "rpm", "attitude",
+    "wind", "stw", "outside_temp", "humidity",
+)
+
+
+def _describe_samples(samples: tuple) -> str:
+    """One line on what a file's samples tuple (see _collect_samples) holds -- per part, per source,
+    the count and the sample type(s) actually found in it, so a list holding something other than
+    what its part should (the cause of an otherwise anonymous "object has no attribute") shows."""
+
+    def kinds(items: object) -> str:
+        if not isinstance(items, (list, tuple)):
+            return type(items).__name__
+        names = sorted({type(item).__name__ for item in items})
+        return f"{len(items)}x{'/'.join(names) if names else '-'}"
+
+    parts = []
+    for name, value in zip(_SAMPLE_PART_NAMES, samples):
+        if isinstance(value, dict):
+            parts.append(f"{name}={{{', '.join(f'{source}: {kinds(items)}' for source, items in value.items())}}}")
+        else:
+            parts.append(f"{name}={kinds(value)}")
+    return "; ".join(parts)
+
+
+class _FileProcessing:
+    """What _decode_logfiles was doing to one file, for when something unexpected goes wrong in it:
+    logs the file, the step, whether its samples came from the cache, the full traceback and what
+    the samples held, then lets the exception go on. A failure that only ever happened once, on a
+    device, with nothing but the exception's own one-line message to go on, is what this is for."""
+
+    def __init__(self, path: Path, idx: int, total: int) -> None:
+        self.path, self.idx, self.total = path, idx, total
+        self.step = "starting"
+        self.from_cache = False
+        self.samples: Optional[tuple] = None
+
+    def __enter__(self) -> "_FileProcessing":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        if exc is None or isinstance(exc, (PipelineCancelled, PipelineError, KeyboardInterrupt)):
+            return False
+        source = "from the sample cache" if self.from_cache else "decoded fresh"
+        log_exception(
+            f"Unexpected error in file {self.idx}/{self.total} ({self.path}) while {self.step} ({source})", exc
+        )
+        if self.samples is not None:
+            log(f"[error] Its samples: {_describe_samples(self.samples)}", file=sys.stderr)
+        return False
+
+
 def _decode_logfiles(
     logfiles: List[Path],
     resume_index: int,
@@ -549,59 +602,67 @@ def _decode_logfiles(
         if not path.exists():
             raise PipelineError(f"Log file not found: {path}")
 
-        time_state_before = snapshot_time_state(ebl_time_state)
-        resume_info.ebl_time_state_before_file[file_index] = time_state_before
+        with _FileProcessing(path, idx, len(logfiles)) as ctx:
+            time_state_before = snapshot_time_state(ebl_time_state)
+            resume_info.ebl_time_state_before_file[file_index] = time_state_before
 
-        # The attitude samples (by far the most numerous, see attitude_source.py) are not decoded from the
-        # cache at all here: only a summary of them, for the trips to read back their own window with.
-        cached = sample_cache.get(path, attitude_as_summary=True) if sample_cache is not None else None
-        if cached is not None:
-            samples, time_state_after = cached
-            (
-                fixes, sogs, engine, trip_fuel, depth, water_temp, battery, rpm, attitude_summary,
-                wind, stw, outside_temp, humidity,
-            ) = samples
-            restore_time_state(ebl_time_state, time_state_after)
-            samples_all.attitude.add_from_cache(path, attitude_summary, time_state_before)
-            cache_hits += 1
-        else:
-            frames = _iter_frames_for_path(path, ebl_time_state)
-            samples = _collect_samples(frames)
-            (
-                fixes, sogs, engine, trip_fuel, depth, water_temp, battery, rpm, attitude,
-                wind, stw, outside_temp, humidity,
-            ) = samples
-            if sample_cache is not None:
-                sample_cache.put(path, samples, snapshot_time_state(ebl_time_state))
-            samples_all.attitude.add_decoded(
-                path, attitude, stored_in_cache=sample_cache is not None, time_state_before=time_state_before
-            )
+            # The attitude samples (by far the most numerous, see attitude_source.py) are not decoded from the
+            # cache at all here: only a summary of them, for the trips to read back their own window with.
+            ctx.step = "reading the sample cache"
+            cached = sample_cache.get(path, attitude_as_summary=True) if sample_cache is not None else None
+            if cached is not None:
+                samples, time_state_after = cached
+                ctx.from_cache, ctx.samples = True, samples
+                (
+                    fixes, sogs, engine, trip_fuel, depth, water_temp, battery, rpm, attitude_summary,
+                    wind, stw, outside_temp, humidity,
+                ) = samples
+                restore_time_state(ebl_time_state, time_state_after)
+                samples_all.attitude.add_from_cache(path, attitude_summary, time_state_before)
+                cache_hits += 1
+            else:
+                ctx.step = "decoding the frames"
+                frames = _iter_frames_for_path(path, ebl_time_state)
+                samples = _collect_samples(frames)
+                ctx.samples = samples
+                (
+                    fixes, sogs, engine, trip_fuel, depth, water_temp, battery, rpm, attitude,
+                    wind, stw, outside_temp, humidity,
+                ) = samples
+                ctx.step = "writing the sample cache"
+                if sample_cache is not None:
+                    sample_cache.put(path, samples, snapshot_time_state(ebl_time_state))
+                ctx.step = "storing the attitude samples"
+                samples_all.attitude.add_decoded(
+                    path, attitude, stored_in_cache=sample_cache is not None, time_state_before=time_state_before
+                )
 
-        file_first_time: Optional[datetime] = None
-        for source_fixes in fixes.values():
-            if source_fixes:
-                candidate_time = min(f.time for f in source_fixes)
-                file_first_time = candidate_time if file_first_time is None else min(file_first_time, candidate_time)
-        resume_info.file_first_time_by_index[file_index] = file_first_time
+            ctx.step = "merging the samples into the season arrays"
+            file_first_time: Optional[datetime] = None
+            for source_fixes in fixes.values():
+                if source_fixes:
+                    candidate_time = min(f.time for f in source_fixes)
+                    file_first_time = candidate_time if file_first_time is None else min(file_first_time, candidate_time)
+            resume_info.file_first_time_by_index[file_index] = file_first_time
 
-        # Time-based rather than every-N-files -- see _DECODE_PROGRESS_INTERVAL_S.
-        now = time.monotonic()
-        if now - last_progress_log >= _DECODE_PROGRESS_INTERVAL_S and idx < len(logfiles):
-            log(f"[info] ...decoded {idx}/{len(logfiles)} logfile(s) so far", file=sys.stderr)
-            last_progress_log = now
+            # Time-based rather than every-N-files -- see _DECODE_PROGRESS_INTERVAL_S.
+            now = time.monotonic()
+            if now - last_progress_log >= _DECODE_PROGRESS_INTERVAL_S and idx < len(logfiles):
+                log(f"[info] ...decoded {idx}/{len(logfiles)} logfile(s) so far", file=sys.stderr)
+                last_progress_log = now
 
-        _merge_array_by_source(samples_all.fixes_by_source, fixes, FixArray)
-        _merge_array_by_source(samples_all.sogs_by_source, sogs, SogArray)
-        samples_all.engine.extend(engine)
-        samples_all.trip_fuel.extend(trip_fuel)
-        _merge_array_by_source(samples_all.depth_by_source, depth, DepthArray)
-        _merge_array_by_source(samples_all.water_temp_by_source, water_temp, WaterTempArray)
-        _merge_array_by_source(samples_all.battery_by_source, battery, BatteryArray)
-        samples_all.rpm.extend(rpm)
-        _merge_array_by_source(samples_all.wind_by_source, wind, WindArray)
-        _merge_array_by_source(samples_all.stw_by_source, stw, StwArray)
-        _merge_array_by_source(samples_all.outside_temp_by_source, outside_temp, OutsideTempArray)
-        _merge_array_by_source(samples_all.humidity_by_source, humidity, HumidityArray)
+            _merge_array_by_source(samples_all.fixes_by_source, fixes, FixArray)
+            _merge_array_by_source(samples_all.sogs_by_source, sogs, SogArray)
+            samples_all.engine.extend(engine)
+            samples_all.trip_fuel.extend(trip_fuel)
+            _merge_array_by_source(samples_all.depth_by_source, depth, DepthArray)
+            _merge_array_by_source(samples_all.water_temp_by_source, water_temp, WaterTempArray)
+            _merge_array_by_source(samples_all.battery_by_source, battery, BatteryArray)
+            samples_all.rpm.extend(rpm)
+            _merge_array_by_source(samples_all.wind_by_source, wind, WindArray)
+            _merge_array_by_source(samples_all.stw_by_source, stw, StwArray)
+            _merge_array_by_source(samples_all.outside_temp_by_source, outside_temp, OutsideTempArray)
+            _merge_array_by_source(samples_all.humidity_by_source, humidity, HumidityArray)
 
     # Unconditional, unlike the in-loop progress line above (which deliberately skips the very
     # last file so it doesn't fire right before this same count gets logged again a few lines

@@ -53,6 +53,16 @@ def _encode_samples(samples: list) -> Optional[tuple]:
     if not samples:
         return None
     cls = type(samples[0])
+    # Checked up front rather than left to the getattr below: a list of one sample type with a
+    # stray other one in it surfaced as a bare "'PositionFix' object has no attribute 'sog_ms'"
+    # with no hint of which list or which sample (found in practice, on a real device, and never
+    # reproduced since) -- this says which.
+    for position, sample in enumerate(samples):
+        if type(sample) is not cls:
+            raise TypeError(
+                f"mixed sample types: {len(samples)} samples start with {cls.__name__}, "
+                f"but #{position} is a {type(sample).__name__} ({sample!r})"
+            )
     field_names = tuple(f.name for f in dataclasses.fields(cls))
     columns = tuple(tuple(getattr(sample, name) for sample in samples) for name in field_names)
     return cls, columns

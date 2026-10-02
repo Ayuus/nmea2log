@@ -20,7 +20,7 @@ from . import import_ebl, w2k2_download
 from .cli import build_arg_parser
 from .geocode import Geocoder
 from .html_writer import write_html_logbook
-from .log import log, set_log_file, set_log_sink
+from .log import log, log_exception, set_log_file, set_log_sink
 from .marine import MarineFetcher
 from .pipeline import PipelineCancelled, PipelineError, discover_ebl_files, build_season_trips
 from .trip_ids import assign_trip_ids
@@ -149,37 +149,46 @@ def run_pipeline(
         return {"ok": False, "error": "Sync cancelled.", "cancelled": True}
     except PipelineError as exc:
         return {"ok": False, "error": str(exc)}
+    except Exception:
+        # Re-raised as before (Kotlin shows it as an unexpected error), but with the full Python
+        # traceback in the log first: what reaches Kotlin is only "PyException: <message>".
+        log_exception("Unexpected error while decoding and building the trips")
+        raise
     trips = season.trips
     latest_position = season.latest_position
 
-    log(f"[info] {len(trips)} trip(s) found, writing logbook...")
-    trip_uids = assign_trip_ids(trips, utc_offset_hours=args.utc_offset)
+    try:
+        log(f"[info] {len(trips)} trip(s) found, writing logbook...")
+        trip_uids = assign_trip_ids(trips, utc_offset_hours=args.utc_offset)
 
-    # When the logbook is actually about to be written, not right after decode -- same reasoning
-    # as _run() (see cli.py): geocoding/build_trips() can run for real extra minutes after decode
-    # finishes, so a decode-time stamp could sit visibly behind when the page was actually
-    # produced.
-    latest_data_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        # When the logbook is actually about to be written, not right after decode -- same reasoning
+        # as _run() (see cli.py): geocoding/build_trips() can run for real extra minutes after decode
+        # finishes, so a decode-time stamp could sit visibly behind when the page was actually
+        # produced.
+        latest_data_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
-    html_path = Path(output_html_path)
-    write_html_logbook(
-        trips,
-        html_path,
-        boat_name=boat_name,
-        mmsi=mmsi,
-        call_sign=call_sign,
-        utc_offset_hours=args.utc_offset,
-        trip_uids=trip_uids,
-        battery_warning_voltage=args.battery_warning_voltage,
-        latest_data_at=latest_data_at,
-        log_interval_minutes=args.log_interval_minutes,
-        remarks_api_url=args.remarks_api_url,
-        weather=WeatherFetcher(cache_file=html_path.parent / ".weather_cache.json"),
-        marine=MarineFetcher(cache_file=html_path.parent / ".marine_cache.json"),
-        geocoder=geocoder,
-        latest_position=latest_position,
-    )
-    log(f"[ok] Logbook written: {html_path} ({len(trips)} trip(s))")
+        html_path = Path(output_html_path)
+        write_html_logbook(
+            trips,
+            html_path,
+            boat_name=boat_name,
+            mmsi=mmsi,
+            call_sign=call_sign,
+            utc_offset_hours=args.utc_offset,
+            trip_uids=trip_uids,
+            battery_warning_voltage=args.battery_warning_voltage,
+            latest_data_at=latest_data_at,
+            log_interval_minutes=args.log_interval_minutes,
+            remarks_api_url=args.remarks_api_url,
+            weather=WeatherFetcher(cache_file=html_path.parent / ".weather_cache.json"),
+            marine=MarineFetcher(cache_file=html_path.parent / ".marine_cache.json"),
+            geocoder=geocoder,
+            latest_position=latest_position,
+        )
+        log(f"[ok] Logbook written: {html_path} ({len(trips)} trip(s))")
+    except Exception:
+        log_exception("Unexpected error while writing the logbook")
+        raise
 
     return {
         "ok": True,
