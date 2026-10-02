@@ -450,6 +450,20 @@ overrides the config file.
 pytest
 ```
 
+## Texts shared with the Android and iOS apps
+
+The texts both apps show (boat-mode status lines, the import log lines, settings labels, ...) live in
+one place: [`src/nmea2log/app_texts.py`](src/nmea2log/app_texts.py), in nl/en/fr/de with named
+placeholders (`{time}`, `{count}`). The iOS app reads them directly; the Android app's `strings.xml` is
+generated from them. After changing one:
+
+```bash
+python -m nmea2log.export_android_strings <Android repo>/app/src/main/res
+```
+
+(`--check` only reports what is out of sync.) A text that exists on one platform only stays in that app.
+Set `MYSAILINGLOGBOOK_ANDROID_RES` to the Android `res` directory and `pytest` also checks it for drift.
+
 ## Assumptions & limitations
 
 - **`nmea2log-download` API**: like the EBL file format itself, the W2K-2's web API
