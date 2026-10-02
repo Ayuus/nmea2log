@@ -27,6 +27,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, Optional, Sequence, Tuple
 
+from .fileutil import write_bytes_atomic
 from .fix_array import scan_time_regressions, to_epoch
 from .log import log
 
@@ -317,4 +318,4 @@ class SampleCache:
         )
         target = self._entry_for(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(payload)
+        write_bytes_atomic(target, payload)

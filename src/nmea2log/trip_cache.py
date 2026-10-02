@@ -24,6 +24,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from .fileutil import write_bytes_atomic
 from .tripbuilder import TripLeg
 
 # Bump whenever the cached payload's shape changes (TripLeg gains/loses a field, etc.) so a cache
@@ -135,4 +136,4 @@ class TripCache:
         payload = zlib.compress(
             pickle.dumps(data, protocol=pickle.HIGHEST_PROTOCOL), level=_COMPRESSION_LEVEL
         )
-        self.path.write_bytes(payload)
+        write_bytes_atomic(self.path, payload)
