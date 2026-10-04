@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import pickle
+import re
 import zlib
 from datetime import datetime
 from pathlib import Path
@@ -48,17 +49,32 @@ def config_signature(**params: object) -> str:
     return hashlib.sha1(parts.encode("utf-8")).hexdigest()
 
 
+_EBL_FOLDER = re.compile(r"^EBL\d{6}$")
+
+
 def _resolved(path: Path) -> str:
     return str(path.resolve())
 
 
+def resume_key(path: Path) -> str:
+    """How a resume file is recorded in the cache: its folder and file name inside the archive
+    (``EBL000012/000012_007.ebl``), as the sample cache identifies a log file, so the cache survives
+    the archive moving to another place -- the iOS app's container path, for one, changes with a
+    reinstall or an update, and the cache then no longer knew its own file and rebuilt every trip
+    (found in practice). A file outside that layout is recorded by its absolute path."""
+    if path.suffix == ".ebl" and _EBL_FOLDER.match(path.parent.name):
+        return f"{path.parent.name}/{path.name}"
+    return _resolved(path)
+
+
 def find_resume_index(logfiles: Sequence[Path], resume_from_file: str) -> Optional[int]:
     """Index into ``logfiles`` matching the file a cached run recorded as its resume point, or
-    None if it can't be found (the file was moved, deleted, or --ebl-dir now points somewhere else
+    None if it can't be found (the file was deleted, or --ebl-dir now points to another archive
     entirely) -- the caller must then treat the whole cache as unusable rather than guess which
-    files it actually covers."""
+    files it actually covers. Also matches a cache that recorded the absolute path (the earlier
+    format), as long as the file is still there."""
     for index, path in enumerate(logfiles):
-        if _resolved(path) == resume_from_file:
+        if resume_key(path) == resume_from_file or _resolved(path) == resume_from_file:
             return index
     return None
 

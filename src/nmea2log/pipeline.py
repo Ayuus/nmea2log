@@ -84,7 +84,7 @@ from .pgn_decode import (
     decode_wind,
 )
 from .sample_cache import ATTITUDE_PART, SampleCache
-from .trip_cache import TripCache, choose_resume_index, config_signature, find_resume_index
+from .trip_cache import TripCache, choose_resume_index, config_signature, find_resume_index, resume_key
 from .tripbuilder import TRIP_LOGIC_VERSION, BoatState, TripLeg, build_trips_with_state, resolve_trip_places
 
 _T = TypeVar("_T")
@@ -857,7 +857,7 @@ def _save_trip_cache(
     new_resume_index = choose_resume_index(
         sorted(resume_info.file_first_time_by_index.items()), resume_reference_time, resume_index
     )
-    new_resume_file = str(logfiles[new_resume_index].resolve())
+    new_resume_file = resume_key(logfiles[new_resume_index])
     new_resume_state = resume_info.ebl_time_state_before_file.get(new_resume_index)
     trip_cache_store.save(new_settled_trips, new_resume_file, new_resume_state, trip_signature)
 

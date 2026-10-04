@@ -6,6 +6,7 @@ from nmea2log.trip_cache import (
     choose_resume_index,
     config_signature,
     find_resume_index,
+    resume_key,
 )
 
 
@@ -24,6 +25,38 @@ def test_find_resume_index_matches_by_resolved_path(tmp_path):
     f1.write_bytes(b"x")
 
     assert find_resume_index([f0, f1], str(f1.resolve())) == 1
+
+
+def test_resume_key_is_the_folder_and_file_name_of_a_logfile_in_the_archive_layout(tmp_path):
+    f = tmp_path / "EBL000012" / "000012_007.ebl"
+    f.parent.mkdir()
+    f.write_bytes(b"x")
+
+    assert resume_key(f) == "EBL000012/000012_007.ebl"
+
+
+def test_resume_key_is_the_absolute_path_for_a_file_outside_the_archive_layout(tmp_path):
+    f = tmp_path / "loose.ebl"
+    f.write_bytes(b"x")
+
+    assert resume_key(f) == str(f.resolve())
+
+
+def test_find_resume_index_still_finds_the_file_after_the_archive_moved(tmp_path):
+    """The iOS app's container path changes with a reinstall or an update: a cache that recorded
+    ``EBL000001/000001_002.ebl`` must be found in the same archive at another location."""
+    cached_key = None
+    for root in ("before", "after"):
+        files = []
+        for name in ("000001_001.ebl", "000001_002.ebl"):
+            f = tmp_path / root / "EBL000001" / name
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_bytes(b"x")
+            files.append(f)
+        if root == "before":
+            cached_key = resume_key(files[1])
+
+    assert find_resume_index(files, cached_key) == 1
 
 
 def test_find_resume_index_returns_none_when_the_file_is_gone(tmp_path):
