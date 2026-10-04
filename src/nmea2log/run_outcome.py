@@ -97,17 +97,38 @@ def publish_failed(published: bool, rest_complete: bool, sftp_complete: bool) ->
     return not published and (rest_complete or sftp_complete)
 
 
+def describe_import(result: dict) -> List[Line]:
+    """The log lines for the end of an import, from import_ebl's result: every file that took another
+    file's name and every file that failed is a warning; then one line for the whole import. The summary
+    line of an import that brought in files has no [info] tag (the line of the run's own end)."""
+    lines: List[Line] = []
+    for detail in result.get("renamed", []):
+        lines.append(Line("warning", "log_import_renamed", {"detail": detail}))
+    for detail in result.get("errors", []):
+        lines.append(Line("warning", "log_import_file_error", {"detail": detail}))
+    imported = result.get("imported", 0)
+    skipped = result.get("skipped_duplicate", 0)
+    if imported > 0:
+        lines.append(Line("", "log_import_done", {"imported": imported, "skipped": skipped}))
+    elif skipped > 0:
+        lines.append(Line("info", "log_import_all_duplicates", {"count": skipped}))
+    else:
+        lines.append(Line("info", "log_import_no_files"))
+    return lines
+
+
+def _lines_json(lines: List[Line]) -> List[dict]:
+    return [{"level": line.level, "key": line.key, "params": line.params, "text": line.text} for line in lines]
+
+
+def describe_import_json(result_json: str) -> str:
+    """describe_import() for the Android app: ``{"lines": [{"level", "key", "params", "text"}]}``."""
+    return json.dumps({"lines": _lines_json(describe_import(json.loads(result_json)))})
+
+
 def describe_result_json(result_json: str, initiator: str, publish_failed_flag: bool) -> str:
     """describe_result() for the Android app, which passes the result and gets the outcome back as JSON
     (Chaquopy hands Python objects over poorly, the same reason bootmode has a JSON entry point).
     ``{"lines": [{"level", "key", "params", "text"}], "show"}``."""
     outcome = describe_result(json.loads(result_json), initiator, publish_failed_flag)
-    return json.dumps(
-        {
-            "lines": [
-                {"level": line.level, "key": line.key, "params": line.params, "text": line.text}
-                for line in outcome.lines
-            ],
-            "show": outcome.show,
-        }
-    )
+    return json.dumps({"lines": _lines_json(outcome.lines), "show": outcome.show})

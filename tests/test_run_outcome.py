@@ -111,3 +111,39 @@ def test_the_json_entry_point_matches_describe_result():
         "lines": [{"level": "info", "key": "status_ready_with_download", "params": {"trips": 4, "files": 2}, "text": None}],
         "show": SHOW_LOGBOOK,
     }
+
+
+def test_an_import_reports_renamed_and_failed_files_as_warnings_then_a_summary():
+    from nmea2log.run_outcome import describe_import
+
+    lines = describe_import(
+        {"imported": 3, "skipped_duplicate": 2, "renamed": ["EBL000001 -> EBL000001-1"], "errors": ["x.ebl: denied"]}
+    )
+
+    assert [(l.level, l.key, l.params) for l in lines] == [
+        ("warning", "log_import_renamed", {"detail": "EBL000001 -> EBL000001-1"}),
+        ("warning", "log_import_file_error", {"detail": "x.ebl: denied"}),
+        ("", "log_import_done", {"imported": 3, "skipped": 2}),
+    ]
+
+
+def test_an_import_of_only_known_files_says_so():
+    from nmea2log.run_outcome import describe_import
+
+    lines = describe_import({"imported": 0, "skipped_duplicate": 5, "renamed": [], "errors": []})
+
+    assert [(l.level, l.key, l.params) for l in lines] == [("info", "log_import_all_duplicates", {"count": 5})]
+
+
+def test_an_import_that_found_nothing_says_so():
+    from nmea2log.run_outcome import describe_import
+
+    assert describe_import({"imported": 0, "skipped_duplicate": 0})[0].key == "log_import_no_files"
+
+
+def test_the_import_keys_exist_in_the_shared_texts():
+    from nmea2log.run_outcome import describe_import
+
+    for result in ({"imported": 1, "skipped_duplicate": 0, "renamed": ["a"], "errors": ["b"]}, {"skipped_duplicate": 1}, {}):
+        for line in describe_import(result):
+            assert line.key in TEXTS, line.key
