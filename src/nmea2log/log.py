@@ -11,11 +11,14 @@ window too early (found in practice).
 
 from __future__ import annotations
 
+import re
 import sys
 import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Optional, TextIO
+
+from . import app_constants
 
 _log_file: Optional[TextIO] = None
 _log_sink: Optional[Callable[[str], None]] = None
@@ -99,6 +102,17 @@ def log_exception(context: str, exc: Optional[BaseException] = None, *, file: Te
     formatted = traceback.format_exception(type(exc), exc, exc.__traceback__)
     for line in "".join(formatted).rstrip().splitlines():
         log(f"[error]   {line}", file=file)
+
+
+_TIMESTAMP = re.compile(app_constants.LOG_TIMESTAMP_REGEX)
+
+
+def stamp_line(raw: str, now: Optional[datetime] = None) -> str:
+    """``raw`` with a timestamp in front of every one of its lines that has none yet: the lines log()
+    produces already have one, the ones the apps make themselves ("Samenstellen geannuleerd.") do not --
+    and then should read like the rest of the log and end up in the same file."""
+    timestamp = (now or datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
+    return "\n".join(part if _TIMESTAMP.match(part) else f"{timestamp} {part}" for part in raw.split("\n"))
 
 
 def log(message: str, *, file: TextIO = sys.stdout, level: str = "info") -> None:

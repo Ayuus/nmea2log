@@ -9,6 +9,11 @@ from __future__ import annotations
 LOG_ERROR_TAGS = ("[error]",)
 LOG_WARNING_TAGS = ("[warning]", "[anomaly]", "[geocode]")
 
+# How the log view shows them: "red 700" and "yellow 600" of Material, readable on a light and a dark
+# background alike.
+LOG_ERROR_COLOR = "#D32F2F"
+LOG_WARNING_COLOR = "#FDD835"
+
 # What log.py puts in front of every line.
 LOG_TIMESTAMP_REGEX = r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} "
 

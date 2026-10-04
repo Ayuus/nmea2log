@@ -96,3 +96,17 @@ def test_the_android_shared_constants_file_is_up_to_date():
     kotlin = res.parent / "java" / "com" / "ayuus" / "mysailinglogbook" / "SharedConstants.kt"
 
     assert export_android_constants.main([str(kotlin), "--check"]) == 0
+
+
+def test_stamp_line_stamps_every_line_that_has_no_timestamp():
+    from datetime import datetime
+
+    from nmea2log.log import stamp_line
+
+    now = datetime(2026, 10, 4, 15, 30, 5)
+
+    assert stamp_line("[info] hello", now) == "2026-10-04 15:30:05 [info] hello"
+    assert stamp_line("a\nb", now) == "2026-10-04 15:30:05 a\n2026-10-04 15:30:05 b"
+    already = "2026-10-04 10:00:00 [info] from python"
+    assert stamp_line(already, now) == already
+    assert stamp_line(already + "\ncontinuation", now) == already + "\n2026-10-04 15:30:05 continuation"
