@@ -646,4 +646,16 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "fr": "impossible d'afficher le journal : {error}",
         "de": "Bordbuch konnte nicht angezeigt werden: {error}",
     },
+    "log_publish_not_configured": {
+        "en": "No publish destination configured -- publish button disabled.",
+        "nl": "Geen publicatiebestemming ingesteld -- publiceerknop uitgeschakeld.",
+        "fr": "Aucune destination de publication configurée -- bouton de publication désactivé.",
+        "de": "Kein Veröffentlichungsziel eingerichtet -- Veröffentlichen-Schaltfläche deaktiviert.",
+    },
+    "hint_rest_upload_url": {
+        "en": "your-site.example",
+        "nl": "your-site.example",
+        "fr": "your-site.example",
+        "de": "your-site.example",
+    },
 }
