@@ -437,10 +437,10 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "de": "Keine .ebl-Dateien gefunden.",
     },
     "log_import_copied": {
-        "en": "Copied: {name}",
-        "nl": "Gekopieerd: {name}",
-        "fr": "Copié : {name}",
-        "de": "Kopiert: {name}",
+        "en": "Imported: {name}",
+        "nl": "Geïmporteerd: {name}",
+        "fr": "Importé : {name}",
+        "de": "Importiert: {name}",
     },
     "log_import_done": {
         "en": "Imported {imported} .ebl file(s) ({skipped} already present, skipped).",
