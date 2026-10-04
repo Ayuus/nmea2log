@@ -60,6 +60,26 @@ class Status(str, Enum):
     STOPPED = "STOPPED"
 
 
+# The text of each status, as a key into app_texts.TEXTS (the Android string resource of the same name). The
+# apps used to keep this table of 13 irregular names each; the time of the next round, where a text has one,
+# is filled in as {time}.
+STATUS_TEXT_KEYS: Dict[str, str] = {
+    Status.SEARCHING.value: "boat_status_searching",
+    Status.ROUND_STARTED.value: "boat_status_round_started",
+    Status.ROUND_DONE.value: "boat_status_round_done",
+    Status.ROUND_FAILED.value: "boat_status_round_failed",
+    Status.W2K_NOT_FOUND_RETRY.value: "boat_status_w2k2_not_found_retry",
+    Status.HARBOUR_FINAL.value: "boat_status_harbour_final",
+    Status.LEFT_BOAT.value: "boat_status_left_boat",
+    Status.LEFT_BOAT_NOTHING_TO_PUBLISH.value: "boat_status_left_boat_nothing",
+    Status.WAITING_IN_PORT.value: "boat_status_waiting_in_port",
+    Status.PUBLISH_STARTED.value: "boat_status_publish_started",
+    Status.PUBLISH_OK.value: "boat_status_publish_ok",
+    Status.PUBLISH_FAILED.value: "boat_status_publish_failed",
+    Status.STOPPED.value: "boat_status_stopped",
+}
+
+
 @dataclass(frozen=True)
 class BootModeConfig:
     round_interval_minutes: int = 60
@@ -138,6 +158,22 @@ class RoundFailed:
 
 
 RoundOutcome = Union[RoundOk, RoundNotFound, RoundFailed]
+
+
+def round_outcome_from_result(result: dict) -> RoundOutcome:
+    """The outcome of a round from android_entry.sync_from_w2k2()'s result dict: a cancelled run counts as
+    failed, a failure without a message gets a generic one, and the downloaded count is floored at 0
+    (android_entry reports -1 for "not applicable"). Used by the iOS app; the Android executor makes the
+    same three outcomes from the primitives its callback receives."""
+    if result.get("cancelled"):
+        return RoundFailed(message=result.get("error") or "cancelled")
+    if not result.get("ok"):
+        return RoundFailed(message=result.get("error") or "unknown error")
+    boat = result.get("boat_state")
+    return RoundOk(
+        downloaded_count=max(result.get("downloaded_count", 0), 0),
+        boat=BoatSnapshot.from_dict(boat) if boat else None,
+    )
 
 
 # --- events ----------------------------------------------------------------------------------------

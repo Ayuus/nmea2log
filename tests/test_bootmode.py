@@ -552,3 +552,78 @@ def test_boat_snapshot_reads_boatstate_to_dict_output():
 
     assert snapshot.is_in_harbour(BootModeConfig()) is True
     assert snapshot.stationary_since == "2026-09-12T12:18:18"
+
+
+# ---- round_outcome_from_result and STATUS_TEXT_KEYS (were iOS-only before)
+
+
+def test_round_outcome_from_result_maps_a_successful_round_with_no_boat_state():
+    from nmea2log.bootmode import RoundOk, round_outcome_from_result
+
+    assert round_outcome_from_result({"ok": True, "downloaded_count": 3, "boat_state": None}) == RoundOk(
+        downloaded_count=3, boat=None
+    )
+
+
+def test_round_outcome_from_result_builds_a_boat_snapshot_when_present():
+    from nmea2log.bootmode import BoatSnapshot, RoundOk, round_outcome_from_result
+
+    outcome = round_outcome_from_result(
+        {
+            "ok": True,
+            "downloaded_count": 1,
+            "boat_state": {
+                "underway": False,
+                "stationary_since": "2026-09-27T12:00:00",
+                "stationary_seconds": 1800,
+                "engine_running": False,
+                "engine_off_seconds": 900,
+            },
+        }
+    )
+
+    assert isinstance(outcome, RoundOk)
+    assert outcome.boat == BoatSnapshot(
+        underway=False,
+        stationary_since="2026-09-27T12:00:00",
+        stationary_seconds=1800,
+        engine_running=False,
+        engine_off_seconds=900,
+    )
+
+
+def test_round_outcome_from_result_floors_a_negative_downloaded_count_at_zero():
+    from nmea2log.bootmode import round_outcome_from_result
+
+    assert round_outcome_from_result({"ok": True, "downloaded_count": -1, "boat_state": None}).downloaded_count == 0
+
+
+def test_round_outcome_from_result_treats_a_cancelled_run_as_failed():
+    from nmea2log.bootmode import RoundFailed, round_outcome_from_result
+
+    outcome = round_outcome_from_result({"ok": False, "cancelled": True, "error": "Sync cancelled."})
+
+    assert outcome == RoundFailed(message="Sync cancelled.")
+
+
+def test_round_outcome_from_result_falls_back_to_a_generic_message_when_failed_without_one():
+    from nmea2log.bootmode import RoundFailed, round_outcome_from_result
+
+    assert round_outcome_from_result({"ok": False}) == RoundFailed(message="unknown error")
+
+
+def test_round_outcome_from_result_reports_a_real_failure_message_when_given_one():
+    from nmea2log.bootmode import RoundFailed, round_outcome_from_result
+
+    assert round_outcome_from_result({"ok": False, "error": "401: token expired."}) == RoundFailed(
+        message="401: token expired."
+    )
+
+
+def test_every_status_has_a_text_key_that_exists_in_the_shared_texts():
+    from nmea2log.app_texts import TEXTS
+    from nmea2log.bootmode import STATUS_TEXT_KEYS, Status
+
+    assert set(STATUS_TEXT_KEYS) == {status.value for status in Status}
+    for key in STATUS_TEXT_KEYS.values():
+        assert key in TEXTS, key

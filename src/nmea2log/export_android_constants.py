@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 from typing import List
 
-from . import app_constants, app_settings
+from . import app_constants, app_settings, bootmode
 
 _HEADER = """package com.ayuus.mysailinglogbook
 
@@ -43,6 +43,8 @@ def render() -> str:
         if name.isupper() and not name.startswith("_"):
             keyword = "val" if isinstance(value, tuple) else "const val"
             lines.append(f"    {keyword} {name} = {_kotlin(value)}\n")
+    entries = ", ".join(f'"{kind}" to "{key}"' for kind, key in bootmode.STATUS_TEXT_KEYS.items())
+    lines.append(f"    val BOOT_STATUS_TEXT_KEYS = mapOf({entries})\n")
     lines.append("}\n\nobject SharedDefaults {\n")
     for name in ("DEFAULT_MIN_STOP_MINUTES", "DEFAULT_SFTP_PORT", "MINIMUM_MINUTES", "MINIMUM_PORT"):
         lines.append(f"    const val {name} = {_kotlin(getattr(app_settings, name))}\n")
