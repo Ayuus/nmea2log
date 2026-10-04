@@ -71,10 +71,10 @@ def find_resume_index(logfiles: Sequence[Path], resume_from_file: str) -> Option
     """Index into ``logfiles`` matching the file a cached run recorded as its resume point, or
     None if it can't be found (the file was deleted, or --ebl-dir now points to another archive
     entirely) -- the caller must then treat the whole cache as unusable rather than guess which
-    files it actually covers. Also matches a cache that recorded the absolute path (the earlier
-    format), as long as the file is still there."""
+    files it actually covers. A cache that recorded an absolute path of a file in the archive layout
+    (the earlier format) is not matched: it is rebuilt once."""
     for index, path in enumerate(logfiles):
-        if resume_key(path) == resume_from_file or _resolved(path) == resume_from_file:
+        if resume_key(path) == resume_from_file:
             return index
     return None
 
