@@ -59,7 +59,7 @@ def test_run_pipeline_returns_error_for_no_ebl_paths(tmp_path):
         call_sign="PA1234",
     )
 
-    assert result == {"ok": False, "error": "No .ebl files given."}
+    assert result == {"ok": False, "error": "No .ebl files given.", "error_kind": "no_ebl_files"}
 
 
 def test_run_pipeline_returns_error_for_a_missing_file(tmp_path):

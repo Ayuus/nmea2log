@@ -120,7 +120,7 @@ def run_pipeline(
     # always ends up paying its own real cost.
     logfiles = sorted(Path(p) for p in ebl_paths)
     if not logfiles:
-        return {"ok": False, "error": "No .ebl files given."}
+        return {"ok": False, "error": "No .ebl files given.", "error_kind": "no_ebl_files"}
 
     # One shared instance (not a fresh Geocoder() per call below) -- write_html_logbook()'s own
     # "latest position" lookup below then reuses build_trips()'s in-memory cache instead of
@@ -338,6 +338,7 @@ def _sync_from_w2k2(
             return {
                 "ok": False,
                 "error": f"No W2K-2 found on {subnet_prefix}0/24 -- is it joined to this hotspot?",
+                "error_kind": "w2k2_not_found",
             }
         log(f"[info] Found W2K-2 at {host}")  # same message main() prints on desktop (see w2k2_download.py)
 
