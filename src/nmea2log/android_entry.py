@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, List, Optional
 
-from . import import_ebl, w2k2_download
+from . import import_ebl, logbook_state, w2k2_download
 from .cli import build_arg_parser
 from .geocode import Geocoder
 from .html_writer import write_html_logbook
@@ -204,6 +204,7 @@ def run_pipeline(
             latest_position=latest_position,
         )
         log(f"[ok] Logbook written: {html_path} ({len(trips)} trip(s))")
+        logbook_state.write(html_path, logbook_state.inputs(boat_name, mmsi, call_sign, min_stop_minutes), len(trips))
     except Exception:
         log_exception("Unexpected error while writing the logbook")
         raise
@@ -227,6 +228,7 @@ def build_from_local_files(
     call_sign: str,
     progress_callback=None,
     min_stop_minutes: Optional[float] = None,
+    skip_if_current: bool = False,
 ) -> dict:
     """Thin wrapper around run_pipeline() for the "show whatever's already on the phone" path
     (no W2K-2 discovery/download, see MainActivity.runOfflineBuild()) -- sets up the same log
@@ -236,12 +238,25 @@ def build_from_local_files(
     logfile(s) so far" progress a normal sync already shows -- run_pipeline() was always logging
     those lines, there was just nothing on this call path listening for them.
 
-    min_stop_minutes: see run_pipeline()'s own doc comment."""
+    min_stop_minutes: see run_pipeline()'s own doc comment.
+
+    skip_if_current: the Publish button's way of not assembling what is already up to date (see logbook_state.py): the
+    logbook at ``output_html_path`` is returned as it is when it was built from these same settings and none of the
+    .ebl files is newer than it."""
     set_log_file(_log_file_path(output_html_path))
     if progress_callback is not None:
         set_log_sink(sink_with_progress(progress_callback))
     should_cancel = progress_callback.isCancelled if progress_callback is not None else None
     try:
+        if skip_if_current:
+            trip_count = logbook_state.current_trip_count(
+                output_html_path, ebl_paths, logbook_state.inputs(boat_name, mmsi, call_sign, min_stop_minutes)
+            )
+            if trip_count is not None:
+                log(f"[info] The logbook is up to date ({trip_count} trip(s)), no need to assemble it again.")
+                result = {"ok": True, "trip_count": trip_count, "html_path": str(output_html_path), "boat_state": None}
+                _report_result(progress_callback, result)
+                return result
         result = run_pipeline(
             ebl_paths=ebl_paths,
             output_html_path=output_html_path,
