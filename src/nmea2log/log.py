@@ -23,7 +23,7 @@ from . import app_constants
 _log_file: Optional[TextIO] = None
 _log_sink: Optional[Callable[[str], None]] = None
 
-DEFAULT_LOG_RETENTION_DAYS = 90.0
+DEFAULT_LOG_RETENTION_DAYS = 30.0
 
 # "info" (the default) and "debug", in ascending verbosity -- deliberately just two, not a full
 # logging-module-style hierarchy: the only distinction this app actually needs is "worth showing

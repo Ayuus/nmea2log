@@ -448,7 +448,7 @@ overrides the config file.
 
 Everything the desktop command and the Android and iOS apps report ends up in `nmea2log.log` (all levels, the
 debug lines too). [docs/log-file.md](docs/log-file.md) says what is in it, where it is on each platform
-(Android: private app storage; iOS: the Files app), that lines older than 90 days are dropped when a run
+(Android and iOS: a folder you can reach from a PC), that lines older than 30 days are dropped when a run
 starts, and that it has no size limit and can grow large with the boat mode on.
 
 ## Tests

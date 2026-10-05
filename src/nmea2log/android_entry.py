@@ -21,11 +21,28 @@ from .cli import build_arg_parser
 from .geocode import Geocoder
 from .html_writer import write_html_logbook
 from .log import log, log_exception, set_log_file, set_log_sink
+from . import app_constants
 from .progress import sink_with_progress
 from .marine import MarineFetcher
 from .pipeline import PipelineCancelled, PipelineError, discover_ebl_files, build_season_trips
 from .trip_ids import assign_trip_ids
 from .weather import WeatherFetcher
+
+
+# Where nmea2log.log goes; None: next to the logbook (output_html_path). The Android app sets it (see
+# set_log_directory()) to the folder the owner can reach from a PC.
+_log_directory: Optional[Path] = None
+
+
+def set_log_directory(directory: Optional[str]) -> None:
+    """Puts nmea2log.log in ``directory`` (None: back to next to the logbook). The Android app's own storage is private,
+    so it points this at the app's external files folder, the one that shows up when the phone is connected to a PC."""
+    global _log_directory
+    _log_directory = Path(directory) if directory else None
+
+
+def _log_file_path(output_html_path: str) -> Path:
+    return (_log_directory or Path(output_html_path).parent) / app_constants.LOG_FILE_NAME
 
 
 def _report_result(progress_callback, result: dict) -> None:
@@ -220,7 +237,7 @@ def build_from_local_files(
     those lines, there was just nothing on this call path listening for them.
 
     min_stop_minutes: see run_pipeline()'s own doc comment."""
-    set_log_file(Path(output_html_path).parent / "nmea2log.log")
+    set_log_file(_log_file_path(output_html_path))
     if progress_callback is not None:
         set_log_sink(sink_with_progress(progress_callback))
     should_cancel = progress_callback.isCancelled if progress_callback is not None else None
@@ -297,7 +314,7 @@ def sync_from_w2k2(
     # nmea2log.log already works on desktop (see cli.py) -- console/logcat output alone is easy
     # to lose (found in practice: several live logcat captures during this same debugging session
     # died on a USB reconnect mid-run).
-    set_log_file(Path(output_html_path).parent / "nmea2log.log")
+    set_log_file(_log_file_path(output_html_path))
     if progress_callback is not None:
         set_log_sink(sink_with_progress(progress_callback))
     try:

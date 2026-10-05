@@ -904,3 +904,20 @@ def test_probe_still_counts_the_w2k2_as_found_when_its_file_lists_cannot_be_read
     android_entry.probe_w2k2("u", "p", "192.168.43.", "/tmp/x", listener)
 
     assert listener.calls == [(True, False)]
+
+
+def test_the_log_file_is_next_to_the_logbook_unless_a_log_directory_is_set(tmp_path):
+    from pathlib import Path
+
+    android_entry.set_log_directory(None)
+    html = str(tmp_path / "logbook.html")
+
+    assert android_entry._log_file_path(html) == tmp_path / "nmea2log.log"
+
+    elsewhere = tmp_path / "pc_visible"
+    android_entry.set_log_directory(str(elsewhere))
+    try:
+        assert android_entry._log_file_path(html) == elsewhere / "nmea2log.log"
+        assert isinstance(android_entry._log_file_path(html), Path)
+    finally:
+        android_entry.set_log_directory(None)
