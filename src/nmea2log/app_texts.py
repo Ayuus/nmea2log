@@ -358,6 +358,48 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "fr": "Cache vidé",
         "de": "Cache geleert",
     },
+    "section_ebl_files": {
+        "en": "Local .ebl files",
+        "nl": "Lokale .ebl-bestanden",
+        "fr": "Fichiers .ebl locaux",
+        "de": "Lokale .ebl-Dateien",
+    },
+    "button_ebl_files": {
+        "en": "The raw logfiles (.ebl) on this device",
+        "nl": "De ruwe logbestanden (.ebl) op dit toestel",
+        "fr": "Les fichiers journaux bruts (.ebl) sur cet appareil",
+        "de": "Die rohen Logdateien (.ebl) auf diesem Gerät",
+    },
+    "button_delete": {
+        "en": "Delete",
+        "nl": "Verwijderen",
+        "fr": "Supprimer",
+        "de": "Löschen",
+    },
+    "dialog_delete_ebl_message": {
+        "en": "Delete all {count} .ebl files ({size}) from this device? The logbook you have already built stays as it is. A new download fetches the files from the W2K-2 again (which can take a long time), and a new logbook cannot be assembled without them. Files that are no longer on the W2K-2 are lost for good.",
+        "nl": "Alle {count} .ebl-bestanden ({size}) van dit toestel verwijderen? Het logboek dat je al hebt samengesteld blijft staan. Bij een nieuwe download worden de bestanden opnieuw van de W2K-2 gehaald (dat kan lang duren), en zonder deze bestanden kun je geen nieuw logboek samenstellen. Bestanden die niet meer op de W2K-2 staan, ben je voorgoed kwijt.",
+        "fr": "Supprimer les {count} fichiers .ebl ({size}) de cet appareil ? Le livre de bord déjà créé reste tel quel. Un nouveau téléchargement récupère à nouveau les fichiers depuis le W2K-2 (ce qui peut prendre longtemps), et sans eux on ne peut pas créer un nouveau livre de bord. Les fichiers qui ne sont plus sur le W2K-2 sont perdus définitivement.",
+        "de": "Alle {count} .ebl-Dateien ({size}) von diesem Gerät löschen? Das bereits erstellte Logbuch bleibt erhalten. Ein neuer Download holt die Dateien erneut vom W2K-2 (das kann lange dauern), und ohne sie lässt sich kein neues Logbuch zusammenstellen. Dateien, die nicht mehr auf dem W2K-2 liegen, sind endgültig verloren.",
+    },
+    "toast_ebl_files_deleted": {
+        "en": "{count} .ebl files deleted ({size} freed)",
+        "nl": "{count} .ebl-bestanden verwijderd ({size} vrijgemaakt)",
+        "fr": "{count} fichiers .ebl supprimés ({size} libérés)",
+        "de": "{count} .ebl-Dateien gelöscht ({size} frei)",
+    },
+    "toast_ebl_files_none": {
+        "en": "There are no .ebl files on this device",
+        "nl": "Er staan geen .ebl-bestanden op dit toestel",
+        "fr": "Il n'y a aucun fichier .ebl sur cet appareil",
+        "de": "Auf diesem Gerät sind keine .ebl-Dateien",
+    },
+    "toast_ebl_delete_busy": {
+        "en": "Not while a download or assemble is running",
+        "nl": "Niet terwijl er een download of samenstellen loopt",
+        "fr": "Pas pendant un téléchargement ou une création en cours",
+        "de": "Nicht während ein Download oder eine Zusammenstellung läuft",
+    },
     "toast_settings_saved": {
         "en": "Settings saved",
         "nl": "Instellingen opgeslagen",
