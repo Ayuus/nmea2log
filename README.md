@@ -444,6 +444,13 @@ Any of the options above can also be set as a default in `nmea2log.ini`'s `[nmea
 instead of typing them every time (see "Configuration" near the top) — a command-line flag always
 overrides the config file.
 
+## The log file
+
+Everything the desktop command and the Android and iOS apps report ends up in `nmea2log.log` (all levels, the
+debug lines too). [docs/log-file.md](docs/log-file.md) says what is in it, where it is on each platform
+(Android: private app storage; iOS: the Files app), that lines older than 90 days are dropped when a run
+starts, and that it has no size limit and can grow large with the boat mode on.
+
 ## Tests
 
 ```bash
