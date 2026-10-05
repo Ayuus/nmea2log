@@ -257,6 +257,7 @@ def build_from_local_files(
                 result = {"ok": True, "trip_count": trip_count, "html_path": str(output_html_path), "boat_state": None}
                 _report_result(progress_callback, result)
                 return result
+            log("[info] The logbook is not up to date, assembling it first.")
         result = run_pipeline(
             ebl_paths=ebl_paths,
             output_html_path=output_html_path,

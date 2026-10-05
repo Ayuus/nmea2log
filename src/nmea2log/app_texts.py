@@ -562,6 +562,12 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "fr": "Assemblage du journal avec les données existantes...",
         "de": "Bordbuch wird mit vorhandenen Daten zusammengestellt...",
     },
+    "status_checking_logbook": {
+        "en": "Checking the logbook...",
+        "nl": "Logboek controleren...",
+        "fr": "Vérification du journal...",
+        "de": "Bordbuch wird geprüft...",
+    },
     "status_sync_cancelled": {
         "en": "Download cancelled.",
         "nl": "Downloaden geannuleerd.",
