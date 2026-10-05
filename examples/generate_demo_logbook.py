@@ -1,7 +1,12 @@
 """Regenerates examples/demo-logbook.html, using the real write_html_logbook() renderer but
 entirely made-up boat identity, dates and trip stats -- no real personal data. Run from the repo
 root: `python examples/generate_demo_logbook.py`.
+
+The same fictional cruise is used for the screenshots in the Android and iOS apps' docs: put it
+somewhere else and under another boat name with `--output` / `--boat-name`, e.g.
+`python examples/generate_demo_logbook.py --boat-name "Sea Swallow" --output /tmp/logbook.html`.
 """
+import argparse
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -130,12 +135,16 @@ for i in range(5):
 
     t = arrive_time + timedelta(hours=20)  # overnight stay before the next leg
 
-out_path = REPO_ROOT / "examples" / "demo-logbook.html"
+parser = argparse.ArgumentParser(description="Writes the fictional demo logbook.")
+parser.add_argument("--boat-name", default="Zeezwaluw", help="the (fictional) boat's name")
+parser.add_argument("--output", type=Path, default=REPO_ROOT / "examples" / "demo-logbook.html")
+args = parser.parse_args()
+out_path = args.output
 
 write_html_logbook(
     trips,
     out_path,
-    boat_name="Zeezwaluw",
+    boat_name=args.boat_name,
     mmsi="244012345",
     call_sign="PA1234",
     utc_offset_hours=2.0,
