@@ -50,7 +50,7 @@ The log *view* in the app is a separate thing: a list in memory (Android and iOS
 `DEFAULT_LOG_RETENTION_DAYS = 30`. Lines older than that are dropped when the next **run starts** (a
 download, an assemble, a boat-mode round: whatever calls `set_log_file()` -- in the apps that is
 `android_entry.sync_from_w2k2()` and `build_from_local_files()`). Nothing trims the file in between, so
-lines older than 90 days can still sit in it until the next run. On the desktop the period is
+lines older than 30 days can still sit in it until the next run. On the desktop the period is
 `--log-retention-days`. A line that does not start with a timestamp is never dropped.
 
 ## How big it can get
