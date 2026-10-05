@@ -444,6 +444,19 @@ Any of the options above can also be set as a default in `nmea2log.ini`'s `[nmea
 instead of typing them every time (see "Configuration" near the top) — a command-line flag always
 overrides the config file.
 
+## The apps
+
+The same logbook on the phone, in the [Android](https://github.com/Ayuus/mysailinglogbook-android) and
+[iOS](https://github.com/Ayuus/mysailinglogbook-ios) apps (fictional trips of a made-up boat, generated with
+[examples/generate_demo_logbook.py](examples/generate_demo_logbook.py); more screenshots in each app's README):
+
+<p>
+<img src="https://raw.githubusercontent.com/Ayuus/mysailinglogbook-android/main/docs/screenshots/logbook.png" width="200" alt="Android: the logbook">
+<img src="https://raw.githubusercontent.com/Ayuus/mysailinglogbook-android/main/docs/screenshots/boat-mode.png" width="200" alt="Android: boat mode on">
+<img src="https://raw.githubusercontent.com/Ayuus/mysailinglogbook-ios/main/docs/screenshots/logbook.png" width="200" alt="iOS: the logbook">
+<img src="https://raw.githubusercontent.com/Ayuus/mysailinglogbook-ios/main/docs/screenshots/run.png" width="200" alt="iOS: the logbook with the log of the last run above it">
+</p>
+
 ## The log file
 
 Everything the desktop command and the Android and iOS apps report ends up in `nmea2log.log` (all levels, the
