@@ -35,6 +35,10 @@ DEFAULTS: Dict[str, Any] = {
     "rest_upload_url": "",
     "rest_upload_user": "",
     "rest_upload_password": "",
+    # Whether publishing is switched on ("WordPress" picked in Settings), kept apart from the WordPress details:
+    # picking "don't publish" must not wipe them. On by default: a install from before this setting, with its
+    # details filled in, goes on publishing.
+    "publish_enabled": True,
     # The boat mode; the same names and values as bootmode.BootModeConfig.
     "boot_round_interval_minutes": 60,
     "boot_publish_every_round": False,
@@ -77,3 +81,8 @@ def is_w2k2_complete(user: str, password: str) -> bool:
 
 def is_rest_complete(url: str, user: str, password: str) -> bool:
     return _filled(url, user, password)
+
+
+def is_publish_configured(enabled: bool, url: str, user: str, password: str) -> bool:
+    """Whether a logbook is published: switched on in Settings, and the WordPress details are all there."""
+    return enabled and is_rest_complete(url, user, password)

@@ -34,6 +34,13 @@ def test_completeness_needs_every_field_not_blank():
     assert not app_settings.is_rest_complete("https://x", "", "p")
 
 
+def test_publishing_needs_the_switch_on_and_all_the_wordpress_details():
+    assert app_settings.is_publish_configured(True, "https://x", "u", "p")
+    assert not app_settings.is_publish_configured(False, "https://x", "u", "p")  # the details stay, publishing is off
+    assert not app_settings.is_publish_configured(True, "https://x", "", "p")
+    assert app_settings.DEFAULTS["publish_enabled"] is True  # an install from before the setting goes on publishing
+
+
 def test_the_boat_mode_defaults_are_the_ones_of_bootmode_config():
     config = BootModeConfig()
     names = {f.name for f in dataclasses.fields(BootModeConfig)}
