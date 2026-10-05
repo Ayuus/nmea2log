@@ -3,7 +3,7 @@ settings counts as filled in.
 
 The defaults used to be written out in the Android SettingsStore, the iOS settings store, both settings
 screens and bootmode.BootModeConfig, on five or more places each, and the apps had begun to differ (the iOS
-screen limited the SFTP port to at least 1, the Android one did not). They are defined here once: iOS imports
+screen limited the boat-mode minutes to at least 1, the Android one did not). They are defined here once: iOS imports
 this module, and the Android app gets the values as a generated Kotlin file (export_android_constants.py), as
 its settings are read before Python has started.
 """
@@ -14,14 +14,12 @@ from typing import Any, Dict, Optional, Tuple
 
 # Same as build_arg_parser()'s own --min-stop-minutes (cli.py).
 DEFAULT_MIN_STOP_MINUTES = 10.0
-DEFAULT_SFTP_PORT = 22
 
 # What the "round every ..." choice of the boat mode offers, in minutes.
 BOOT_INTERVAL_CHOICES: Tuple[int, ...] = (30, 60, 120, 180)
 
-# Boat-mode durations are whole minutes, at least this; a port is at least this.
+# Boat-mode durations are whole minutes, at least this.
 MINIMUM_MINUTES = 1
-MINIMUM_PORT = 1
 
 DEFAULTS: Dict[str, Any] = {
     "w2k2_user": "",
@@ -37,12 +35,6 @@ DEFAULTS: Dict[str, Any] = {
     "rest_upload_url": "",
     "rest_upload_user": "",
     "rest_upload_password": "",
-    "sftp_host": "",
-    "sftp_port": DEFAULT_SFTP_PORT,
-    "sftp_user": "",
-    "sftp_password": "",
-    "sftp_remote_path": "",
-    "sftp_host_key_fingerprint": "",
     # The boat mode; the same names and values as bootmode.BootModeConfig.
     "boot_round_interval_minutes": 60,
     "boot_publish_every_round": False,
@@ -85,17 +77,3 @@ def is_w2k2_complete(user: str, password: str) -> bool:
 
 def is_rest_complete(url: str, user: str, password: str) -> bool:
     return _filled(url, user, password)
-
-
-def is_sftp_complete(host: str, user: str, password: str, remote_path: str) -> bool:
-    return _filled(host, user, password, remote_path)
-
-
-def publish_method(rest_complete: bool, sftp_complete: bool) -> Optional[str]:
-    """How a logbook is published: "rest" is preferred whenever it is filled in (never silently falling
-    back from one to the other), else "sftp", else None."""
-    if rest_complete:
-        return "rest"
-    if sftp_complete:
-        return "sftp"
-    return None

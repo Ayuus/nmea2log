@@ -90,7 +90,7 @@ class BootModeConfig:
     final_on_left_boat: bool = True
     left_boat_minutes: int = 20
     stop_after_final: bool = False
-    publish_configured: bool = True  # WordPress or SFTP is filled in; without it the mode still builds
+    publish_configured: bool = True  # WordPress is filled in; without it the mode still builds
     search_interval_minutes: int = 5
     port_poll_minutes: int = 15
     publish_retry_minutes: int = 15

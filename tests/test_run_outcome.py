@@ -81,10 +81,9 @@ def test_any_other_error_is_an_error_line_with_the_message():
 
 
 def test_publish_failed_only_counts_an_upload_that_was_attempted():
-    assert publish_failed(published=False, rest_complete=True, sftp_complete=False) is True
-    assert publish_failed(published=False, rest_complete=False, sftp_complete=True) is True
-    assert publish_failed(published=False, rest_complete=False, sftp_complete=False) is False
-    assert publish_failed(published=True, rest_complete=True, sftp_complete=False) is False
+    assert publish_failed(published=False, rest_complete=True) is True
+    assert publish_failed(published=False, rest_complete=False) is False
+    assert publish_failed(published=True, rest_complete=True) is False
 
 
 def test_every_key_it_returns_exists_in_the_shared_texts():

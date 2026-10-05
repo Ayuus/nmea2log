@@ -91,10 +91,10 @@ def describe_result(result: dict, initiator: str, publish_failed: bool = False) 
     return RunOutcome([Line("error", "error_generic_prefix", {"error": None})], SHOW_ERROR)
 
 
-def publish_failed(published: bool, rest_complete: bool, sftp_complete: bool) -> bool:
+def publish_failed(published: bool, rest_complete: bool) -> bool:
     """Whether the publish after a build failed: only an upload that was attempted (a destination is set
     up) and did not succeed. Nothing set up to publish to is not a failure -- the logbook is shown as usual."""
-    return not published and (rest_complete or sftp_complete)
+    return not published and rest_complete
 
 
 def describe_import(result: dict) -> List[Line]:

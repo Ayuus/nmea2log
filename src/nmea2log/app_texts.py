@@ -94,12 +94,6 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "fr": "Publier via WordPress",
         "de": "Über WordPress veröffentlichen",
     },
-    "radio_publish_sftp": {
-        "en": "Publish via SFTP",
-        "nl": "Publiceren via SFTP",
-        "fr": "Publier via SFTP",
-        "de": "Über SFTP veröffentlichen",
-    },
     "label_rest_upload_url": {
         "en": "WordPress site address",
         "nl": "WordPress-siteadres",
@@ -117,42 +111,6 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "nl": "WordPress application password",
         "fr": "Mot de passe d'application WordPress",
         "de": "WordPress-Anwendungspasswort",
-    },
-    "label_sftp_host": {
-        "en": "SFTP host",
-        "nl": "SFTP host",
-        "fr": "Hôte SFTP",
-        "de": "SFTP-Host",
-    },
-    "label_sftp_port": {
-        "en": "SFTP port",
-        "nl": "SFTP poort",
-        "fr": "Port SFTP",
-        "de": "SFTP-Port",
-    },
-    "label_sftp_user": {
-        "en": "SFTP username",
-        "nl": "SFTP gebruikersnaam",
-        "fr": "Nom d'utilisateur SFTP",
-        "de": "SFTP-Benutzername",
-    },
-    "label_sftp_password": {
-        "en": "SFTP password",
-        "nl": "SFTP wachtwoord",
-        "fr": "Mot de passe SFTP",
-        "de": "SFTP-Passwort",
-    },
-    "label_sftp_remote_path": {
-        "en": "SFTP path on the server",
-        "nl": "SFTP pad op de server",
-        "fr": "Chemin SFTP sur le serveur",
-        "de": "SFTP-Pfad auf dem Server",
-    },
-    "label_sftp_host_key_fingerprint": {
-        "en": "SFTP host key fingerprint (optional; empty = trust automatically on first connection)",
-        "nl": "SFTP host-key fingerprint (optioneel; leeg = automatisch vertrouwen bij eerste verbinding)",
-        "fr": "Empreinte de clé hôte SFTP (facultatif ; vide = faire confiance automatiquement à la première connexion)",
-        "de": "SFTP-Hostschlüssel-Fingerabdruck (optional; leer = bei erster Verbindung automatisch vertrauen)",
     },
     "section_boat_mode": {
         "en": "Boat mode",
@@ -479,10 +437,10 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "de": "Unerwarteter Fehler: {detail}",
     },
     "log_fill_publish_settings": {
-        "en": "Fill in the publish settings (REST or SFTP) via Settings first.",
-        "nl": "Vul eerst de publiceer-instellingen (REST of SFTP) in via Instellingen.",
-        "fr": "Renseignez d'abord les paramètres de publication (REST ou SFTP) dans les Paramètres.",
-        "de": "Trage zuerst die Veröffentlichungseinstellungen (REST oder SFTP) in den Einstellungen ein.",
+        "en": "Fill in the publish settings (WordPress) via Settings first.",
+        "nl": "Vul eerst de publiceer-instellingen (WordPress) in via Instellingen.",
+        "fr": "Renseignez d'abord les paramètres de publication (WordPress) dans les Paramètres.",
+        "de": "Trage zuerst die Veröffentlichungseinstellungen (WordPress) in den Einstellungen ein.",
     },
     "status_uploading_wordpress": {
         "en": "Uploading to ayuus.com (to WordPress)...",

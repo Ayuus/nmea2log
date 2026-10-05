@@ -46,7 +46,7 @@ def render() -> str:
     entries = ", ".join(f'"{kind}" to "{key}"' for kind, key in bootmode.STATUS_TEXT_KEYS.items())
     lines.append(f"    val BOOT_STATUS_TEXT_KEYS = mapOf({entries})\n")
     lines.append("}\n\nobject SharedDefaults {\n")
-    for name in ("DEFAULT_MIN_STOP_MINUTES", "DEFAULT_SFTP_PORT", "MINIMUM_MINUTES", "MINIMUM_PORT"):
+    for name in ("DEFAULT_MIN_STOP_MINUTES", "MINIMUM_MINUTES"):
         lines.append(f"    const val {name} = {_kotlin(getattr(app_settings, name))}\n")
     lines.append(f"    val BOOT_INTERVAL_CHOICES = {_kotlin(app_settings.BOOT_INTERVAL_CHOICES)}\n")
     for key, value in app_settings.DEFAULTS.items():

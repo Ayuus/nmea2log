@@ -32,14 +32,6 @@ def test_completeness_needs_every_field_not_blank():
     assert not app_settings.is_w2k2_complete("admin", "  ")
     assert app_settings.is_rest_complete("https://x", "u", "p")
     assert not app_settings.is_rest_complete("https://x", "", "p")
-    assert app_settings.is_sftp_complete("h", "u", "p", "/path")
-    assert not app_settings.is_sftp_complete("h", "u", "p", "")
-
-
-def test_rest_is_preferred_over_sftp():
-    assert app_settings.publish_method(True, True) == "rest"
-    assert app_settings.publish_method(False, True) == "sftp"
-    assert app_settings.publish_method(False, False) is None
 
 
 def test_the_boat_mode_defaults_are_the_ones_of_bootmode_config():
