@@ -70,7 +70,7 @@ tablet, otherwise worked out from the code):
 
 The last point is what can make the file large: the boat mode does a round every 30 minutes to a few
 hours while it is on. At one round per hour that is ~5 MB per day, so on the order of 150 MB when it
-runs for the whole 30 days; a few manual syncs a week stay in the single MB. (Worked out from the code, not
+runs for the whole 30 days; a few manual downloads a week stay in the single MB. (Worked out from the code, not
 measured with boat mode on for weeks.) If the file ever needs to stay small, the options are to log the skipped files as a
 single summary line, to leave the debug lines out of the file, or to cap its size -- none of which is done.
 
