@@ -34,7 +34,9 @@
  * site" action opens it), and WordPress shows update notices for this plugin, taken from this project's
  * GitHub repository (see the end of this file).
  *
- * Version: 1.8.0
+ * 1.8.1 changes nothing in what the plugin does: it exists to try out the update notice on a site.
+ *
+ * Version: 1.8.1
  * Update URI: https://github.com/Ayuus/nmea2log
  */
 
