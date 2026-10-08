@@ -32,4 +32,5 @@ new app version needed. A change that needs new app code (a new screenshot name,
 `help-format` for a page that older apps must not use (they keep the page they have).
 
 The screenshots are the one thing that does not refresh: they are part of each app. Retake them when the screens change
-(`docs/screenshots` of each app has the full-size ones; the help uses them at 360 px wide).
+(`docs/screenshots` of each app has the full-size ones; the help uses them at 360 px wide, and the boat-mode one as a crop of the
+top of the screen, the toolbar with the filled sailboat and what the log says).

@@ -29,6 +29,7 @@
   .note { background: var(--note); border-left: 4px solid var(--accent); border-radius: 6px; padding: 0.1em 0.8em; margin: 0.8em 0; }
   figure { margin: 1em 0; text-align: center; }
   figure img { max-width: 60%; border: 1px solid var(--line); border-radius: 10px; }
+  figure.bar img { max-width: 100%; max-height: 260px; }  /* a strip of the top of the screen: as wide as the page allows */
   figcaption { color: var(--muted); font-size: 0.9em; margin-top: 0.4em; }
   dt { font-weight: 600; margin-top: 0.7em; }
   dd { margin: 0.1em 0 0 1em; }
@@ -336,7 +337,7 @@ und funktioniert deshalb auch auf See.</p>
   <p data-platform="android">Die Akku-Sparfunktion von Android kann eine App im Hintergrund zurückhalten, solange das Telefon still liegt. Beim ersten Einschalten des Boot-Modus bittet die App um eine Ausnahme. Ablehnen ist ungefährlich; die Runden sind dann nur weniger pünktlich.</p>
   <p data-platform="ios">iOS entscheidet, wann eine App im Hintergrund laufen darf, manchmal Stunden nach der gewünschten Zeit, und gar nicht im Stromsparmodus oder bei ausgeschalteter Hintergrundaktualisierung. Eine leise Mitteilung zeigt den Fortschritt einer Runde, und das Ergebnis ersetzt sie. Wenn Sie die App öffnen, versucht sie es sofort.</p>
 </div>
-<figure>
+<figure class="bar">
   <img src="img/boat-mode.png" alt="">
   <figcaption lang="en">Boat mode on: the sailboat button is filled</figcaption>
   <figcaption lang="nl">Boot-modus aan: de zeilbootknop is gevuld</figcaption>
