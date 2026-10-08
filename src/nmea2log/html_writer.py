@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import base64
 import json
+from importlib import resources
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -93,6 +94,12 @@ class _Totals:
     engine_hours: Dict[int, float]
     engine_hours_current: Dict[int, float]
     max_speed_kn: Optional[float]
+
+
+def _asset(name: str) -> str:
+    """The text of a file of the ``assets`` folder (the css and js of the page's theme and layout), through importlib.resources
+    so it also works where the package is not a folder on disk (the Android app)."""
+    return resources.files("nmea2log").joinpath("assets", name).read_text(encoding="utf-8")
 
 
 def _compute_totals(trips: List[TripLeg]) -> _Totals:
@@ -1172,6 +1179,8 @@ def write_html_logbook(
 <meta name="apple-mobile-web-app-title" content="{escape(title)}">
 <link rel="stylesheet" href="{_LEAFLET_CSS}">
 <script src="{_LEAFLET_JS}"></script>
+<script>
+{_asset("logbook-prefs.js")}</script>
 <style>
   body {{ font-family: sans-serif; margin: 0; padding: 1.5em; background: #f7f7f8; color: #1a1a1a; }}
   h1 {{ margin: 0 0 0.2em; }}
@@ -1298,11 +1307,10 @@ def write_html_logbook(
   .log-table th, .log-table td {{ padding: 0.2em 0.6em; border-bottom: 1px solid #eee; text-align: left; font-size: 0.9em; }}
   .log-table th {{ background: #f0f0f0; }}
   .detail-row {{
-    display: flex; align-items: baseline; gap: 0.5em; background: #f5f7fa; border-radius: 6px;
-    padding: 0.5em 0.7em; margin-bottom: 0.5em;
+    background: #f5f7fa; border-radius: 6px; padding: 0.5em 0.7em; margin-bottom: 0.5em; line-height: 1.45;
   }}
-  .detail-icon {{ flex: none; }}
-  .detail-label {{ font-weight: 600; }}
+  .detail-icon {{ margin-right: 0.5em; }}
+  .detail-label {{ font-weight: 600; margin-right: 0.3em; }}
   .close-log {{ cursor: pointer; border: 1px solid #ccc; background: white; border-radius: 4px; padding: 0.3em 0.8em; }}
   .close-log:hover {{ background: #f0f0f0; }}
   .temp-hover {{ cursor: default; border-bottom: 1px dotted #999; }}
@@ -1381,6 +1389,8 @@ def write_html_logbook(
   .remarks-save {{ cursor: pointer; border: 1px solid #1a6ecc; background: #1a6ecc; color: white; border-radius: 4px; padding: 0.3em 0.8em; }}
   .remarks-cancel {{ cursor: pointer; border: 1px solid #ccc; background: white; border-radius: 4px; padding: 0.3em 0.8em; }}
 </style>
+<style>
+{_asset("logbook-layout.css")}</style>
 </head>
 <body>
 <div id="h-scroll-bar"><div id="h-scroll-spacer"></div></div>
@@ -2021,6 +2031,8 @@ if (REMARKS_API_URL && servedFromSite) {{
   updateBar();
 }})();
 </script>
+<script>
+{_asset("logbook-layout.js")}</script>
 </body>
 </html>
 """

@@ -51,7 +51,21 @@ DEFAULTS: Dict[str, Any] = {
     "boot_auto_start": False,
     # "light" / "dark" / "system".
     "theme_mode": "system",
+    # How the logbook page lays out its trips: "auto" (cards on a narrow screen, a table otherwise) / "cards" / "table".
+    "logbook_view": "auto",
 }
+
+
+LOGBOOK_VIEWS: Tuple[str, ...] = ("auto", "cards", "table")
+
+
+def logbook_prefs_script(theme_mode: str, logbook_view: str) -> str:
+    """The JavaScript an app runs in its web view once the logbook page has loaded, so the page follows the app's Settings
+    (the Appearance choice and the logbook layout) instead of its own buttons -- the apps' web views do not keep what the
+    page's buttons would store. See assets/logbook-prefs.js."""
+    theme = {"light": "light", "dark": "dark"}.get(theme_mode, "auto")
+    view = logbook_view if logbook_view in LOGBOOK_VIEWS else DEFAULTS["logbook_view"]
+    return f"window.logbookPrefs && window.logbookPrefs.setFromHost({{theme: '{theme}', view: '{view}'}});"
 
 
 def parse_int(text: object, default: int, minimum: Optional[int] = None) -> int:

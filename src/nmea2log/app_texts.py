@@ -304,6 +304,30 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "fr": "Suivre l'appareil",
         "de": "Gerät folgen",
     },
+    "label_logbook_layout": {
+        "en": "Logbook layout",
+        "nl": "Layout logboek",
+        "fr": "Présentation du journal",
+        "de": "Logbuch-Layout",
+    },
+    "radio_layout_auto": {
+        "en": "Automatic (cards on a phone)",
+        "nl": "Automatisch (kaarten op een telefoon)",
+        "fr": "Automatique (cartes sur un téléphone)",
+        "de": "Automatisch (Karten auf einem Telefon)",
+    },
+    "radio_layout_cards": {
+        "en": "Cards",
+        "nl": "Kaarten",
+        "fr": "Cartes",
+        "de": "Karten",
+    },
+    "radio_layout_table": {
+        "en": "Table",
+        "nl": "Tabel",
+        "fr": "Tableau",
+        "de": "Tabelle",
+    },
     "section_cache": {
         "en": "Clear cache",
         "nl": "Cache legen",

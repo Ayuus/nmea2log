@@ -1250,3 +1250,26 @@ def test_write_html_logbook_escapes_place_names(tmp_path: Path):
     html = out_path.read_text(encoding="utf-8")
     assert "Marina <A> & Co" not in html
     assert "&lt;A&gt;" in html and "&amp;" in html
+
+
+def test_write_html_logbook_has_the_theme_and_layout_files_inlined(tmp_path: Path):
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([_trip()], out_path)
+
+    html = out_path.read_text(encoding="utf-8")
+    head = html[: html.index("</head>")]
+    # The prefs script sits in the head so the right theme and layout are there from the first paint.
+    assert "window.logbookPrefs" in head
+    assert "html.cards" in head and "html.dark" in head
+    assert "document.createElement('div')" in html[html.index("</head>"):]  # logbook-layout.js, at the end of the body
+    assert html.index("window.logbookPrefs") < html.index("const I18N") < html.index("MAIN_TOTALS")
+
+
+def test_write_html_logbook_texts_of_the_theme_and_layout_buttons_exist_in_every_language(tmp_path: Path):
+    from nmea2log.translations import LANGUAGES
+
+    keys = ["layout_theme", "layout_view", "layout_auto", "layout_light", "layout_dark", "layout_cards", "layout_table", "totals_more", "totals_less"]
+    for lang, texts in LANGUAGES.items():
+        for key in keys:
+            assert texts.get(key), (lang, key)

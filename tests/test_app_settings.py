@@ -109,3 +109,12 @@ def test_stamp_line_stamps_every_line_that_has_no_timestamp():
     already = "2026-10-04 10:00:00 [info] from python"
     assert stamp_line(already, now) == already
     assert stamp_line(already + "\ncontinuation", now) == already + "\n2026-10-04 15:30:05 continuation"
+
+
+def test_logbook_prefs_script_passes_theme_and_layout():
+    from nmea2log.app_settings import logbook_prefs_script
+
+    assert "theme: 'dark', view: 'cards'" in logbook_prefs_script("dark", "cards")
+    assert "theme: 'light', view: 'table'" in logbook_prefs_script("light", "table")
+    # "system" (the apps' name) is "auto" (the page's name); an unknown layout falls back to the default.
+    assert "theme: 'auto', view: 'auto'" in logbook_prefs_script("system", "nonsense")

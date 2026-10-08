@@ -1,0 +1,87 @@
+/* The look of the logbook page that goes beyond its base styles (html_writer.py): the two controls, a dark theme and a
+   card-per-trip layout for narrow screens. Everything is keyed on two classes of <html> that logbook-prefs.js sets:
+   ``dark`` and ``cards``. Inlined into the page by html_writer.py, after the base styles. */
+
+/* ---------- the two controls ---------- */
+.view-controls { display: flex; gap: 0.3em; flex-wrap: wrap; justify-content: flex-end; }
+.view-ctl { cursor: pointer; border: 1px solid #ccc; background: #eef3fa; color: inherit; border-radius: 4px; padding: 0.2em 0.5em; font: inherit; font-size: 0.75em; }
+.totals-redundant { display: none !important; }
+.totals-more { display: none; }
+/* The app that shows the page has the same choices in its own Settings and tells the page (logbookPrefs.setFromHost). */
+html.host-prefs .view-controls { display: none; }
+
+/* ---------- dark theme ---------- */
+html.dark { color-scheme: dark; }
+html.dark body { background: #101317; color: #e6e8eb; }
+html.dark .vessel-info { color: #b8bec6; }
+html.dark .last-updated, html.dark .stat-label { color: #98a1ab; }
+html.dark .lang-flag, html.dark .lang-flag-text, html.dark .view-ctl { background: #1b2230; border-color: #364152; color: #e6e8eb; }
+html.dark .lang-flag.active { border-color: #5aa2ff; box-shadow: 0 0 0 1px #5aa2ff inset; }
+html.dark h2 { border-bottom-color: #5aa2ff; }
+html.dark .stat { background: #1a1f26; box-shadow: none; border: 1px solid #262d36; }
+html.dark table.trips { background: #1a1f26; }
+html.dark table.trips th, html.dark table.trips td { border-bottom-color: #262d36; }
+html.dark table.trips th, html.dark .log-table th { background: #232a33; }
+html.dark .log-table th, html.dark .log-table td { border-bottom-color: #262d36; }
+html.dark tr.week-row td { background: #15283d; color: #a9cdf5; border-top-color: #3b82d6; }
+html.dark .show-map, html.dark .show-log, html.dark .show-remarks, html.dark .close-log, html.dark .remarks-cancel { background: #1a1f26; color: #6db0ff; border-color: #3b82d6; }
+html.dark .close-log, html.dark .remarks-cancel { color: #e6e8eb; border-color: #4a5566; }
+html.dark .show-map.active, html.dark .show-map:hover, html.dark .show-log:hover { background: #3b82d6; color: #fff; }
+html.dark .show-overview, html.dark .totals-more { color: #6db0ff; }
+html.dark .log-dialog, html.dark .remarks-dialog, html.dark .overview-dialog, html.dark .last-position-dialog { background: #1a1f26; color: #e6e8eb; }
+html.dark .log-dialog .trip-map-title { background: #232a33; }
+html.dark .detail-row { background: #212832; }
+html.dark .temp-hover { border-bottom-color: #6b7686; }
+html.dark #h-scroll-bar { background: #1a1f26; border-top-color: #262d36; }
+html.dark .trip-row-highlight { background: #4a3d12 !important; }
+
+/* ---------- card layout (a trip per card; four main tiles) ---------- */
+html.cards body { padding: 0.8em; }
+html.cards h1 { font-size: 1.7em; }
+html.cards .header-right { align-items: flex-start; }
+html.cards .vessel-info { text-align: left; }
+html.cards .view-controls { justify-content: flex-start; }
+html.cards #h-scroll-bar { display: none !important; }
+html.cards .totals { grid-template-columns: repeat(2, 1fr) !important; margin: 0.8em 0 0.4em; }
+html.cards .totals:not(.expanded) .stat:not(.main) { display: none; }
+html.cards .totals-more { display: block; margin: 0 0 1.4em; padding: 0.3em 0; background: none; border: none; color: #1a6ecc; font: inherit; font-size: 0.9em; cursor: pointer; }
+html.cards .table-scroll { overflow: visible; }
+html.cards table.trips, html.cards table.trips > tbody { display: block; background: transparent; }
+html.cards table.trips > thead { display: none; }
+html.cards table.trips > tbody > tr.week-row { display: block; }
+html.cards table.trips > tbody > tr.week-row > td { display: block; border-radius: 8px; margin: 1.1em 0 0.3em; border-top: 0; border-left: 4px solid #1a6ecc; padding: 0.5em 0.7em; }
+html.cards table.trips > tbody > tr.trip-row {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); column-gap: 0.6em; row-gap: 0.55em;
+  background: #fff; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.12); padding: 0.75em 0.85em; margin: 0.5em 0;
+}
+html.cards table.trips > tbody > tr.trip-row > td { display: block; padding: 0; border: 0; white-space: normal; min-width: 0; font-size: 0.95em; overflow-wrap: anywhere; }
+html.cards tr.trip-row > td::before { content: attr(data-label); display: block; font-size: 0.72em; color: #77818c; font-weight: 400; }
+html.cards tr.trip-row > td:nth-child(1)::before { content: "#"; display: inline; font-size: 1em; }
+html.cards tr.trip-row > td:nth-child(2)::before, html.cards tr.trip-row > td:nth-child(n+15)::before { display: none; }
+html.cards tr.trip-row > td:nth-child(1)  { grid-area: 1 / 4; text-align: right; color: #77818c; }
+html.cards tr.trip-row > td:nth-child(2)  { grid-area: 1 / 1 / 2 / 4; font-weight: 700; font-size: 1.05em; }
+html.cards tr.trip-row > td:nth-child(4)  { grid-area: 2 / 1 / 3 / 3; font-weight: 600; }
+html.cards tr.trip-row > td:nth-child(6)  { grid-area: 2 / 3 / 3 / 5; font-weight: 600; }
+html.cards tr.trip-row > td:nth-child(3)  { grid-area: 3 / 1; }
+html.cards tr.trip-row > td:nth-child(5)  { grid-area: 3 / 2; }
+html.cards tr.trip-row > td:nth-child(7)  { grid-area: 3 / 3; }
+html.cards tr.trip-row > td:nth-child(8)  { grid-area: 3 / 4; }
+html.cards tr.trip-row > td:nth-child(9)  { grid-area: 4 / 1; }
+html.cards tr.trip-row > td:nth-child(10) { grid-area: 4 / 2; }
+html.cards tr.trip-row > td:nth-child(11) { grid-area: 4 / 3; }
+html.cards tr.trip-row > td:nth-child(12) { grid-area: 4 / 4; }
+html.cards tr.trip-row > td:nth-child(13) { grid-area: 5 / 1; }
+html.cards tr.trip-row > td:nth-child(14) { grid-area: 5 / 2; }
+html.cards tr.trip-row > td:nth-child(n+11):nth-child(-n+14) { color: #5d6670; }
+html.cards tr.trip-row > td:nth-child(15) { grid-area: 6 / 1 / 7 / 2; }
+html.cards tr.trip-row > td:nth-child(16) { grid-area: 6 / 2 / 7 / 3; }
+html.cards tr.trip-row > td:nth-child(17) { grid-area: 6 / 3 / 7 / 5; }
+html.cards tr.trip-row > td:nth-child(17):empty { display: none; }
+html.cards tr.trip-row .show-map, html.cards tr.trip-row .show-log, html.cards tr.trip-row .show-remarks { width: 100%; padding: 0.5em 0.2em; font-size: 1em; }
+html.cards tr.trip-map-row { display: block; }
+html.cards tr.trip-map-row > td { display: block; max-width: none; padding: 0 0 0.8em; white-space: normal; }
+html.cards .map { width: 100%; position: static; height: 300px; }
+html.cards.dark table.trips > tbody > tr.trip-row { background: #1a1f26; box-shadow: none; border: 1px solid #262d36; }
+html.cards.dark tr.trip-row > td::before, html.cards.dark tr.trip-row > td:nth-child(1) { color: #8a94a0; }
+html.cards.dark tr.trip-row > td:nth-child(n+11):nth-child(-n+14) { color: #a3acb6; }
+html.cards.dark table.trips > tbody > tr.week-row > td { border-left-color: #3b82d6; }
