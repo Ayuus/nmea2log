@@ -10,6 +10,66 @@
 <meta name="apple-mobile-web-app-title" content="Zeezwaluw - Vaarlogboek">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+// How the logbook page looks: a theme (auto / light / dark) and a layout (auto / cards / table). It sets two classes on <html>
+// that logbook-layout.css reacts to: "dark" and "cards". "auto" follows the device: the dark mode of the system, and cards on a
+// narrow screen (a phone held upright), a table on anything wider.
+//
+// Where the choice comes from:
+//  * in a browser, the two buttons next to the language buttons (logbook-layout.js); the choice is kept in localStorage,
+//  * in the Android and iOS app, their Settings: the app calls logbookPrefs.setFromHost({theme, view}) after loading the
+//    page, and the buttons disappear. (The apps' web views do not keep localStorage between runs.)
+//
+// Inlined in <head> by html_writer.py, so the right look is there from the first paint instead of flashing light and table.
+(function () {
+  var KEY = 'logbook-view';
+  var THEMES = ['auto', 'light', 'dark'];
+  var VIEWS = ['auto', 'cards', 'table'];
+  var NARROW_PX = 700;
+  var state = {theme: 'auto', view: 'auto'};
+  var root = document.documentElement;
+  var mqDark = window.matchMedia('(prefers-color-scheme: dark)');
+  var mqNarrow = window.matchMedia('(max-width: ' + NARROW_PX + 'px)');
+
+  try {
+    var saved = JSON.parse(localStorage.getItem(KEY));
+    if (saved && THEMES.indexOf(saved.theme) >= 0) state.theme = saved.theme;
+    if (saved && VIEWS.indexOf(saved.view) >= 0) state.view = saved.view;
+  } catch (e) {}
+
+  function apply() {
+    root.classList.toggle('dark', state.theme === 'dark' || (state.theme === 'auto' && mqDark.matches));
+    root.classList.toggle('cards', state.view === 'cards' || (state.view === 'auto' && mqNarrow.matches));
+    document.dispatchEvent(new CustomEvent('logbookprefs'));
+  }
+
+  function next(list, value) {
+    return list[(list.indexOf(value) + 1) % list.length];
+  }
+
+  window.logbookPrefs = {
+    get: function () { return {theme: state.theme, view: state.view}; },
+    // The buttons: the next theme / layout in the row auto, light, dark / auto, cards, table.
+    cycle: function (name) {
+      if (name === 'theme') state.theme = next(THEMES, state.theme);
+      else state.view = next(VIEWS, state.view);
+      try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {}
+      apply();
+    },
+    // The app's Settings. Not remembered here: the app tells the page again on every load.
+    setFromHost: function (prefs) {
+      if (prefs && THEMES.indexOf(prefs.theme) >= 0) state.theme = prefs.theme;
+      if (prefs && VIEWS.indexOf(prefs.view) >= 0) state.view = prefs.view;
+      root.classList.add('host-prefs');
+      apply();
+    },
+  };
+
+  mqDark.addEventListener('change', apply);
+  mqNarrow.addEventListener('change', apply);
+  apply();
+})();
+</script>
 <style>
   body { font-family: sans-serif; margin: 0; padding: 1.5em; background: #f7f7f8; color: #1a1a1a; }
   h1 { margin: 0 0 0.2em; }
@@ -136,11 +196,10 @@
   .log-table th, .log-table td { padding: 0.2em 0.6em; border-bottom: 1px solid #eee; text-align: left; font-size: 0.9em; }
   .log-table th { background: #f0f0f0; }
   .detail-row {
-    display: flex; align-items: baseline; gap: 0.5em; background: #f5f7fa; border-radius: 6px;
-    padding: 0.5em 0.7em; margin-bottom: 0.5em;
+    background: #f5f7fa; border-radius: 6px; padding: 0.5em 0.7em; margin-bottom: 0.5em; line-height: 1.45;
   }
-  .detail-icon { flex: none; }
-  .detail-label { font-weight: 600; }
+  .detail-icon { margin-right: 0.5em; }
+  .detail-label { font-weight: 600; margin-right: 0.3em; }
   .close-log { cursor: pointer; border: 1px solid #ccc; background: white; border-radius: 4px; padding: 0.3em 0.8em; }
   .close-log:hover { background: #f0f0f0; }
   .temp-hover { cursor: default; border-bottom: 1px dotted #999; }
@@ -183,7 +242,8 @@
     padding: 0.8em 1.2em; margin-bottom: 1.5em;
   }
   .show-remarks { cursor: pointer; border: 1px solid #1a6ecc; background: white; color: #1a6ecc; border-radius: 4px; padding: 0.2em 0.6em; white-space: nowrap; }
-  .show-remarks:hover { background: #1a6ecc; color: white; }
+  .show-remarks:hover:not(:disabled) { background: #1a6ecc; color: white; }
+  .show-remarks:disabled { cursor: not-allowed; opacity: 0.45; }
   .remarks-dialog { width: 24em; max-width: 90vw; }
   .remarks-textarea {
     width: 100%; box-sizing: border-box; font: inherit; margin-bottom: 0.8em;
@@ -217,6 +277,95 @@
   .remarks-buttons { display: flex; gap: 0.5em; }
   .remarks-save { cursor: pointer; border: 1px solid #1a6ecc; background: #1a6ecc; color: white; border-radius: 4px; padding: 0.3em 0.8em; }
   .remarks-cancel { cursor: pointer; border: 1px solid #ccc; background: white; border-radius: 4px; padding: 0.3em 0.8em; }
+</style>
+<style>
+/* The look of the logbook page that goes beyond its base styles (html_writer.py): the two controls, a dark theme and a
+   card-per-trip layout for narrow screens. Everything is keyed on two classes of <html> that logbook-prefs.js sets:
+   ``dark`` and ``cards``. Inlined into the page by html_writer.py, after the base styles. */
+
+/* ---------- the two controls ---------- */
+.view-controls { display: flex; gap: 0.3em; flex-wrap: wrap; justify-content: flex-end; }
+.view-ctl { cursor: pointer; border: 1px solid #ccc; background: #eef3fa; color: inherit; border-radius: 4px; padding: 0.2em 0.5em; font: inherit; font-size: 0.75em; }
+.totals-redundant { display: none !important; }
+.totals-more { display: none; }
+/* The app that shows the page has the same choices in its own Settings and tells the page (logbookPrefs.setFromHost). */
+html.host-prefs .view-controls { display: none; }
+
+/* ---------- dark theme ---------- */
+html.dark { color-scheme: dark; }
+html.dark body { background: #101317; color: #e6e8eb; }
+html.dark .vessel-info { color: #b8bec6; }
+html.dark .last-updated, html.dark .stat-label { color: #98a1ab; }
+html.dark .lang-flag, html.dark .lang-flag-text, html.dark .view-ctl { background: #1b2230; border-color: #364152; color: #e6e8eb; }
+html.dark .lang-flag.active { border-color: #5aa2ff; box-shadow: 0 0 0 1px #5aa2ff inset; }
+html.dark h2 { border-bottom-color: #5aa2ff; }
+html.dark .stat { background: #1a1f26; box-shadow: none; border: 1px solid #262d36; }
+html.dark table.trips { background: #1a1f26; }
+html.dark table.trips th, html.dark table.trips td { border-bottom-color: #262d36; }
+html.dark table.trips th, html.dark .log-table th { background: #232a33; }
+html.dark .log-table th, html.dark .log-table td { border-bottom-color: #262d36; }
+html.dark tr.week-row td { background: #15283d; color: #a9cdf5; border-top-color: #3b82d6; }
+html.dark .show-map, html.dark .show-log, html.dark .show-remarks, html.dark .close-log, html.dark .remarks-cancel { background: #1a1f26; color: #6db0ff; border-color: #3b82d6; }
+html.dark .close-log, html.dark .remarks-cancel { color: #e6e8eb; border-color: #4a5566; }
+html.dark .show-map.active, html.dark .show-map:hover, html.dark .show-log:hover { background: #3b82d6; color: #fff; }
+html.dark .show-overview, html.dark .totals-more { color: #6db0ff; }
+html.dark .log-dialog, html.dark .remarks-dialog, html.dark .overview-dialog, html.dark .last-position-dialog { background: #1a1f26; color: #e6e8eb; }
+html.dark .log-dialog .trip-map-title { background: #232a33; }
+html.dark .detail-row { background: #212832; }
+html.dark .temp-hover { border-bottom-color: #6b7686; }
+html.dark #h-scroll-bar { background: #1a1f26; border-top-color: #262d36; }
+html.dark .trip-row-highlight { background: #4a3d12 !important; }
+
+/* ---------- card layout (a trip per card; four main tiles) ---------- */
+html.cards body { padding: 0.8em; }
+html.cards h1 { font-size: 1.7em; }
+html.cards .header-right { align-items: flex-start; }
+html.cards .vessel-info { text-align: left; }
+html.cards .view-controls { justify-content: flex-start; }
+html.cards #h-scroll-bar { display: none !important; }
+html.cards .totals { grid-template-columns: repeat(2, 1fr) !important; margin: 0.8em 0 0.4em; }
+html.cards .totals:not(.expanded) .stat:not(.main) { display: none; }
+html.cards .totals-more { display: block; margin: 0 0 1.4em; padding: 0.3em 0; background: none; border: none; color: #1a6ecc; font: inherit; font-size: 0.9em; cursor: pointer; }
+html.cards .table-scroll { overflow: visible; }
+html.cards table.trips, html.cards table.trips > tbody { display: block; background: transparent; }
+html.cards table.trips > thead { display: none; }
+html.cards table.trips > tbody > tr.week-row { display: block; }
+html.cards table.trips > tbody > tr.week-row > td { display: block; border-radius: 8px; margin: 1.1em 0 0.3em; border-top: 0; border-left: 4px solid #1a6ecc; padding: 0.5em 0.7em; }
+html.cards table.trips > tbody > tr.trip-row {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); column-gap: 0.6em; row-gap: 0.55em;
+  background: #fff; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.12); padding: 0.75em 0.85em; margin: 0.5em 0;
+}
+html.cards table.trips > tbody > tr.trip-row > td { display: block; padding: 0; border: 0; white-space: normal; min-width: 0; font-size: 0.95em; overflow-wrap: anywhere; }
+html.cards tr.trip-row > td::before { content: attr(data-label); display: block; font-size: 0.72em; color: #77818c; font-weight: 400; }
+html.cards tr.trip-row > td:nth-child(1)::before { content: "#"; display: inline; font-size: 1em; }
+html.cards tr.trip-row > td:nth-child(2)::before, html.cards tr.trip-row > td:nth-child(n+15)::before { display: none; }
+html.cards tr.trip-row > td:nth-child(1)  { grid-area: 1 / 4; text-align: right; color: #77818c; }
+html.cards tr.trip-row > td:nth-child(2)  { grid-area: 1 / 1 / 2 / 4; font-weight: 700; font-size: 1.05em; }
+html.cards tr.trip-row > td:nth-child(4)  { grid-area: 2 / 1 / 3 / 3; font-weight: 600; }
+html.cards tr.trip-row > td:nth-child(6)  { grid-area: 2 / 3 / 3 / 5; font-weight: 600; }
+html.cards tr.trip-row > td:nth-child(3)  { grid-area: 3 / 1; }
+html.cards tr.trip-row > td:nth-child(5)  { grid-area: 3 / 2; }
+html.cards tr.trip-row > td:nth-child(7)  { grid-area: 3 / 3; }
+html.cards tr.trip-row > td:nth-child(8)  { grid-area: 3 / 4; }
+html.cards tr.trip-row > td:nth-child(9)  { grid-area: 4 / 1; }
+html.cards tr.trip-row > td:nth-child(10) { grid-area: 4 / 2; }
+html.cards tr.trip-row > td:nth-child(11) { grid-area: 4 / 3; }
+html.cards tr.trip-row > td:nth-child(12) { grid-area: 4 / 4; }
+html.cards tr.trip-row > td:nth-child(13) { grid-area: 5 / 1; }
+html.cards tr.trip-row > td:nth-child(14) { grid-area: 5 / 2; }
+html.cards tr.trip-row > td:nth-child(n+11):nth-child(-n+14) { color: #5d6670; }
+html.cards tr.trip-row > td:nth-child(15) { grid-area: 6 / 1 / 7 / 2; }
+html.cards tr.trip-row > td:nth-child(16) { grid-area: 6 / 2 / 7 / 3; }
+html.cards tr.trip-row > td:nth-child(17) { grid-area: 6 / 3 / 7 / 5; }
+html.cards tr.trip-row > td:nth-child(17):empty { display: none; }
+html.cards tr.trip-row .show-map, html.cards tr.trip-row .show-log, html.cards tr.trip-row .show-remarks { width: 100%; padding: 0.5em 0.2em; font-size: 1em; }
+html.cards tr.trip-map-row { display: block; }
+html.cards tr.trip-map-row > td { display: block; max-width: none; padding: 0 0 0.8em; white-space: normal; }
+html.cards .map { width: 100%; position: static; height: 300px; }
+html.cards.dark table.trips > tbody > tr.trip-row { background: #1a1f26; box-shadow: none; border: 1px solid #262d36; }
+html.cards.dark tr.trip-row > td::before, html.cards.dark tr.trip-row > td:nth-child(1) { color: #8a94a0; }
+html.cards.dark tr.trip-row > td:nth-child(n+11):nth-child(-n+14) { color: #a3acb6; }
+html.cards.dark table.trips > tbody > tr.week-row > td { border-left-color: #3b82d6; }
 </style>
 </head>
 <body>
@@ -261,7 +410,7 @@ const WP_REST_NONCE = "%%WP_REST_NONCE%%";
 // I18N/MONTH_ABBR_BY_LANG embed all four languages so switching is instant and needs no server
 // round-trip. Free-form data (place names, trip stats, fault/warning text from the decoded NMEA
 // data itself) is never touched by this -- only fixed labels/buttons/headers are.
-const I18N = {"nl": {"logbook_title_suffix": "Vaarlogboek", "last_updated": "Laatst bijgewerkt", "last_position": "Laatste positie", "place_prefix_mooring": "aan de kant, bij {name}", "place_prefix_water": "op het water, bij {name}", "vessel_call_sign": "Roepnaam", "noscript_warning": "De knoppen \"Kaart\", \"Details\" en \"Opmerking\" in dit logboek hebben JavaScript nodig om te openen. De meeste e-mailprogramma's verwijderen dat uit bijlagen -- open dit bestand in dat geval in een webbrowser (Chrome, Edge, Firefox, Safari, ...) in plaats van het rechtstreeks vanuit de e-mail te bekijken.", "header_seq_abbr": "Nr.", "header_seq_full": "Volgnummer", "header_date": "Datum", "header_departure_abbr": "Vertr.", "header_departure_full": "Vertrek", "header_from": "Van", "header_arrival_abbr": "Aank.", "header_arrival_full": "Aankomst", "header_to": "Naar", "header_duration": "Duur", "header_distance": "Afstand", "header_avg_speed": "Gem. snelheid", "header_max_speed": "Max snelheid", "header_fuel": "Brandstof", "header_l_per_nm": "L/nm", "header_engine_hours": "Motoruren", "header_rpm": "Toerental", "header_water_temp": "Watertemperatuur", "header_motion": "Beweging", "header_route": "Route", "header_details": "Log", "header_remarks": "Opmerkingen", "week_label_prefix": "Week", "overview_link": "Overzicht", "overview_dialog_title": "Overzicht {year}", "totals_trips": "Reizen", "totals_distance": "Totale afstand", "totals_hours": "Totale vaaruren", "totals_fuel_calculated": "Totale brandstof", "totals_fuel_engine_meter": "Totale brandstof (motormeter)", "totals_avg_consumption": "Gem. verbruik", "totals_avg_speed": "Gem. snelheid", "totals_top_speed": "Topsnelheid", "totals_engine_hour_meter": "Motoruren-teller", "totals_engine_hour_meter_engine": "Motoruren-teller, motor {instance}", "totals_hours_logged": "Gelogde motoruren", "totals_hours_logged_engine": "Gelogde motoruren, motor {instance}", "motion_roll": "slingeren", "motion_pitch": "stampen", "motion_peak": "piek", "rpm_tooltip_single": "gem. {avg} kn bij dat toerental ({min}-{max} kn)", "rpm_tooltip_single_fuel": "gem. {avg} kn bij dat toerental ({min}-{max} kn), gem. verbruik {fuel} L/nm", "rpm_tooltip_per_engine": "motor {instance}: gem. {avg} kn ({min}-{max} kn)", "rpm_tooltip_per_engine_fuel": "motor {instance}: gem. {avg} kn ({min}-{max} kn), gem. verbruik {fuel} L/nm", "max_speed_tooltip_single": "om {time} bij {rpm} rpm", "max_speed_tooltip_per_engine": "om {time}, motor {instance}: {rpm} rpm", "map_button_show": "Kaart", "map_marker_departure": "Vertrek", "map_marker_arrival": "Aankomst", "map_marker_max_speed": "Topsnelheid", "details_button": "Log", "log_close_button": "Sluiten", "log_header_number": "Nr.", "log_header_time": "Tijd", "log_header_position": "Positie", "log_header_cog": "Koers", "log_header_sog": "Snelheid", "log_header_wind": "Wind", "log_header_precip": "Neerslag", "log_header_cloud": "Bewolking", "log_header_wave": "Golven", "log_header_current": "Stroming", "remarks_button_placeholder": "Opmerking", "remarks_save_button": "Opslaan", "remarks_cancel_button": "Annuleren", "remarks_close_button": "Sluiten", "remarks_save_forbidden": "Je account mag geen opmerkingen opslaan.", "remarks_save_failed": "Opslaan is niet gelukt, probeer het opnieuw.", "remarks_unavailable": "Opmerkingen konden niet worden geladen."}, "en": {"logbook_title_suffix": "Sailing Logbook", "last_updated": "Last updated", "last_position": "Last position", "place_prefix_mooring": "alongside, near {name}", "place_prefix_water": "on the water, near {name}", "vessel_call_sign": "Call sign", "noscript_warning": "The \"Map\", \"Details\" and \"Remark\" buttons in this logbook need JavaScript to open. Most email clients strip that from attachments -- if that's how you're viewing this, open the file in a real web browser (Chrome, Edge, Firefox, Safari, ...) instead of viewing it straight from the email.", "header_seq_abbr": "No.", "header_seq_full": "Sequence", "header_date": "Date", "header_departure_abbr": "Dep.", "header_departure_full": "Departure", "header_from": "From", "header_arrival_abbr": "Arr.", "header_arrival_full": "Arrival", "header_to": "To", "header_duration": "Duration", "header_distance": "Distance", "header_avg_speed": "Avg. speed", "header_max_speed": "Max speed", "header_fuel": "Fuel", "header_l_per_nm": "L/nm", "header_engine_hours": "Engine hours", "header_rpm": "RPM", "header_water_temp": "Water temperature", "header_motion": "Motion", "header_route": "Route", "header_details": "Log", "header_remarks": "Remarks", "week_label_prefix": "Week", "overview_link": "Overview", "overview_dialog_title": "Overview {year}", "totals_trips": "Trips", "totals_distance": "Total distance", "totals_hours": "Total hours underway", "totals_fuel_calculated": "Total fuel", "totals_fuel_engine_meter": "Total fuel (engine meter)", "totals_avg_consumption": "Avg. consumption", "totals_avg_speed": "Avg. speed", "totals_top_speed": "Top speed", "totals_engine_hour_meter": "Engine hour meter", "totals_engine_hour_meter_engine": "Engine hour meter, engine {instance}", "totals_hours_logged": "Logged engine hours", "totals_hours_logged_engine": "Logged engine hours, engine {instance}", "motion_roll": "roll", "motion_pitch": "pitch", "motion_peak": "peak", "rpm_tooltip_single": "avg. {avg} kn at that RPM ({min}-{max} kn)", "rpm_tooltip_single_fuel": "avg. {avg} kn at that RPM ({min}-{max} kn), avg. consumption {fuel} L/nm", "rpm_tooltip_per_engine": "engine {instance}: avg. {avg} kn ({min}-{max} kn)", "rpm_tooltip_per_engine_fuel": "engine {instance}: avg. {avg} kn ({min}-{max} kn), avg. consumption {fuel} L/nm", "max_speed_tooltip_single": "at {time} at {rpm} rpm", "max_speed_tooltip_per_engine": "at {time}, engine {instance}: {rpm} rpm", "map_button_show": "Map", "map_marker_departure": "Departure", "map_marker_arrival": "Arrival", "map_marker_max_speed": "Top speed", "details_button": "Log", "log_close_button": "Close", "log_header_number": "No.", "log_header_time": "Time", "log_header_position": "Position", "log_header_cog": "Course", "log_header_sog": "Speed", "log_header_wind": "Wind", "log_header_precip": "Precip.", "log_header_cloud": "Cloud", "log_header_wave": "Waves", "log_header_current": "Current", "remarks_button_placeholder": "Remark", "remarks_save_button": "Save", "remarks_cancel_button": "Cancel", "remarks_close_button": "Close", "remarks_save_forbidden": "Your account isn't allowed to save remarks.", "remarks_save_failed": "Saving failed, please try again.", "remarks_unavailable": "Remarks could not be loaded."}, "fr": {"logbook_title_suffix": "Journal de bord", "last_updated": "Derni\u00e8re mise \u00e0 jour", "last_position": "Derni\u00e8re position", "place_prefix_mooring": "\u00e0 quai, pr\u00e8s de {name}", "place_prefix_water": "sur l'eau, pr\u00e8s de {name}", "vessel_call_sign": "Indicatif d'appel", "noscript_warning": "Les boutons \u00ab Carte \u00bb, \u00ab D\u00e9tails \u00bb et \u00ab Remarque \u00bb de ce journal de bord n\u00e9cessitent JavaScript pour s'ouvrir. La plupart des messageries suppriment cela des pi\u00e8ces jointes -- si c'est le cas ici, ouvrez ce fichier dans un vrai navigateur (Chrome, Edge, Firefox, Safari, ...) plut\u00f4t que de le consulter directement depuis l'e-mail.", "header_seq_abbr": "N\u00b0", "header_seq_full": "Num\u00e9ro", "header_date": "Date", "header_departure_abbr": "D\u00e9p.", "header_departure_full": "D\u00e9part", "header_from": "De", "header_arrival_abbr": "Arr.", "header_arrival_full": "Arriv\u00e9e", "header_to": "\u00c0", "header_duration": "Dur\u00e9e", "header_distance": "Distance", "header_avg_speed": "Vit. moy.", "header_max_speed": "Vit. max", "header_fuel": "Carburant", "header_l_per_nm": "L/nm", "header_engine_hours": "Heures moteur", "header_rpm": "R\u00e9gime", "header_water_temp": "Temp\u00e9rature de l'eau", "header_motion": "Mouvement", "header_route": "Trajet", "header_details": "Journal", "header_remarks": "Remarques", "week_label_prefix": "Semaine", "overview_link": "Aper\u00e7u", "overview_dialog_title": "Aper\u00e7u {year}", "totals_trips": "Trajets", "totals_distance": "Distance totale", "totals_hours": "Heures de navigation totales", "totals_fuel_calculated": "Carburant total", "totals_fuel_engine_meter": "Carburant total (compteur moteur)", "totals_avg_consumption": "Consommation moy.", "totals_avg_speed": "Vitesse moy.", "totals_top_speed": "Vitesse max", "totals_engine_hour_meter": "Compteur horaire moteur", "totals_engine_hour_meter_engine": "Compteur horaire moteur, moteur {instance}", "totals_hours_logged": "Heures moteur enregistr\u00e9es", "totals_hours_logged_engine": "Heures moteur enregistr\u00e9es, moteur {instance}", "motion_roll": "roulis", "motion_pitch": "tangage", "motion_peak": "pic", "rpm_tooltip_single": "moy. {avg} nd \u00e0 ce r\u00e9gime ({min}-{max} nd)", "rpm_tooltip_single_fuel": "moy. {avg} nd \u00e0 ce r\u00e9gime ({min}-{max} nd), conso. moy. {fuel} L/nm", "rpm_tooltip_per_engine": "moteur {instance} : moy. {avg} nd ({min}-{max} nd)", "rpm_tooltip_per_engine_fuel": "moteur {instance} : moy. {avg} nd ({min}-{max} nd), conso. moy. {fuel} L/nm", "max_speed_tooltip_single": "\u00e0 {time} \u00e0 {rpm} tr/min", "max_speed_tooltip_per_engine": "\u00e0 {time}, moteur {instance} : {rpm} tr/min", "map_button_show": "Carte", "map_marker_departure": "D\u00e9part", "map_marker_arrival": "Arriv\u00e9e", "map_marker_max_speed": "Vitesse max.", "details_button": "Journal", "log_close_button": "Fermer", "log_header_number": "N\u00b0", "log_header_time": "Heure", "log_header_position": "Position", "log_header_cog": "Cap", "log_header_sog": "Vitesse", "log_header_wind": "Vent", "log_header_precip": "Pr\u00e9cip.", "log_header_cloud": "Nuages", "log_header_wave": "Vagues", "log_header_current": "Courant", "remarks_button_placeholder": "Remarque", "remarks_save_button": "Enregistrer", "remarks_cancel_button": "Annuler", "remarks_close_button": "Fermer", "remarks_save_forbidden": "Votre compte n'est pas autoris\u00e9 \u00e0 enregistrer des remarques.", "remarks_save_failed": "\u00c9chec de l'enregistrement, veuillez r\u00e9essayer.", "remarks_unavailable": "Les remarques n'ont pas pu \u00eatre charg\u00e9es."}, "de": {"logbook_title_suffix": "Bordbuch", "last_updated": "Zuletzt aktualisiert", "last_position": "Letzte Position", "place_prefix_mooring": "am Kai, bei {name}", "place_prefix_water": "auf dem Wasser, bei {name}", "vessel_call_sign": "Rufzeichen", "noscript_warning": "Die Schaltfl\u00e4chen \"Karte\", \"Details\" und \"Bemerkung\" in diesem Bordbuch ben\u00f6tigen JavaScript zum \u00d6ffnen. Die meisten E-Mail-Programme entfernen das aus Anh\u00e4ngen -- \u00f6ffnen Sie diese Datei in dem Fall in einem echten Browser (Chrome, Edge, Firefox, Safari, ...), statt sie direkt aus der E-Mail zu \u00f6ffnen.", "header_seq_abbr": "Nr.", "header_seq_full": "Laufende Nr.", "header_date": "Datum", "header_departure_abbr": "Abf.", "header_departure_full": "Abfahrt", "header_from": "Von", "header_arrival_abbr": "Ank.", "header_arrival_full": "Ankunft", "header_to": "Nach", "header_duration": "Dauer", "header_distance": "Distanz", "header_avg_speed": "Durchschn. Geschw.", "header_max_speed": "Max. Geschw.", "header_fuel": "Kraftstoff", "header_l_per_nm": "L/sm", "header_engine_hours": "Motorstunden", "header_rpm": "Drehzahl", "header_water_temp": "Wassertemperatur", "header_motion": "Bewegung", "header_route": "Route", "header_details": "Log", "header_remarks": "Bemerkungen", "week_label_prefix": "Woche", "overview_link": "\u00dcbersicht", "overview_dialog_title": "\u00dcbersicht {year}", "totals_trips": "Fahrten", "totals_distance": "Gesamtdistanz", "totals_hours": "Gesamte Fahrstunden", "totals_fuel_calculated": "Gesamter Kraftstoff", "totals_fuel_engine_meter": "Gesamter Kraftstoff (Motorz\u00e4hler)", "totals_avg_consumption": "Durchschn. Verbrauch", "totals_avg_speed": "Durchschn. Geschw.", "totals_top_speed": "H\u00f6chstgeschwindigkeit", "totals_engine_hour_meter": "Betriebsstundenz\u00e4hler", "totals_engine_hour_meter_engine": "Betriebsstundenz\u00e4hler, Motor {instance}", "totals_hours_logged": "Erfasste Motorstunden", "totals_hours_logged_engine": "Erfasste Motorstunden, Motor {instance}", "motion_roll": "Rollen", "motion_pitch": "Stampfen", "motion_peak": "Spitze", "rpm_tooltip_single": "durchschn. {avg} kn bei dieser Drehzahl ({min}-{max} kn)", "rpm_tooltip_single_fuel": "durchschn. {avg} kn bei dieser Drehzahl ({min}-{max} kn), durchschn. Verbrauch {fuel} L/sm", "rpm_tooltip_per_engine": "Motor {instance}: durchschn. {avg} kn ({min}-{max} kn)", "rpm_tooltip_per_engine_fuel": "Motor {instance}: durchschn. {avg} kn ({min}-{max} kn), durchschn. Verbrauch {fuel} L/sm", "max_speed_tooltip_single": "um {time} bei {rpm} U/min", "max_speed_tooltip_per_engine": "um {time}, Motor {instance}: {rpm} U/min", "map_button_show": "Karte", "map_marker_departure": "Abfahrt", "map_marker_arrival": "Ankunft", "map_marker_max_speed": "H\u00f6chstgeschwindigkeit", "details_button": "Log", "log_close_button": "Schlie\u00dfen", "log_header_number": "Nr.", "log_header_time": "Zeit", "log_header_position": "Position", "log_header_cog": "Kurs", "log_header_sog": "Geschwindigkeit", "log_header_wind": "Wind", "log_header_precip": "Niederschlag", "log_header_cloud": "Bew\u00f6lkung", "log_header_wave": "Wellen", "log_header_current": "Str\u00f6mung", "remarks_button_placeholder": "Bemerkung", "remarks_save_button": "Speichern", "remarks_cancel_button": "Abbrechen", "remarks_close_button": "Schlie\u00dfen", "remarks_save_forbidden": "Dein Konto darf keine Bemerkungen speichern.", "remarks_save_failed": "Speichern ist fehlgeschlagen, bitte versuche es erneut.", "remarks_unavailable": "Bemerkungen konnten nicht geladen werden."}};
+const I18N = {"nl": {"logbook_title_suffix": "Vaarlogboek", "last_updated": "Laatst bijgewerkt", "last_position": "Laatste positie", "place_prefix_mooring": "aan de kant, bij {name}", "place_prefix_water": "op het water, bij {name}", "vessel_call_sign": "Roepnaam", "noscript_warning": "De knoppen \"Kaart\", \"Details\" en \"Opmerking\" in dit logboek hebben JavaScript nodig om te openen. De meeste e-mailprogramma's verwijderen dat uit bijlagen -- open dit bestand in dat geval in een webbrowser (Chrome, Edge, Firefox, Safari, ...) in plaats van het rechtstreeks vanuit de e-mail te bekijken.", "header_seq_abbr": "Nr.", "header_seq_full": "Volgnummer", "header_date": "Datum", "header_departure_abbr": "Vertr.", "header_departure_full": "Vertrek", "header_from": "Van", "header_arrival_abbr": "Aank.", "header_arrival_full": "Aankomst", "header_to": "Naar", "header_duration": "Duur", "header_distance": "Afstand", "header_avg_speed": "Gem. snelheid", "header_max_speed": "Max snelheid", "header_fuel": "Brandstof", "header_l_per_nm": "L/nm", "header_engine_hours": "Motoruren", "header_rpm": "Toerental", "header_water_temp": "Watertemperatuur", "header_outside_temp": "Buitentemperatuur", "header_humidity": "Luchtvochtigheid", "header_motion": "Beweging", "header_route": "Route", "header_details": "Log", "header_remarks": "Opmerkingen", "week_label_prefix": "Week", "overview_link": "Overzicht", "overview_dialog_title": "Overzicht {year}", "layout_theme": "Thema", "layout_view": "Weergave", "layout_auto": "Auto", "layout_light": "Licht", "layout_dark": "Donker", "layout_cards": "Kaarten", "layout_table": "Tabel", "totals_more": "Meer", "totals_less": "Minder", "totals_trips": "Reizen", "totals_distance": "Totale afstand", "totals_hours": "Totale vaaruren", "totals_fuel_calculated": "Totale brandstof", "totals_fuel_engine_meter": "Totale brandstof (motormeter)", "totals_avg_consumption": "Gem. verbruik", "totals_avg_speed": "Gem. snelheid", "totals_top_speed": "Topsnelheid", "totals_engine_hour_meter": "Motoruren-teller", "totals_engine_hour_meter_engine": "Motoruren-teller, motor {instance}", "totals_hours_logged": "Gelogde motoruren", "totals_hours_logged_engine": "Gelogde motoruren, motor {instance}", "motion_roll": "slingeren", "motion_pitch": "stampen", "motion_peak": "piek", "rpm_tooltip_single": "gem. {avg} kn bij dat toerental ({min}-{max} kn)", "rpm_tooltip_single_fuel": "gem. {avg} kn bij dat toerental ({min}-{max} kn), gem. verbruik {fuel} L/nm", "rpm_tooltip_per_engine": "motor {instance}: gem. {avg} kn ({min}-{max} kn)", "rpm_tooltip_per_engine_fuel": "motor {instance}: gem. {avg} kn ({min}-{max} kn), gem. verbruik {fuel} L/nm", "max_speed_tooltip_single": "om {time} bij {rpm} rpm", "max_speed_tooltip_per_engine": "om {time}, motor {instance}: {rpm} rpm", "map_button_show": "Kaart", "map_marker_departure": "Vertrek", "map_marker_arrival": "Aankomst", "map_marker_max_speed": "Topsnelheid", "details_button": "Log", "log_close_button": "Sluiten", "log_header_number": "Nr.", "log_header_time": "Tijd", "log_header_position": "Positie", "log_header_cog": "Koers", "log_header_sog": "Snelheid", "log_header_stw": "Snelheid (water)", "log_header_wind_instrument": "Wind (instrument)", "log_header_wind": "Wind", "log_header_precip": "Neerslag", "log_header_cloud": "Bewolking", "log_header_wave": "Golven", "log_header_current": "Stroming", "remarks_button_placeholder": "Opmerking", "remarks_save_button": "Opslaan", "remarks_cancel_button": "Annuleren", "remarks_close_button": "Sluiten", "remarks_save_forbidden": "Je account mag geen opmerkingen opslaan.", "remarks_save_failed": "Opslaan is niet gelukt, probeer het opnieuw.", "remarks_unavailable": "Opmerkingen konden niet worden geladen.", "remarks_local_only": "Opmerkingen zijn alleen beschikbaar op de site, niet in de lokale weergave."}, "en": {"logbook_title_suffix": "Sailing Logbook", "last_updated": "Last updated", "last_position": "Last position", "place_prefix_mooring": "alongside, near {name}", "place_prefix_water": "on the water, near {name}", "vessel_call_sign": "Call sign", "noscript_warning": "The \"Map\", \"Details\" and \"Remark\" buttons in this logbook need JavaScript to open. Most email clients strip that from attachments -- if that's how you're viewing this, open the file in a real web browser (Chrome, Edge, Firefox, Safari, ...) instead of viewing it straight from the email.", "header_seq_abbr": "No.", "header_seq_full": "Sequence", "header_date": "Date", "header_departure_abbr": "Dep.", "header_departure_full": "Departure", "header_from": "From", "header_arrival_abbr": "Arr.", "header_arrival_full": "Arrival", "header_to": "To", "header_duration": "Duration", "header_distance": "Distance", "header_avg_speed": "Avg. speed", "header_max_speed": "Max speed", "header_fuel": "Fuel", "header_l_per_nm": "L/nm", "header_engine_hours": "Engine hours", "header_rpm": "RPM", "header_water_temp": "Water temperature", "header_outside_temp": "Outside temperature", "header_humidity": "Humidity", "header_motion": "Motion", "header_route": "Route", "header_details": "Log", "header_remarks": "Remarks", "week_label_prefix": "Week", "overview_link": "Overview", "overview_dialog_title": "Overview {year}", "layout_theme": "Theme", "layout_view": "View", "layout_auto": "Auto", "layout_light": "Light", "layout_dark": "Dark", "layout_cards": "Cards", "layout_table": "Table", "totals_more": "More", "totals_less": "Less", "totals_trips": "Trips", "totals_distance": "Total distance", "totals_hours": "Total hours underway", "totals_fuel_calculated": "Total fuel", "totals_fuel_engine_meter": "Total fuel (engine meter)", "totals_avg_consumption": "Avg. consumption", "totals_avg_speed": "Avg. speed", "totals_top_speed": "Top speed", "totals_engine_hour_meter": "Engine hour meter", "totals_engine_hour_meter_engine": "Engine hour meter, engine {instance}", "totals_hours_logged": "Logged engine hours", "totals_hours_logged_engine": "Logged engine hours, engine {instance}", "motion_roll": "roll", "motion_pitch": "pitch", "motion_peak": "peak", "rpm_tooltip_single": "avg. {avg} kn at that RPM ({min}-{max} kn)", "rpm_tooltip_single_fuel": "avg. {avg} kn at that RPM ({min}-{max} kn), avg. consumption {fuel} L/nm", "rpm_tooltip_per_engine": "engine {instance}: avg. {avg} kn ({min}-{max} kn)", "rpm_tooltip_per_engine_fuel": "engine {instance}: avg. {avg} kn ({min}-{max} kn), avg. consumption {fuel} L/nm", "max_speed_tooltip_single": "at {time} at {rpm} rpm", "max_speed_tooltip_per_engine": "at {time}, engine {instance}: {rpm} rpm", "map_button_show": "Map", "map_marker_departure": "Departure", "map_marker_arrival": "Arrival", "map_marker_max_speed": "Top speed", "details_button": "Log", "log_close_button": "Close", "log_header_number": "No.", "log_header_time": "Time", "log_header_position": "Position", "log_header_cog": "Course", "log_header_sog": "Speed", "log_header_stw": "Speed (water)", "log_header_wind_instrument": "Wind (instrument)", "log_header_wind": "Wind", "log_header_precip": "Precip.", "log_header_cloud": "Cloud", "log_header_wave": "Waves", "log_header_current": "Current", "remarks_button_placeholder": "Remark", "remarks_save_button": "Save", "remarks_cancel_button": "Cancel", "remarks_close_button": "Close", "remarks_save_forbidden": "Your account isn't allowed to save remarks.", "remarks_save_failed": "Saving failed, please try again.", "remarks_unavailable": "Remarks could not be loaded.", "remarks_local_only": "Remarks are only available on the site, not in the local view."}, "fr": {"logbook_title_suffix": "Journal de bord", "last_updated": "Derni\u00e8re mise \u00e0 jour", "last_position": "Derni\u00e8re position", "place_prefix_mooring": "\u00e0 quai, pr\u00e8s de {name}", "place_prefix_water": "sur l'eau, pr\u00e8s de {name}", "vessel_call_sign": "Indicatif d'appel", "noscript_warning": "Les boutons \u00ab Carte \u00bb, \u00ab D\u00e9tails \u00bb et \u00ab Remarque \u00bb de ce journal de bord n\u00e9cessitent JavaScript pour s'ouvrir. La plupart des messageries suppriment cela des pi\u00e8ces jointes -- si c'est le cas ici, ouvrez ce fichier dans un vrai navigateur (Chrome, Edge, Firefox, Safari, ...) plut\u00f4t que de le consulter directement depuis l'e-mail.", "header_seq_abbr": "N\u00b0", "header_seq_full": "Num\u00e9ro", "header_date": "Date", "header_departure_abbr": "D\u00e9p.", "header_departure_full": "D\u00e9part", "header_from": "De", "header_arrival_abbr": "Arr.", "header_arrival_full": "Arriv\u00e9e", "header_to": "\u00c0", "header_duration": "Dur\u00e9e", "header_distance": "Distance", "header_avg_speed": "Vit. moy.", "header_max_speed": "Vit. max", "header_fuel": "Carburant", "header_l_per_nm": "L/nm", "header_engine_hours": "Heures moteur", "header_rpm": "R\u00e9gime", "header_water_temp": "Temp\u00e9rature de l'eau", "header_outside_temp": "Temp\u00e9rature ext\u00e9rieure", "header_humidity": "Humidit\u00e9", "header_motion": "Mouvement", "header_route": "Trajet", "header_details": "Journal", "header_remarks": "Remarques", "week_label_prefix": "Semaine", "overview_link": "Aper\u00e7u", "overview_dialog_title": "Aper\u00e7u {year}", "layout_theme": "Th\u00e8me", "layout_view": "Affichage", "layout_auto": "Auto", "layout_light": "Clair", "layout_dark": "Sombre", "layout_cards": "Cartes", "layout_table": "Tableau", "totals_more": "Plus", "totals_less": "Moins", "totals_trips": "Trajets", "totals_distance": "Distance totale", "totals_hours": "Heures de navigation totales", "totals_fuel_calculated": "Carburant total", "totals_fuel_engine_meter": "Carburant total (compteur moteur)", "totals_avg_consumption": "Consommation moy.", "totals_avg_speed": "Vitesse moy.", "totals_top_speed": "Vitesse max", "totals_engine_hour_meter": "Compteur horaire moteur", "totals_engine_hour_meter_engine": "Compteur horaire moteur, moteur {instance}", "totals_hours_logged": "Heures moteur enregistr\u00e9es", "totals_hours_logged_engine": "Heures moteur enregistr\u00e9es, moteur {instance}", "motion_roll": "roulis", "motion_pitch": "tangage", "motion_peak": "pic", "rpm_tooltip_single": "moy. {avg} nd \u00e0 ce r\u00e9gime ({min}-{max} nd)", "rpm_tooltip_single_fuel": "moy. {avg} nd \u00e0 ce r\u00e9gime ({min}-{max} nd), conso. moy. {fuel} L/nm", "rpm_tooltip_per_engine": "moteur {instance} : moy. {avg} nd ({min}-{max} nd)", "rpm_tooltip_per_engine_fuel": "moteur {instance} : moy. {avg} nd ({min}-{max} nd), conso. moy. {fuel} L/nm", "max_speed_tooltip_single": "\u00e0 {time} \u00e0 {rpm} tr/min", "max_speed_tooltip_per_engine": "\u00e0 {time}, moteur {instance} : {rpm} tr/min", "map_button_show": "Carte", "map_marker_departure": "D\u00e9part", "map_marker_arrival": "Arriv\u00e9e", "map_marker_max_speed": "Vitesse max.", "details_button": "Journal", "log_close_button": "Fermer", "log_header_number": "N\u00b0", "log_header_time": "Heure", "log_header_position": "Position", "log_header_cog": "Cap", "log_header_sog": "Vitesse", "log_header_stw": "Vitesse (eau)", "log_header_wind_instrument": "Vent (instrument)", "log_header_wind": "Vent", "log_header_precip": "Pr\u00e9cip.", "log_header_cloud": "Nuages", "log_header_wave": "Vagues", "log_header_current": "Courant", "remarks_button_placeholder": "Remarque", "remarks_save_button": "Enregistrer", "remarks_cancel_button": "Annuler", "remarks_close_button": "Fermer", "remarks_save_forbidden": "Votre compte n'est pas autoris\u00e9 \u00e0 enregistrer des remarques.", "remarks_save_failed": "\u00c9chec de l'enregistrement, veuillez r\u00e9essayer.", "remarks_unavailable": "Les remarques n'ont pas pu \u00eatre charg\u00e9es.", "remarks_local_only": "Les remarques ne sont disponibles que sur le site, pas dans l'affichage local."}, "de": {"logbook_title_suffix": "Bordbuch", "last_updated": "Zuletzt aktualisiert", "last_position": "Letzte Position", "place_prefix_mooring": "am Kai, bei {name}", "place_prefix_water": "auf dem Wasser, bei {name}", "vessel_call_sign": "Rufzeichen", "noscript_warning": "Die Schaltfl\u00e4chen \"Karte\", \"Details\" und \"Bemerkung\" in diesem Bordbuch ben\u00f6tigen JavaScript zum \u00d6ffnen. Die meisten E-Mail-Programme entfernen das aus Anh\u00e4ngen -- \u00f6ffnen Sie diese Datei in dem Fall in einem echten Browser (Chrome, Edge, Firefox, Safari, ...), statt sie direkt aus der E-Mail zu \u00f6ffnen.", "header_seq_abbr": "Nr.", "header_seq_full": "Laufende Nr.", "header_date": "Datum", "header_departure_abbr": "Abf.", "header_departure_full": "Abfahrt", "header_from": "Von", "header_arrival_abbr": "Ank.", "header_arrival_full": "Ankunft", "header_to": "Nach", "header_duration": "Dauer", "header_distance": "Distanz", "header_avg_speed": "Durchschn. Geschw.", "header_max_speed": "Max. Geschw.", "header_fuel": "Kraftstoff", "header_l_per_nm": "L/sm", "header_engine_hours": "Motorstunden", "header_rpm": "Drehzahl", "header_water_temp": "Wassertemperatur", "header_outside_temp": "Au\u00dfentemperatur", "header_humidity": "Luftfeuchtigkeit", "header_motion": "Bewegung", "header_route": "Route", "header_details": "Log", "header_remarks": "Bemerkungen", "week_label_prefix": "Woche", "overview_link": "\u00dcbersicht", "overview_dialog_title": "\u00dcbersicht {year}", "layout_theme": "Design", "layout_view": "Ansicht", "layout_auto": "Auto", "layout_light": "Hell", "layout_dark": "Dunkel", "layout_cards": "Karten", "layout_table": "Tabelle", "totals_more": "Mehr", "totals_less": "Weniger", "totals_trips": "Fahrten", "totals_distance": "Gesamtdistanz", "totals_hours": "Gesamte Fahrstunden", "totals_fuel_calculated": "Gesamter Kraftstoff", "totals_fuel_engine_meter": "Gesamter Kraftstoff (Motorz\u00e4hler)", "totals_avg_consumption": "Durchschn. Verbrauch", "totals_avg_speed": "Durchschn. Geschw.", "totals_top_speed": "H\u00f6chstgeschwindigkeit", "totals_engine_hour_meter": "Betriebsstundenz\u00e4hler", "totals_engine_hour_meter_engine": "Betriebsstundenz\u00e4hler, Motor {instance}", "totals_hours_logged": "Erfasste Motorstunden", "totals_hours_logged_engine": "Erfasste Motorstunden, Motor {instance}", "motion_roll": "Rollen", "motion_pitch": "Stampfen", "motion_peak": "Spitze", "rpm_tooltip_single": "durchschn. {avg} kn bei dieser Drehzahl ({min}-{max} kn)", "rpm_tooltip_single_fuel": "durchschn. {avg} kn bei dieser Drehzahl ({min}-{max} kn), durchschn. Verbrauch {fuel} L/sm", "rpm_tooltip_per_engine": "Motor {instance}: durchschn. {avg} kn ({min}-{max} kn)", "rpm_tooltip_per_engine_fuel": "Motor {instance}: durchschn. {avg} kn ({min}-{max} kn), durchschn. Verbrauch {fuel} L/sm", "max_speed_tooltip_single": "um {time} bei {rpm} U/min", "max_speed_tooltip_per_engine": "um {time}, Motor {instance}: {rpm} U/min", "map_button_show": "Karte", "map_marker_departure": "Abfahrt", "map_marker_arrival": "Ankunft", "map_marker_max_speed": "H\u00f6chstgeschwindigkeit", "details_button": "Log", "log_close_button": "Schlie\u00dfen", "log_header_number": "Nr.", "log_header_time": "Zeit", "log_header_position": "Position", "log_header_cog": "Kurs", "log_header_sog": "Geschwindigkeit", "log_header_stw": "Geschwindigkeit (Wasser)", "log_header_wind_instrument": "Wind (Instrument)", "log_header_wind": "Wind", "log_header_precip": "Niederschlag", "log_header_cloud": "Bew\u00f6lkung", "log_header_wave": "Wellen", "log_header_current": "Str\u00f6mung", "remarks_button_placeholder": "Bemerkung", "remarks_save_button": "Speichern", "remarks_cancel_button": "Abbrechen", "remarks_close_button": "Schlie\u00dfen", "remarks_save_forbidden": "Dein Konto darf keine Bemerkungen speichern.", "remarks_save_failed": "Speichern ist fehlgeschlagen, bitte versuche es erneut.", "remarks_unavailable": "Bemerkungen konnten nicht geladen werden.", "remarks_local_only": "Bemerkungen sind nur auf der Website verf\u00fcgbar, nicht in der lokalen Ansicht."}};
 const MONTH_ABBR_BY_LANG = {"nl": {"Jan": "jan", "Feb": "feb", "Mar": "mrt", "Apr": "apr", "May": "mei", "Jun": "jun", "Jul": "jul", "Aug": "aug", "Sep": "sep", "Oct": "okt", "Nov": "nov", "Dec": "dec"}, "en": {"Jan": "Jan", "Feb": "Feb", "Mar": "Mar", "Apr": "Apr", "May": "May", "Jun": "Jun", "Jul": "Jul", "Aug": "Aug", "Sep": "Sep", "Oct": "Oct", "Nov": "Nov", "Dec": "Dec"}, "fr": {"Jan": "janv", "Feb": "f\u00e9vr", "Mar": "mars", "Apr": "avr", "May": "mai", "Jun": "juin", "Jul": "juil", "Aug": "ao\u00fbt", "Sep": "sept", "Oct": "oct", "Nov": "nov", "Dec": "d\u00e9c"}, "de": {"Jan": "Jan", "Feb": "Feb", "Mar": "Mar", "Apr": "Apr", "May": "Mai", "Jun": "Jun", "Jul": "Jul", "Aug": "Aug", "Sep": "Sep", "Oct": "Okt", "Nov": "Nov", "Dec": "Dez"}};
 const BOAT_NAME = "Zeezwaluw";
 let currentLang = 'nl';
@@ -701,7 +850,20 @@ document.querySelectorAll('.show-log').forEach(function(btn) {
   });
   enableDialogDrag(dialog);
 })();
-if (REMARKS_API_URL) {
+// Remarks live in WordPress and are read/saved with the visitor's WordPress login session, so they
+// only exist when this page is served from the site itself. Opened as a local file (double-clicked,
+// or the Android app's own view of the logbook) there is no session and the fetch could only fail:
+// the button is disabled up front, with the reason as its tooltip (re-translated on a language
+// switch via data-i18n-title, see applyLanguage), instead of opening an empty, unsavable dialog.
+var servedFromSite = location.protocol === 'http:' || location.protocol === 'https:';
+if (REMARKS_API_URL && !servedFromSite) {
+  document.querySelectorAll('.show-remarks').forEach(function(btn) {
+    btn.disabled = true;
+    btn.dataset.i18nTitle = 'remarks_local_only';
+    btn.title = I18N[currentLang].remarks_local_only;
+  });
+}
+if (REMARKS_API_URL && servedFromSite) {
   var remarksButtonsByUid = {};
   document.querySelectorAll('.show-remarks').forEach(function(btn) {
     var dialog = document.getElementById('remarks-' + btn.dataset.trip);
@@ -843,6 +1005,97 @@ if (REMARKS_API_URL) {
   window.addEventListener('scroll', updateBar);
   window.addEventListener('resize', updateBar);
   updateBar();
+})();
+</script>
+<script>
+// The parts of the card layout that need the page itself (logbook-layout.css has the look; logbook-prefs.js decides when it is
+// on): the two buttons, the "More" button of the totals, and the labels of the cells of a card. Inlined at the end of <body> by
+// html_writer.py, after the script that defines I18N and the language switcher.
+(function () {
+  var root = document.documentElement;
+  var MAIN_TOTALS = ['totals_trips', 'totals_distance', 'totals_hours', 'totals_top_speed'];
+  var moreButtons = [];
+
+  function text(key) {
+    var table = I18N[root.lang] || I18N.en;
+    return table[key] !== undefined ? table[key] : key;
+  }
+
+  // The two buttons, after the language buttons.
+  var bar = document.createElement('div');
+  bar.className = 'view-controls';
+  var buttons = {};
+  ['theme', 'view'].forEach(function (name) {
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'view-ctl';
+    button.addEventListener('click', function () { logbookPrefs.cycle(name); });
+    bar.appendChild(button);
+    buttons[name] = button;
+  });
+  var langSwitcher = document.querySelector('.lang-switcher');
+  if (langSwitcher) langSwitcher.parentNode.insertBefore(bar, langSwitcher.nextSibling);
+
+  // With a single year the totals at the top repeat the ones of that year.
+  var topTotals = document.querySelector('body > section.totals');
+  if (document.querySelectorAll('section.year').length === 1 && topTotals) topTotals.classList.add('totals-redundant');
+
+  // Four main tiles, the rest behind "More" (only in the cards layout, see the css).
+  document.querySelectorAll('section.totals').forEach(function (totals) {
+    if (totals.classList.contains('totals-redundant')) return;
+    totals.querySelectorAll('.stat').forEach(function (stat) {
+      var label = stat.querySelector('[data-i18n]');
+      var place = label ? MAIN_TOTALS.indexOf(label.dataset.i18n) : -1;
+      if (place >= 0) {
+        stat.classList.add('main');
+        stat.style.order = place;
+      } else {
+        stat.style.order = MAIN_TOTALS.length;
+      }
+    });
+    var more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'totals-more';
+    more.addEventListener('click', function () { totals.classList.toggle('expanded'); refreshTexts(); });
+    totals.parentNode.insertBefore(more, totals.nextSibling);
+    moreButtons.push([more, totals]);
+  });
+
+  function refreshTexts() {
+    var prefs = logbookPrefs.get();
+    buttons.theme.textContent = text('layout_theme') + ': ' + text('layout_' + prefs.theme);
+    buttons.view.textContent = text('layout_view') + ': ' + text('layout_' + prefs.view);
+    moreButtons.forEach(function (pair) {
+      pair[0].textContent = text(pair[1].classList.contains('expanded') ? 'totals_less' : 'totals_more');
+    });
+  }
+
+  // The label above a value in a card is the header of its column in the (then hidden) table header.
+  function labelCells() {
+    document.querySelectorAll('table.trips').forEach(function (table) {
+      var headers = table.tHead ? table.tHead.querySelectorAll('th') : [];
+      table.tBodies[0].querySelectorAll(':scope > tr.trip-row').forEach(function (row) {
+        Array.prototype.forEach.call(row.children, function (cell, i) {
+          if (!headers[i]) return;
+          var full = headers[i].querySelector('.hdr-full');
+          cell.setAttribute('data-label', (full || headers[i]).textContent.trim());
+        });
+      });
+    });
+  }
+
+  function refresh() {
+    labelCells();
+    refreshTexts();
+  }
+  refresh();
+  document.addEventListener('logbookprefs', refreshTexts);
+  // The language switcher rewrites the headers and sets <html lang>.
+  var observer = new MutationObserver(refresh);
+  document.querySelectorAll('table.trips > thead').forEach(function (head) {
+    observer.observe(head, {subtree: true, childList: true, characterData: true});
+  });
+  observer.observe(root, {attributes: true, attributeFilter: ['lang']});
 })();
 </script>
 </body>
