@@ -348,18 +348,18 @@ def test_upload_via_rest_raises_on_a_response_that_isnt_the_plugins_own_success_
         upload_via_rest(b"x", url="https://example.org/wp-json/nmea2log/v1/logbook", user="alice", app_password="pw")
 
 
-def test_logbook_page_address_is_the_site_and_the_boats_own_page():
-    from nmea2log.upload import logbook_page_address
+def test_upload_via_rest_returns_the_page_the_plugin_says_the_logbook_is_at(monkeypatch):
+    body = b'{"ok":true,"bytes":2048,"url":"https://example.org/little_endian/"}'
+    monkeypatch.setattr(urllib.request, "urlopen", lambda request, timeout=None: _FakeHttpResponse(body))
 
-    assert logbook_page_address("your-site.example", "Little Endian") == "https://your-site.example/little_endian/"
-    assert logbook_page_address("https://Your-Site.example/wp-json/nmea2log/v1/logbook", "Sea Swallow") == "https://your-site.example/sea_swallow/"
-    assert logbook_page_address("http://your-site.example", "Zee-Zwaluw") == "http://your-site.example/zee_zwaluw/"
-    # Accents and punctuation the way WordPress's slug drops them; a boat with no name gets the site's default page.
-    assert logbook_page_address("your-site.example", "Séa Swallow's 2") == "https://your-site.example/sea_swallows_2/"
-    assert logbook_page_address("your-site.example", "") == "https://your-site.example/logboek/"
+    page = upload_via_rest(b"x", url="https://example.org/wp-json/nmea2log/v1/logbook", user="alice", app_password="pw")
+
+    assert page == "https://example.org/little_endian/"
 
 
-def test_logbook_page_address_is_blank_without_a_site_address():
-    from nmea2log.upload import logbook_page_address
+def test_upload_via_rest_returns_nothing_for_a_plugin_that_does_not_say(monkeypatch):
+    # The reply of a plugin from before "url" existed -- and a "url" that is not a web address is not trusted either.
+    for body in (b'{"ok":true,"bytes":2048}', b'{"ok":true,"url":"javascript:alert(1)"}', b'{"ok":true,"url":5}'):
+        monkeypatch.setattr(urllib.request, "urlopen", lambda request, timeout=None, body=body: _FakeHttpResponse(body))
 
-    assert logbook_page_address("  ", "Little Endian") == ""
+        assert upload_via_rest(b"x", url="https://example.org/wp-json/nmea2log/v1/logbook", user="alice", app_password="pw") == ""

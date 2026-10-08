@@ -606,5 +606,11 @@ function nmea2log_logbook_upload(WP_REST_Request $request) {
         return new WP_Error('logbook_rename_failed', 'Could not finalize the uploaded file', ['status' => 500]);
     }
 
-    return rest_ensure_response(['ok' => true, 'bytes' => strlen($html)]);
+    // "url": where this boat's logbook page can be read (the apps' "view live site" action opens it) -- made here, by the same
+    // function the invite emails use, so there is one place that knows how a boat's page is named.
+    return rest_ensure_response([
+        'ok' => true,
+        'bytes' => strlen($html),
+        'url' => nmea2log_logbook_url_for_user(get_current_user_id()),
+    ]);
 }

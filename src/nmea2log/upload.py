@@ -20,12 +20,9 @@ from __future__ import annotations
 
 import base64
 import json
-import re
 import subprocess
 import tempfile
-import unicodedata
 import urllib.error
-import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import List
@@ -69,29 +66,7 @@ def normalize_rest_upload_url(value: str) -> str:
     return stripped.rstrip("/") + _REST_ROUTE_SUFFIX
 
 
-def logbook_page_address(publish_address: str, boat_name: str) -> str:
-    """Where the published logbook can be read: the site's address (from what was typed as the publish address) and the boat's
-    own page on it, ``https://your-site.example/little_endian/`` for a boat called "Little Endian" -- the plugin derives that
-    page from the boat name the same way (``nmea2log_slug_from_boat_name()``: WordPress's slug, with underscores). For the
-    "view live site" action after a publish. Blank when no site address was typed. The site's default page (``logboek``) is
-    the one without a boat name."""
-    full = normalize_rest_upload_url(publish_address)
-    parts = urllib.parse.urlsplit(full)
-    if not full or not parts.scheme or not parts.netloc:
-        return ""
-    return f"{parts.scheme}://{parts.netloc}/{_boat_slug(boat_name)}/"
-
-
-def _boat_slug(boat_name: str) -> str:
-    """The boat name as the plugin's page name: lowercase, accents dropped, anything but letters and digits a separator
-    (WordPress's ``sanitize_title``), and an underscore as separator."""
-    text = unicodedata.normalize("NFKD", boat_name).encode("ascii", "ignore").decode("ascii").lower()
-    text = text.replace("'", "")
-    text = re.sub(r"[^a-z0-9]+", "_", text).strip("_")
-    return text or "logboek"
-
-
-def upload_via_rest(html_content: bytes, url: str, user: str, app_password: str) -> None:
+def upload_via_rest(html_content: bytes, url: str, user: str, app_password: str) -> str:
     """Posts the built HTML logbook to a WordPress REST endpoint (see wordpress-plugin/
     nmea2log-remarks.php's ``nmea2log_logbook_upload()``) instead of over SFTP -- no SSH key
     needed on this machine, just a WordPress Application Password (Users > Profile > Application
@@ -101,7 +76,10 @@ def upload_via_rest(html_content: bytes, url: str, user: str, app_password: str)
     The raw HTML bytes are the request body, not wrapped in a JSON envelope: at several hundred
     KB, that would only add escaping overhead for no benefit, and the server side reads the raw
     body the same way. Raises ``UploadError`` with the server's own message on anything but a
-    success response, same contract as ``upload_file``."""
+    success response, same contract as ``upload_file``.
+
+    Returns the address of the page the logbook can be read at, which the plugin's reply carries as ``url`` (the plugin is the one
+    place that knows how a boat's page is named). "" for a plugin from before that existed, or a reply with something else in it."""
     credentials = base64.b64encode(f"{user}:{app_password}".encode("utf-8")).decode("ascii")
     request = urllib.request.Request(
         url,
@@ -132,7 +110,7 @@ def upload_via_rest(html_content: bytes, url: str, user: str, app_password: str)
     # 301/302 back, which urllib follows *silently*, converting the POST to a GET as it does so --
     # the login page it landed on then answered 200, with the logbook itself dropped on the floor
     # by the redirect, and this function returning normally as if it had succeeded. The plugin's
-    # own success response is always exactly ``{"ok": true, "bytes": <int>}`` (see
+    # own success response is always ``{"ok": true, "bytes": <int>, "url": <page>}`` ("url" only from a plugin that has it; see
     # nmea2log_logbook_upload() in wordpress-plugin/nmea2log-remarks.php), so anything else --
     # wrong content type, a login form, an unrelated JSON shape -- is treated as a failure here,
     # regardless of the HTTP status code that got it there.
@@ -145,6 +123,8 @@ def upload_via_rest(html_content: bytes, url: str, user: str, app_password: str)
     if not isinstance(result, dict) or result.get("ok") is not True:
         preview = body[:200].decode("utf-8", errors="replace")
         raise UploadError(f"Unexpected response, not the plugin's own success reply -- check the configured URL: {preview!r}")
+    page = result.get("url")
+    return page if isinstance(page, str) and page.startswith(("http://", "https://")) else ""
 
 
 def _sftp_error_message(result: subprocess.CompletedProcess) -> str:
