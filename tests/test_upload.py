@@ -348,11 +348,18 @@ def test_upload_via_rest_raises_on_a_response_that_isnt_the_plugins_own_success_
         upload_via_rest(b"x", url="https://example.org/wp-json/nmea2log/v1/logbook", user="alice", app_password="pw")
 
 
-def test_site_address_is_the_site_itself_whatever_form_the_publish_address_has():
-    from nmea2log.upload import site_address
+def test_logbook_page_address_is_the_site_and_the_boats_own_page():
+    from nmea2log.upload import logbook_page_address
 
-    assert site_address("your-site.example") == "https://your-site.example/"
-    assert site_address("https://your-site.example/") == "https://your-site.example/"
-    assert site_address("http://your-site.example") == "http://your-site.example/"
-    assert site_address("https://Your-Site.example/wp-json/nmea2log/v1/logbook") == "https://your-site.example/"
-    assert site_address("  ") == ""
+    assert logbook_page_address("your-site.example", "Little Endian") == "https://your-site.example/little_endian/"
+    assert logbook_page_address("https://Your-Site.example/wp-json/nmea2log/v1/logbook", "Sea Swallow") == "https://your-site.example/sea_swallow/"
+    assert logbook_page_address("http://your-site.example", "Zee-Zwaluw") == "http://your-site.example/zee_zwaluw/"
+    # Accents and punctuation the way WordPress's slug drops them; a boat with no name gets the site's default page.
+    assert logbook_page_address("your-site.example", "Séa Swallow's 2") == "https://your-site.example/sea_swallows_2/"
+    assert logbook_page_address("your-site.example", "") == "https://your-site.example/logboek/"
+
+
+def test_logbook_page_address_is_blank_without_a_site_address():
+    from nmea2log.upload import logbook_page_address
+
+    assert logbook_page_address("  ", "Little Endian") == ""

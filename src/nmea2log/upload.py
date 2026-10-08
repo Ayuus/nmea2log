@@ -20,8 +20,10 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import subprocess
 import tempfile
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -67,16 +69,26 @@ def normalize_rest_upload_url(value: str) -> str:
     return stripped.rstrip("/") + _REST_ROUTE_SUFFIX
 
 
-def site_address(value: str) -> str:
-    """The address of the website itself (``https://your-site.example/``) from what was typed as the publish address, for the
-    "view live site" action after a publish. Blank when nothing usable was typed."""
-    full = normalize_rest_upload_url(value)
-    if not full:
-        return ""
+def logbook_page_address(publish_address: str, boat_name: str) -> str:
+    """Where the published logbook can be read: the site's address (from what was typed as the publish address) and the boat's
+    own page on it, ``https://your-site.example/little_endian/`` for a boat called "Little Endian" -- the plugin derives that
+    page from the boat name the same way (``nmea2log_slug_from_boat_name()``: WordPress's slug, with underscores). For the
+    "view live site" action after a publish. Blank when no site address was typed. The site's default page (``logboek``) is
+    the one without a boat name."""
+    full = normalize_rest_upload_url(publish_address)
     parts = urllib.parse.urlsplit(full)
-    if not parts.scheme or not parts.netloc:
+    if not full or not parts.scheme or not parts.netloc:
         return ""
-    return f"{parts.scheme}://{parts.netloc}/"
+    return f"{parts.scheme}://{parts.netloc}/{_boat_slug(boat_name)}/"
+
+
+def _boat_slug(boat_name: str) -> str:
+    """The boat name as the plugin's page name: lowercase, accents dropped, anything but letters and digits a separator
+    (WordPress's ``sanitize_title``), and an underscore as separator."""
+    text = unicodedata.normalize("NFKD", boat_name).encode("ascii", "ignore").decode("ascii").lower()
+    text = text.replace("'", "")
+    text = re.sub(r"[^a-z0-9]+", "_", text).strip("_")
+    return text or "logboek"
 
 
 def upload_via_rest(html_content: bytes, url: str, user: str, app_password: str) -> None:
