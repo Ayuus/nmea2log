@@ -29,7 +29,13 @@
  * right away, with only the password left for the reader to set themselves, via WordPress's own
  * password-reset link (get_password_reset_key(), the same mechanism as "lost your password" on
  * the login page) -- no separate invite page or token of this plugin's own needed for that.
- * Version: 1.7.0
+ *
+ * Since 1.8.0, the reply to a logbook upload carries "url", the boat's logbook page (the apps' "view live
+ * site" action opens it), and WordPress shows update notices for this plugin, taken from this project's
+ * GitHub repository (see the end of this file).
+ *
+ * Version: 1.8.0
+ * Update URI: https://github.com/Ayuus/nmea2log
  */
 
 if (!defined('ABSPATH')) {
@@ -614,3 +620,82 @@ function nmea2log_logbook_upload(WP_REST_Request $request) {
         'url' => nmea2log_logbook_url_for_user(get_current_user_id()),
     ]);
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Updates. Since 1.8.0 WordPress shows "update available" for this plugin like for any other, taking the new version from
+// this project's repository on GitHub instead of wordpress.org: the "Update URI" header at the top is what tells WordPress
+// not to look at wordpress.org, and the filter below answers instead. The repository holds a small update.json (the newest
+// version, where its zip is, and the zip's SHA-256) and that zip, both made by wordpress-plugin/build_release.py -- a test
+// keeps them in step with this file. Only this file is updated: logbook-index.php and logbook-views.php live outside the
+// plugins folder and are still copied by hand.
+define('NMEA2LOG_UPDATE_URI', 'https://github.com/Ayuus/nmea2log');
+define('NMEA2LOG_UPDATE_MANIFEST_URL', 'https://raw.githubusercontent.com/Ayuus/nmea2log/main/wordpress-plugin/update.json');
+define('NMEA2LOG_UPDATE_PACKAGE_PREFIX', 'https://raw.githubusercontent.com/Ayuus/nmea2log/main/wordpress-plugin/');
+define('NMEA2LOG_UPDATE_TRANSIENT', 'nmea2log_update_manifest');
+
+// The manifest from GitHub as a checked array (version, package, sha256), or null: no internet, an answer that is not what
+// this code expects, or a package address somewhere else than this project's repository. Cached for six hours (half an hour
+// after a failure, so a GitHub hiccup does not hide an update for long and does not make every admin page slow).
+function nmea2log_update_manifest(): ?array {
+    $cached = get_site_transient(NMEA2LOG_UPDATE_TRANSIENT);
+    if (is_array($cached)) {
+        return $cached ?: null;
+    }
+    $manifest = null;
+    $response = wp_remote_get(NMEA2LOG_UPDATE_MANIFEST_URL, ['timeout' => 10]);
+    if (!is_wp_error($response) && wp_remote_retrieve_response_code($response) === 200) {
+        $data = json_decode(wp_remote_retrieve_body($response), true);
+        if (is_array($data)
+            && isset($data['version'], $data['package'], $data['sha256'])
+            && is_string($data['version']) && preg_match('/^\d+(\.\d+){1,2}$/', $data['version'])
+            && is_string($data['package']) && strpos($data['package'], NMEA2LOG_UPDATE_PACKAGE_PREFIX) === 0
+            && is_string($data['sha256']) && preg_match('/^[0-9a-f]{64}$/', $data['sha256'])) {
+            $manifest = [
+                'version' => $data['version'],
+                'package' => $data['package'],
+                'sha256' => $data['sha256'],
+            ];
+        }
+    }
+    set_site_transient(NMEA2LOG_UPDATE_TRANSIENT, $manifest ?? [], $manifest ? 6 * HOUR_IN_SECONDS : 30 * MINUTE_IN_SECONDS);
+    return $manifest;
+}
+
+// WordPress asks, for a plugin whose "Update URI" has the host github.com, what its newest version is. Answering with an
+// array whose version is higher than the installed one is what makes the update notice (and its update button) appear.
+add_filter('update_plugins_github.com', function ($update, array $plugin_data, string $plugin_file, array $locales) {
+    if (($plugin_data['UpdateURI'] ?? '') !== NMEA2LOG_UPDATE_URI) {
+        return $update;
+    }
+    $manifest = nmea2log_update_manifest();
+    if ($manifest === null) {
+        return $update;
+    }
+    return [
+        'id' => NMEA2LOG_UPDATE_URI,
+        'slug' => dirname($plugin_file),
+        'plugin' => $plugin_file,
+        'version' => $manifest['version'],
+        'url' => NMEA2LOG_UPDATE_URI,
+        'package' => $manifest['package'],
+    ];
+}, 10, 4);
+
+// Before WordPress installs this plugin's zip: download it and compare its SHA-256 with the manifest's. A zip that is cut off, or
+// belongs to another version than the manifest (GitHub's raw files are cached for a few minutes), is refused and the installed
+// plugin stays as it is.
+add_filter('upgrader_pre_download', function ($reply, $package, $upgrader, $hook_extra) {
+    if (!is_string($package) || strpos($package, NMEA2LOG_UPDATE_PACKAGE_PREFIX) !== 0) {
+        return $reply;
+    }
+    $manifest = nmea2log_update_manifest();
+    $file = download_url($package);
+    if (is_wp_error($file)) {
+        return $file;
+    }
+    if ($manifest === null || !hash_equals($manifest['sha256'], hash_file('sha256', $file))) {
+        @unlink($file);
+        return new WP_Error('nmea2log_update_checksum', 'The downloaded update does not match its checksum; nothing was changed.');
+    }
+    return $file;
+}, 10, 4);

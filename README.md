@@ -316,9 +316,22 @@ visitor regardless of where it lives. Even so, each boat gets its own deployment
 below), at a fixed URL derived from its own boat slug alone -- purely so each boat has its own
 memorable URL and its invite emails need no separate URL configured anywhere.
 
+**Updates of the plugin**: from version 1.8.0 on, WordPress shows "update available" for this plugin in wp-admin → Plugins
+(and on the Dashboard > Updates page) like for any other plugin, and updates it with one click. The new version comes from this
+repository, not from wordpress.org: the plugin's `Update URI` header points here, and the update code at the end of
+`nmea2log-remarks.php` reads `wordpress-plugin/update.json` (newest version, where its zip is, the zip's SHA-256) and installs
+`wordpress-plugin/nmea2log-remarks.zip` only when its checksum matches. Only that one file is updated that way:
+`logbook-index.php` and `logbook-views.php` (step 4 below) live outside the plugins folder and are copied by hand. Version
+1.7.0 or older has no update code: replace the file once by hand, after that the updates come by themselves.
+
+*Releasing a change to the plugin*: raise `Version:` in the header of `nmea2log-remarks.php`, run
+`python wordpress-plugin/build_release.py` (it makes the zip and `update.json`) and commit all three files together; a test
+(`tests/test_wordpress_plugin.py`) fails when they do not match.
+
 **Installing the plugin** (one-time setup on the WordPress site):
 
-1. Upload `wordpress-plugin/nmea2log-remarks.php` to `wp-content/plugins/nmea2log-remarks/` and
+1. Upload `wordpress-plugin/nmea2log-remarks.php` to `wp-content/plugins/nmea2log-remarks/` (the folder must be called
+   that) and
    activate it in wp-admin → Plugins. It registers two purpose-built roles -- deliberately not
    reusing any built-in WordPress role, since those can already be in use for unrelated things on
    an existing site (webshop customers, existing contributors, ...): "Logbook Writer" (can view,
