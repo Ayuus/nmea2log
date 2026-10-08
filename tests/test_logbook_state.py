@@ -71,3 +71,22 @@ def test_publish_skips_the_build_when_the_logbook_is_current_and_builds_when_it_
     android_entry.build_from_local_files(*args, min_stop_minutes=5.0, skip_if_current=True)  # a setting changed
     android_entry.build_from_local_files(*args, min_stop_minutes=10.0)  # not asked to skip
     assert built == [1, 1]
+
+
+def test_code_fingerprint_covers_the_css_and_javascript_of_the_page(monkeypatch):
+    # A page file that changes (an app update with a new look) must make an already built logbook out of date: the Publish
+    # button would otherwise send the old page as it is.
+    names = [entry.name for entry in logbook_state._page_files()]
+    assert "logbook-layout.css" in names and "logbook-layout.js" in names and "logbook-prefs.js" in names
+    assert not any(name.endswith(".html") for name in names)
+
+    before = logbook_state.code_fingerprint()
+
+    class _Changed:
+        name = "logbook-layout.css"
+
+        def read_bytes(self):
+            return b"changed"
+
+    monkeypatch.setattr(logbook_state, "_page_files", lambda: [_Changed()])
+    assert logbook_state.code_fingerprint() != before

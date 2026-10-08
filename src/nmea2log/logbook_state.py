@@ -11,17 +11,28 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+from importlib import resources
 from pathlib import Path
 from typing import Iterable, Optional
 
 SIDECAR_NAME = ".logbook_inputs.json"
 
-# The modules whose code decides what the logbook looks like: a change in one of them (an app update) makes it out of date.
+# The modules whose code decides what the logbook looks like: a change in one of them (an app update) makes it out of date --
+# and so does a change in the css/javascript files of the page (assets/), which html_writer.py inlines.
 _CODE_MODULES = ("html_writer", "pipeline", "tripbuilder", "translations")
 
 
+def _page_files() -> list:
+    """The css and javascript files that html_writer.py puts in the page (assets/, not the help)."""
+    try:
+        folder = resources.files(__package__).joinpath("assets")
+        return sorted((entry for entry in folder.iterdir() if entry.name.endswith((".css", ".js"))), key=lambda entry: entry.name)
+    except (OSError, ImportError, ValueError, TypeError):
+        return []
+
+
 def code_fingerprint() -> str:
-    """A hash of the code that builds the logbook; "" for a module whose file cannot be read."""
+    """A hash of the code that builds the logbook, files of the page included; a file that cannot be read is left out."""
     digest = hashlib.sha1()
     for name in _CODE_MODULES:
         try:
@@ -29,6 +40,12 @@ def code_fingerprint() -> str:
             if spec is not None and spec.origin:
                 digest.update(Path(spec.origin).read_bytes())
         except (OSError, ImportError, ValueError):
+            continue
+    for entry in _page_files():
+        try:
+            digest.update(entry.name.encode("utf-8"))
+            digest.update(entry.read_bytes())
+        except OSError:
             continue
     return digest.hexdigest()
 
