@@ -346,3 +346,13 @@ def test_upload_via_rest_raises_on_a_response_that_isnt_the_plugins_own_success_
 
     with pytest.raises(UploadError, match="Unexpected response"):
         upload_via_rest(b"x", url="https://example.org/wp-json/nmea2log/v1/logbook", user="alice", app_password="pw")
+
+
+def test_site_address_is_the_site_itself_whatever_form_the_publish_address_has():
+    from nmea2log.upload import site_address
+
+    assert site_address("your-site.example") == "https://your-site.example/"
+    assert site_address("https://your-site.example/") == "https://your-site.example/"
+    assert site_address("http://your-site.example") == "http://your-site.example/"
+    assert site_address("https://Your-Site.example/wp-json/nmea2log/v1/logbook") == "https://your-site.example/"
+    assert site_address("  ") == ""

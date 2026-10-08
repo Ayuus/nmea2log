@@ -23,6 +23,7 @@ import json
 import subprocess
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import List
@@ -64,6 +65,18 @@ def normalize_rest_upload_url(value: str) -> str:
     if not stripped.startswith(("http://", "https://")):
         stripped = "https://" + stripped
     return stripped.rstrip("/") + _REST_ROUTE_SUFFIX
+
+
+def site_address(value: str) -> str:
+    """The address of the website itself (``https://your-site.example/``) from what was typed as the publish address, for the
+    "view live site" action after a publish. Blank when nothing usable was typed."""
+    full = normalize_rest_upload_url(value)
+    if not full:
+        return ""
+    parts = urllib.parse.urlsplit(full)
+    if not parts.scheme or not parts.netloc:
+        return ""
+    return f"{parts.scheme}://{parts.netloc}/"
 
 
 def upload_via_rest(html_content: bytes, url: str, user: str, app_password: str) -> None:
