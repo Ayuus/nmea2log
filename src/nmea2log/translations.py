@@ -70,14 +70,7 @@ NL: Dict[str, str] = {
     "overview_link": "Overzicht",
     "overview_dialog_title": "Overzicht {year}",
     # Totals cards
-    # Theme and layout buttons of the page; "More"/"Less" under the totals in the card layout
-    "layout_theme": "Thema",
-    "layout_view": "Weergave",
-    "layout_auto": "Auto",
-    "layout_light": "Licht",
-    "layout_dark": "Donker",
-    "layout_cards": "Kaarten",
-    "layout_table": "Tabel",
+    # "More"/"Less" under the totals in the card layout
     "totals_more": "Meer",
     "totals_less": "Minder",
     "totals_trips": "Reizen",
@@ -180,14 +173,7 @@ EN: Dict[str, str] = {
     "week_label_prefix": "Week",
     "overview_link": "Overview",
     "overview_dialog_title": "Overview {year}",
-    # Theme and layout buttons of the page; "More"/"Less" under the totals in the card layout
-    "layout_theme": "Theme",
-    "layout_view": "View",
-    "layout_auto": "Auto",
-    "layout_light": "Light",
-    "layout_dark": "Dark",
-    "layout_cards": "Cards",
-    "layout_table": "Table",
+    # "More"/"Less" under the totals in the card layout
     "totals_more": "More",
     "totals_less": "Less",
     "totals_trips": "Trips",
@@ -279,14 +265,7 @@ FR: Dict[str, str] = {
     "week_label_prefix": "Semaine",
     "overview_link": "Aperçu",
     "overview_dialog_title": "Aperçu {year}",
-    # Theme and layout buttons of the page; "More"/"Less" under the totals in the card layout
-    "layout_theme": "Thème",
-    "layout_view": "Affichage",
-    "layout_auto": "Auto",
-    "layout_light": "Clair",
-    "layout_dark": "Sombre",
-    "layout_cards": "Cartes",
-    "layout_table": "Tableau",
+    # "More"/"Less" under the totals in the card layout
     "totals_more": "Plus",
     "totals_less": "Moins",
     "totals_trips": "Trajets",
@@ -378,14 +357,7 @@ DE: Dict[str, str] = {
     "week_label_prefix": "Woche",
     "overview_link": "Übersicht",
     "overview_dialog_title": "Übersicht {year}",
-    # Theme and layout buttons of the page; "More"/"Less" under the totals in the card layout
-    "layout_theme": "Design",
-    "layout_view": "Ansicht",
-    "layout_auto": "Auto",
-    "layout_light": "Hell",
-    "layout_dark": "Dunkel",
-    "layout_cards": "Karten",
-    "layout_table": "Tabelle",
+    # "More"/"Less" under the totals in the card layout
     "totals_more": "Mehr",
     "totals_less": "Weniger",
     "totals_trips": "Fahrten",

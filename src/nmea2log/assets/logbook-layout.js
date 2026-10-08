@@ -1,6 +1,6 @@
 // The parts of the card layout that need the page itself (logbook-layout.css has the look; logbook-prefs.js decides when it is
-// on): the two buttons, the "More" button of the totals, and the labels of the cells of a card. Inlined at the end of <body> by
-// html_writer.py, after the script that defines I18N and the language switcher.
+// on): the "More" button of the totals, and the labels of the cells of a card. Inlined at the end of <body> by html_writer.py,
+// after the script that defines I18N and the language switcher.
 (function () {
   var root = document.documentElement;
   var MAIN_TOTALS = ['totals_trips', 'totals_distance', 'totals_hours', 'totals_top_speed'];
@@ -10,21 +10,6 @@
     var table = I18N[root.lang] || I18N.en;
     return table[key] !== undefined ? table[key] : key;
   }
-
-  // The two buttons, after the language buttons.
-  var bar = document.createElement('div');
-  bar.className = 'view-controls';
-  var buttons = {};
-  ['theme', 'view'].forEach(function (name) {
-    var button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'view-ctl';
-    button.addEventListener('click', function () { logbookPrefs.cycle(name); });
-    bar.appendChild(button);
-    buttons[name] = button;
-  });
-  var langSwitcher = document.querySelector('.lang-switcher');
-  if (langSwitcher) langSwitcher.parentNode.insertBefore(bar, langSwitcher.nextSibling);
 
   // With a single year the totals at the top repeat the ones of that year.
   var topTotals = document.querySelector('body > section.totals');
@@ -52,9 +37,6 @@
   });
 
   function refreshTexts() {
-    var prefs = logbookPrefs.get();
-    buttons.theme.textContent = text('layout_theme') + ': ' + text('layout_' + prefs.theme);
-    buttons.view.textContent = text('layout_view') + ': ' + text('layout_' + prefs.view);
     moreButtons.forEach(function (pair) {
       pair[0].textContent = text(pair[1].classList.contains('expanded') ? 'totals_less' : 'totals_more');
     });
@@ -79,7 +61,6 @@
     refreshTexts();
   }
   refresh();
-  document.addEventListener('logbookprefs', refreshTexts);
   // The language switcher rewrites the headers and sets <html lang>.
   var observer = new MutationObserver(refresh);
   document.querySelectorAll('table.trips > thead').forEach(function (head) {

@@ -1,21 +1,16 @@
-/* The look of the logbook page that goes beyond its base styles (html_writer.py): the two controls, a dark theme and a
+/* The look of the logbook page that goes beyond its base styles (html_writer.py): a dark theme and a
    card-per-trip layout for narrow screens. Everything is keyed on two classes of <html> that logbook-prefs.js sets:
    ``dark`` and ``cards``. Inlined into the page by html_writer.py, after the base styles. */
 
-/* ---------- the two controls ---------- */
-.view-controls { display: flex; gap: 0.3em; flex-wrap: wrap; justify-content: flex-end; }
-.view-ctl { cursor: pointer; border: 1px solid #ccc; background: #eef3fa; color: inherit; border-radius: 4px; padding: 0.2em 0.5em; font: inherit; font-size: 0.75em; }
 .totals-redundant { display: none !important; }
 .totals-more { display: none; }
-/* The app that shows the page has the same choices in its own Settings and tells the page (logbookPrefs.setFromHost). */
-html.host-prefs .view-controls { display: none; }
 
 /* ---------- dark theme ---------- */
 html.dark { color-scheme: dark; }
 html.dark body { background: #101317; color: #e6e8eb; }
 html.dark .vessel-info { color: #b8bec6; }
 html.dark .last-updated, html.dark .stat-label { color: #98a1ab; }
-html.dark .lang-flag, html.dark .lang-flag-text, html.dark .view-ctl { background: #1b2230; border-color: #364152; color: #e6e8eb; }
+html.dark .lang-flag, html.dark .lang-flag-text { background: #1b2230; border-color: #364152; color: #e6e8eb; }
 html.dark .lang-flag.active { border-color: #5aa2ff; box-shadow: 0 0 0 1px #5aa2ff inset; }
 html.dark h2 { border-bottom-color: #5aa2ff; }
 html.dark .stat { background: #1a1f26; box-shadow: none; border: 1px solid #262d36; }
@@ -40,7 +35,6 @@ html.cards body { padding: 0.8em; }
 html.cards h1 { font-size: 1.7em; }
 html.cards .header-right { align-items: flex-start; }
 html.cards .vessel-info { text-align: left; }
-html.cards .view-controls { justify-content: flex-start; }
 html.cards #h-scroll-bar { display: none !important; }
 html.cards .totals { grid-template-columns: repeat(2, 1fr) !important; margin: 0.8em 0 0.4em; }
 html.cards .totals:not(.expanded) .stat:not(.main) { display: none; }

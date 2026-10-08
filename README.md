@@ -179,10 +179,9 @@ the tests.
    wave/current data), sampled every `--log-interval-minutes` (default 30) plus always the trip's
    own start and end. Unlike the map, this needs no JavaScript or internet to display (native HTML
    `<details>`), so it also works when the file is opened from an email attachment.
-   The page follows the device: a dark theme when the device is in dark mode, and on a narrow
-   screen (a phone held upright) a card per trip instead of the wide table. Two buttons next to the
-   language buttons override both (theme: auto/light/dark, view: auto/cards/table); the Android and
-   iOS apps have the same choices in their Settings. The css and javascript of this live in
+   The page follows the device: a dark theme when the device is in dark mode (the Android and iOS
+   apps tell it what their Appearance setting says), and on a narrow screen (a phone held upright) a
+   card per trip instead of the wide table. The css and javascript of this live in
    `src/nmea2log/assets/` as plain files, which `html_writer.py` inlines into the page.
 
 ## Installation

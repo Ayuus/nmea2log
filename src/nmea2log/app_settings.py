@@ -51,21 +51,18 @@ DEFAULTS: Dict[str, Any] = {
     "boot_auto_start": False,
     # "light" / "dark" / "system".
     "theme_mode": "system",
-    # How the logbook page lays out its trips: "auto" (cards on a narrow screen, a table otherwise) / "cards" / "table".
-    "logbook_view": "auto",
+    # Whether the welcome that offers the help has been shown (it is shown once, and not at all to someone who has already
+    # filled in the W2K-2 login: an update must not greet them as a newcomer).
+    "help_seen": False,
 }
 
 
-LOGBOOK_VIEWS: Tuple[str, ...] = ("auto", "cards", "table")
-
-
-def logbook_prefs_script(theme_mode: str, logbook_view: str) -> str:
-    """The JavaScript an app runs in its web view once the logbook page has loaded, so the page follows the app's Settings
-    (the Appearance choice and the logbook layout) instead of its own buttons -- the apps' web views do not keep what the
-    page's buttons would store. See assets/logbook-prefs.js."""
+def logbook_prefs_script(theme_mode: str) -> str:
+    """The JavaScript an app runs in its web view once the logbook page has loaded, so the page follows the app's Appearance
+    setting; without it the page follows the device. (The layout is always automatic: cards on a narrow screen, a table on a
+    wide one.) See assets/logbook-prefs.js."""
     theme = {"light": "light", "dark": "dark"}.get(theme_mode, "auto")
-    view = logbook_view if logbook_view in LOGBOOK_VIEWS else DEFAULTS["logbook_view"]
-    return f"window.logbookPrefs && window.logbookPrefs.setFromHost({{theme: '{theme}', view: '{view}'}});"
+    return f"window.logbookPrefs && window.logbookPrefs.setFromHost({{theme: '{theme}'}});"
 
 
 def parse_int(text: object, default: int, minimum: Optional[int] = None) -> int:

@@ -304,29 +304,47 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "fr": "Suivre l'appareil",
         "de": "Gerät folgen",
     },
-    "label_logbook_layout": {
-        "en": "Logbook layout",
-        "nl": "Layout logboek",
-        "fr": "Présentation du journal",
-        "de": "Logbuch-Layout",
+    "button_help": {
+        "en": "Help and manual",
+        "nl": "Help en handleiding",
+        "fr": "Aide et mode d'emploi",
+        "de": "Hilfe und Anleitung",
     },
-    "radio_layout_auto": {
-        "en": "Automatic (cards on a phone)",
-        "nl": "Automatisch (kaarten op een telefoon)",
-        "fr": "Automatique (cartes sur un téléphone)",
-        "de": "Automatisch (Karten auf einem Telefon)",
+    "button_close": {
+        "en": "Close",
+        "nl": "Sluiten",
+        "fr": "Fermer",
+        "de": "Schließen",
     },
-    "radio_layout_cards": {
-        "en": "Cards",
-        "nl": "Kaarten",
-        "fr": "Cartes",
-        "de": "Karten",
+    "help_activity_title": {
+        "en": "Help",
+        "nl": "Help",
+        "fr": "Aide",
+        "de": "Hilfe",
     },
-    "radio_layout_table": {
-        "en": "Table",
-        "nl": "Tabel",
-        "fr": "Tableau",
-        "de": "Tabelle",
+    "dialog_help_title": {
+        "en": "Welcome",
+        "nl": "Welkom",
+        "fr": "Bienvenue",
+        "de": "Willkommen",
+    },
+    "dialog_help_message": {
+        "en": "A short guide explains how to connect to the W2K-2 and what the buttons do. Open it now? You can always find it later in Settings.",
+        "nl": "Een korte handleiding legt uit hoe je verbinding maakt met de W2K-2 en wat de knoppen doen. Nu openen? Je vindt hem later altijd in Instellingen.",
+        "fr": "Un court guide explique comment se connecter au W2K-2 et à quoi servent les boutons. Ouvrir maintenant ? Vous le retrouverez toujours dans les réglages.",
+        "de": "Eine kurze Anleitung erklärt, wie man sich mit dem W2K-2 verbindet und was die Schaltflächen tun. Jetzt öffnen? Sie finden sie später immer in den Einstellungen.",
+    },
+    "dialog_help_read": {
+        "en": "Read the guide",
+        "nl": "Lees de handleiding",
+        "fr": "Lire le guide",
+        "de": "Anleitung lesen",
+    },
+    "dialog_help_later": {
+        "en": "Later",
+        "nl": "Later",
+        "fr": "Plus tard",
+        "de": "Später",
     },
     "section_cache": {
         "en": "Clear cache",
@@ -509,10 +527,10 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "de": "Trage zuerst die Veröffentlichungseinstellungen (WordPress) in den Einstellungen ein.",
     },
     "status_uploading_wordpress": {
-        "en": "Uploading to ayuus.com (to WordPress)...",
-        "nl": "Uploaden naar ayuus.com (naar WordPress)...",
-        "fr": "Envoi vers ayuus.com (vers WordPress)...",
-        "de": "Wird auf ayuus.com hochgeladen (zu WordPress)...",
+        "en": "Uploading to WordPress...",
+        "nl": "Uploaden naar WordPress...",
+        "fr": "Envoi vers WordPress...",
+        "de": "Wird zu WordPress hochgeladen...",
     },
     "log_upload_ok_wordpress": {
         "en": "Uploaded to WordPress: {url}",

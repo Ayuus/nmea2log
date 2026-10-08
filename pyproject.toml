@@ -21,4 +21,4 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-nmea2log = ["assets/*"]
+nmea2log = ["assets/*", "assets/help/*"]

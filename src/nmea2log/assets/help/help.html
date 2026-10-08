@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="help-format" content="1">
+<title>Help</title>
+<style>
+  /* The help of the Android and iOS apps: one file for both, in English, Dutch, French and German. The app turns it into
+     what its user sees (help_page.render): the <html> element gets the language ("en", "nl", "fr" or "de") and the platform
+     ("android" or "ios") as its lang and class, and the css below hides the rest. No JavaScript.
+     Images are named img/<name>.png and come with each app (they differ per platform). */
+  :root { --bg: #f7f7f8; --fg: #1a1a1a; --muted: #5d6670; --accent: #1a6ecc; --card: #ffffff; --line: #e1e4e8; --note: #eef4fb; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #101317; --fg: #e6e8eb; --muted: #98a1ab; --accent: #6db0ff; --card: #1a1f26; --line: #262d36; --note: #15283d; color-scheme: dark; }
+  }
+  html[lang="en"] [lang]:not([lang="en"]), html[lang="nl"] [lang]:not([lang="nl"]),
+  html[lang="fr"] [lang]:not([lang="fr"]), html[lang="de"] [lang]:not([lang="de"]) { display: none; }
+  html.android [data-platform="ios"], html.ios [data-platform="android"] { display: none; }
+  body { font-family: sans-serif; font-size: 15px; margin: 0; padding: 1.2em 1.1em 3em; background: var(--bg); color: var(--fg); line-height: 1.5; max-width: 42em; margin-inline: auto; }
+  h1 { margin: 0 0 0.3em; font-size: 1.6em; }
+  h2 { margin: 1.8em 0 0.4em; font-size: 1.25em; border-bottom: 2px solid var(--accent); padding-bottom: 0.2em; }
+  p, ul, ol { margin: 0.5em 0; }
+  li { margin: 0.25em 0; }
+  a { color: var(--accent); }
+  code { background: var(--card); border: 1px solid var(--line); border-radius: 4px; padding: 0 0.3em; font-size: 0.92em; overflow-wrap: anywhere; }
+  nav { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 0.4em 1em; margin: 1em 0; }
+  nav a { display: block; padding: 0.3em 0; text-decoration: none; }
+  .note { background: var(--note); border-left: 4px solid var(--accent); border-radius: 6px; padding: 0.1em 0.8em; margin: 0.8em 0; }
+  figure { margin: 1em 0; text-align: center; }
+  figure img { max-width: 60%; border: 1px solid var(--line); border-radius: 10px; }
+  figcaption { color: var(--muted); font-size: 0.9em; margin-top: 0.4em; }
+  dt { font-weight: 600; margin-top: 0.7em; }
+  dd { margin: 0.1em 0 0 1em; }
+</style>
+</head>
+<body>
+<h1 lang="en">How it works</h1>
+<h1 lang="nl">Zo werkt het</h1>
+<h1 lang="fr">Comment ça marche</h1>
+<h1 lang="de">So funktioniert es</h1>
+
+<p lang="en">This app fetches the log files of your boat's Actisense W2K-2 and turns them into a sailing logbook: your trips with
+ports, distance, speed, fuel and engine hours, on a map and in a log. This page is on your phone, so it works at sea too.</p>
+<p lang="nl">Deze app haalt de logbestanden van de Actisense W2K-2 van je boot op en maakt er een vaarlogboek van: je reizen met
+havens, afstand, snelheid, brandstof en motoruren, op een kaart en in een log. Deze pagina staat op je telefoon, dus hij werkt ook op zee.</p>
+<p lang="fr">Cette application récupère les fichiers journaux de l'Actisense W2K-2 de votre bateau et en fait un journal de bord : vos
+trajets avec les ports, la distance, la vitesse, le carburant et les heures moteur, sur une carte et dans un journal. Cette page est sur
+votre téléphone : elle fonctionne donc aussi en mer.</p>
+<p lang="de">Diese App holt die Logdateien des Actisense W2K-2 Ihres Boots ab und macht daraus ein Bordbuch: Ihre Fahrten mit
+Häfen, Strecke, Geschwindigkeit, Kraftstoff und Motorstunden, auf einer Karte und in einem Log. Diese Seite liegt auf Ihrem Telefon
+und funktioniert deshalb auch auf See.</p>
+
+<nav>
+  <a href="#start"><span lang="en">1. Getting started</span><span lang="nl">1. Beginnen</span><span lang="fr">1. Pour commencer</span><span lang="de">1. Erste Schritte</span></a>
+  <a href="#connect"><span lang="en">2. Connecting to the W2K-2</span><span lang="nl">2. Verbinden met de W2K-2</span><span lang="fr">2. Se connecter au W2K-2</span><span lang="de">2. Verbindung mit dem W2K-2</span></a>
+  <a href="#toolbar"><span lang="en">3. The buttons at the top</span><span lang="nl">3. De knoppen bovenaan</span><span lang="fr">3. Les boutons du haut</span><span lang="de">3. Die Schaltflächen oben</span></a>
+  <a href="#logbook"><span lang="en">4. The logbook</span><span lang="nl">4. Het logboek</span><span lang="fr">4. Le journal de bord</span><span lang="de">4. Das Bordbuch</span></a>
+  <a href="#publish"><span lang="en">5. Publishing to your website</span><span lang="nl">5. Publiceren op je website</span><span lang="fr">5. Publier sur votre site</span><span lang="de">5. Auf Ihrer Website veröffentlichen</span></a>
+  <a href="#boat-mode"><span lang="en">6. Boat mode</span><span lang="nl">6. Boot-modus</span><span lang="fr">6. Mode bateau</span><span lang="de">6. Boot-Modus</span></a>
+  <a href="#backup"><span lang="en">7. Keeping your data safe</span><span lang="nl">7. Je gegevens veilig houden</span><span lang="fr">7. Sauvegarder vos données</span><span lang="de">7. Daten sichern</span></a>
+  <a href="#problems"><span lang="en">8. When something goes wrong</span><span lang="nl">8. Als er iets misgaat</span><span lang="fr">8. En cas de problème</span><span lang="de">8. Wenn etwas schiefgeht</span></a>
+</nav>
+
+<section id="start">
+<h2 lang="en">1. Getting started</h2>
+<h2 lang="nl">1. Beginnen</h2>
+<h2 lang="fr">1. Pour commencer</h2>
+<h2 lang="de">1. Erste Schritte</h2>
+<div lang="en">
+  <p>Open <b>Settings</b> (the gear at the top right) and fill in:</p>
+  <ul>
+    <li><b>W2K-2 username and password</b> &ndash; the same login as the W2K-2's own web page.</li>
+    <li><b>Boat name, MMSI and call sign</b> &ndash; shown at the top of your logbook, not sent anywhere.</li>
+    <li><b>Publishing</b> (optional) &ndash; only if you want the logbook on your own website, see <a href="#publish">Publishing</a>.</li>
+  </ul>
+  <p data-platform="ios">The first time, iOS asks for permission to use the local network (to find the W2K-2) and, for boat mode, to send notifications. Allow both.</p>
+</div>
+<div lang="nl">
+  <p>Open <b>Instellingen</b> (het tandwiel rechtsboven) en vul in:</p>
+  <ul>
+    <li><b>W2K-2 gebruikersnaam en wachtwoord</b> &ndash; dezelfde inlog als de eigen webpagina van de W2K-2.</li>
+    <li><b>Bootnaam, MMSI en roepnaam</b> &ndash; staan bovenaan je logboek en worden nergens heen gestuurd.</li>
+    <li><b>Publiceren</b> (optioneel) &ndash; alleen als je het logboek op je eigen website wilt, zie <a href="#publish">Publiceren</a>.</li>
+  </ul>
+  <p data-platform="ios">De eerste keer vraagt iOS toestemming voor het lokale netwerk (om de W2K-2 te vinden) en, voor de boot-modus, voor meldingen. Sta beide toe.</p>
+</div>
+<div lang="fr">
+  <p>Ouvrez les <b>Paramètres</b> (la roue dentée en haut à droite) et renseignez :</p>
+  <ul>
+    <li><b>Nom d'utilisateur et mot de passe W2K-2</b> &ndash; les mêmes identifiants que la page web du W2K-2.</li>
+    <li><b>Nom du bateau, MMSI et indicatif d'appel</b> &ndash; affichés en haut de votre journal de bord, envoyés nulle part.</li>
+    <li><b>Publication</b> (facultatif) &ndash; seulement si vous voulez le journal sur votre propre site, voir <a href="#publish">Publier sur votre site</a>.</li>
+  </ul>
+  <p data-platform="ios">La première fois, iOS demande l'autorisation d'utiliser le réseau local (pour trouver le W2K-2) et, pour le mode bateau, d'envoyer des notifications. Autorisez les deux.</p>
+</div>
+<div lang="de">
+  <p>Öffnen Sie die <b>Einstellungen</b> (das Zahnrad oben rechts) und tragen Sie ein:</p>
+  <ul>
+    <li><b>W2K-2-Benutzername und -Passwort</b> &ndash; dieselben Zugangsdaten wie auf der eigenen Webseite des W2K-2.</li>
+    <li><b>Bootsname, MMSI und Rufzeichen</b> &ndash; stehen oben in Ihrem Bordbuch und werden nirgendwohin gesendet.</li>
+    <li><b>Veröffentlichen</b> (optional) &ndash; nur wenn Sie das Bordbuch auf Ihrer eigenen Website haben möchten, siehe <a href="#publish">Auf Ihrer Website veröffentlichen</a>.</li>
+  </ul>
+  <p data-platform="ios">Beim ersten Mal fragt iOS nach der Erlaubnis, das lokale Netzwerk zu nutzen (um das W2K-2 zu finden) und, für den Boot-Modus, Mitteilungen zu senden. Erlauben Sie beides.</p>
+</div>
+<figure>
+  <img src="img/settings.png" alt="">
+  <figcaption lang="en">Settings</figcaption>
+  <figcaption lang="nl">Instellingen</figcaption>
+  <figcaption lang="fr">Paramètres</figcaption>
+  <figcaption lang="de">Einstellungen</figcaption>
+</figure>
+</section>
+
+<section id="connect">
+<h2 lang="en">2. Connecting to the W2K-2</h2>
+<h2 lang="nl">2. Verbinden met de W2K-2</h2>
+<h2 lang="fr">2. Se connecter au W2K-2</h2>
+<h2 lang="de">2. Verbindung mit dem W2K-2</h2>
+<div lang="en">
+  <p>The phone and the W2K-2 must be on the same private network. Normally that is the phone's own hotspot with the W2K-2
+  joined to it (the setup the W2K-2's own app expects). Any shared network works too, for example both on the marina's WiFi.</p>
+  <p>The app only looks on the network the phone is on right now, never on the internet. Only the place names in the logbook
+  need internet, and only when the logbook is assembled; the download from the W2K-2 never does.</p>
+  <p data-platform="android">Boat mode's automatic start needs the phone's own hotspot to be on: that is how it knows you are on the boat.</p>
+  <p data-platform="ios">Boat mode's automatic start works on any private network.</p>
+</div>
+<div lang="nl">
+  <p>De telefoon en de W2K-2 moeten op hetzelfde besloten netwerk zitten. Meestal is dat de eigen hotspot van de telefoon met
+  de W2K-2 daaraan verbonden (de opzet die de eigen app van de W2K-2 verwacht). Elk gedeeld netwerk werkt ook, bijvoorbeeld
+  allebei op het wifi van de jachthaven.</p>
+  <p>De app zoekt alleen op het netwerk waar de telefoon nu op zit, nooit op internet. Alleen de plaatsnamen in het logboek
+  hebben internet nodig, en alleen als het logboek wordt samengesteld; het ophalen bij de W2K-2 nooit.</p>
+  <p data-platform="android">De automatische start van de boot-modus heeft de eigen hotspot van de telefoon nodig: daaraan merkt hij dat je op de boot bent.</p>
+  <p data-platform="ios">De automatische start van de boot-modus werkt op elk besloten netwerk.</p>
+</div>
+<div lang="fr">
+  <p>Le téléphone et le W2K-2 doivent être sur le même réseau privé. Normalement, c'est le point d'accès du téléphone, auquel le W2K-2
+  est connecté (la configuration qu'attend l'application du W2K-2 elle-même). Tout réseau partagé convient aussi, par exemple le wifi du port pour les deux.</p>
+  <p>L'application cherche uniquement sur le réseau où se trouve le téléphone en ce moment, jamais sur internet. Seuls les noms de lieux
+  du journal demandent internet, et seulement lors de l'assemblage du journal ; le téléchargement depuis le W2K-2 n'en a jamais besoin.</p>
+  <p data-platform="android">Le démarrage automatique du mode bateau nécessite que le point d'accès du téléphone soit activé : c'est ainsi qu'il sait que vous êtes à bord.</p>
+  <p data-platform="ios">Le démarrage automatique du mode bateau fonctionne sur n'importe quel réseau privé.</p>
+</div>
+<div lang="de">
+  <p>Telefon und W2K-2 müssen im selben privaten Netzwerk sein. Normalerweise ist das der eigene Hotspot des Telefons, mit dem das W2K-2
+  verbunden ist (der Aufbau, den die eigene App des W2K-2 erwartet). Jedes gemeinsame Netzwerk funktioniert ebenfalls, zum Beispiel beide im WLAN des Hafens.</p>
+  <p>Die App sucht nur in dem Netzwerk, in dem das Telefon gerade ist, nie im Internet. Nur die Ortsnamen im Bordbuch brauchen Internet,
+  und nur wenn das Bordbuch zusammengestellt wird; der Download vom W2K-2 nie.</p>
+  <p data-platform="android">Der automatische Start des Boot-Modus braucht den eingeschalteten Hotspot des Telefons: daran erkennt er, dass Sie an Bord sind.</p>
+  <p data-platform="ios">Der automatische Start des Boot-Modus funktioniert in jedem privaten Netzwerk.</p>
+</div>
+</section>
+
+<section id="toolbar">
+<h2 lang="en">3. The buttons at the top</h2>
+<h2 lang="nl">3. De knoppen bovenaan</h2>
+<h2 lang="fr">3. Les boutons du haut</h2>
+<h2 lang="de">3. Die Schaltflächen oben</h2>
+<dl lang="en">
+  <dt>Download</dt><dd>Fetches new data from the W2K-2 and assembles the logbook.</dd>
+  <dt>Import</dt><dd>Copies <code>.ebl</code> files from an SD card or USB drive instead, for example a card taken straight from the instrument. No W2K-2 needed.</dd>
+  <dt>Assemble</dt><dd>Builds the logbook again from what is already on the phone. Handy after you changed a setting, or to look at your logbook away from the boat.</dd>
+  <dt>Publish</dt><dd>Sends the logbook to your website. It is sent as it is when it is up to date, and assembled first when new data or a changed setting makes it out of date.</dd>
+  <dt>View logbook</dt><dd>Shows the logbook full screen; tap again to go back to the log.</dd>
+  <dt>Boat mode</dt><dd>The sailboat button, see <a href="#boat-mode">Boat mode</a>.</dd>
+  <dt>Settings</dt><dd>The gear.</dd>
+</dl>
+<dl lang="nl">
+  <dt>Downloaden</dt><dd>Haalt nieuwe gegevens op bij de W2K-2 en stelt het logboek samen.</dd>
+  <dt>Importeren</dt><dd>Kopieert <code>.ebl</code>-bestanden van een SD-kaart of USB-stick, bijvoorbeeld een kaart rechtstreeks uit het instrument. Geen W2K-2 nodig.</dd>
+  <dt>Samenstellen</dt><dd>Bouwt het logboek opnieuw op uit wat al op de telefoon staat. Handig na het wijzigen van een instelling, of om je logboek te bekijken terwijl je niet bij de boot bent.</dd>
+  <dt>Publiceren</dt><dd>Stuurt het logboek naar je website. Het gaat zoals het is als het actueel is, en wordt eerst opnieuw samengesteld als nieuwe gegevens of een gewijzigde instelling het verouderd hebben.</dd>
+  <dt>Logboek bekijken</dt><dd>Toont het logboek schermvullend; tik nog eens om terug te gaan naar het log.</dd>
+  <dt>Boot-modus</dt><dd>De zeilbootknop, zie <a href="#boat-mode">Boot-modus</a>.</dd>
+  <dt>Instellingen</dt><dd>Het tandwiel.</dd>
+</dl>
+<dl lang="fr">
+  <dt>Télécharger</dt><dd>Récupère les nouvelles données du W2K-2 et assemble le journal de bord.</dd>
+  <dt>Importer</dt><dd>Copie des fichiers <code>.ebl</code> depuis une carte SD ou une clé USB, par exemple une carte retirée directement de l'instrument. Pas besoin du W2K-2.</dd>
+  <dt>Assembler</dt><dd>Reconstruit le journal à partir de ce qui se trouve déjà sur le téléphone. Pratique après avoir modifié un réglage, ou pour consulter votre journal loin du bateau.</dd>
+  <dt>Publier</dt><dd>Envoie le journal à votre site. Il part tel quel s'il est à jour, et il est d'abord réassemblé si de nouvelles données ou un réglage modifié l'ont rendu obsolète.</dd>
+  <dt>Consulter le journal</dt><dd>Affiche le journal en plein écran ; touchez à nouveau pour revenir au journal d'activité.</dd>
+  <dt>Mode bateau</dt><dd>Le bouton voilier, voir <a href="#boat-mode">Mode bateau</a>.</dd>
+  <dt>Paramètres</dt><dd>La roue dentée.</dd>
+</dl>
+<dl lang="de">
+  <dt>Herunterladen</dt><dd>Holt neue Daten vom W2K-2 und stellt das Bordbuch zusammen.</dd>
+  <dt>Importieren</dt><dd>Kopiert <code>.ebl</code>-Dateien stattdessen von einer SD-Karte oder einem USB-Stick, zum Beispiel einer Karte direkt aus dem Instrument. Kein W2K-2 nötig.</dd>
+  <dt>Zusammenstellen</dt><dd>Baut das Bordbuch aus dem, was schon auf dem Telefon liegt, neu auf. Praktisch nach einer geänderten Einstellung oder um das Bordbuch auch fern vom Boot anzusehen.</dd>
+  <dt>Veröffentlichen</dt><dd>Sendet das Bordbuch an Ihre Website. Es wird unverändert gesendet, wenn es aktuell ist, und zuerst neu zusammengestellt, wenn neue Daten oder eine geänderte Einstellung es veraltet haben.</dd>
+  <dt>Bordbuch ansehen</dt><dd>Zeigt das Bordbuch im Vollbild; noch einmal tippen, um zum Log zurückzukehren.</dd>
+  <dt>Boot-Modus</dt><dd>Die Segelboot-Schaltfläche, siehe <a href="#boat-mode">Boot-Modus</a>.</dd>
+  <dt>Einstellungen</dt><dd>Das Zahnrad.</dd>
+</dl>
+<p lang="en">A button that is busy pulses; tap it again to cancel. While the app is not on screen the notification shows the same.</p>
+<p lang="nl">Een knop die bezig is, pulseert; tik er nog eens op om te annuleren. Zolang de app niet in beeld is, laat de melding hetzelfde zien.</p>
+<p lang="fr">Un bouton occupé pulse ; touchez-le à nouveau pour annuler. Tant que l'application n'est pas à l'écran, la notification affiche la même chose.</p>
+<p lang="de">Eine Schaltfläche, die arbeitet, pulsiert; noch einmal tippen bricht ab. Solange die App nicht auf dem Bildschirm ist, zeigt die Mitteilung dasselbe.</p>
+</section>
+
+<section id="logbook">
+<h2 lang="en">4. The logbook</h2>
+<h2 lang="nl">4. Het logboek</h2>
+<h2 lang="fr">4. Le journal de bord</h2>
+<h2 lang="de">4. Das Bordbuch</h2>
+<div lang="en">
+  <p>Every trip has its own card (or row, on a wide screen) with the ports, times, distance, speed, fuel and engine hours.</p>
+  <ul>
+    <li><b>Map</b> shows the route of that trip on a map.</li>
+    <li><b>Log</b> shows the positions, course and speed along the way, with the water temperature and how much the boat moved.</li>
+    <li><b>Overview</b> next to a year puts all trips of that year on one map.</li>
+    <li>The flags at the top switch the language of the logbook.</li>
+  </ul>
+  <p>The logbook follows the phone: light or dark as the phone is (or as you choose in Settings, under Appearance), and a <b>card</b> per trip on a phone held upright, a <b>table</b> on a wide screen.</p>
+</div>
+<div lang="nl">
+  <p>Elke reis heeft een eigen kaart (of rij, op een breed scherm) met de havens, tijden, afstand, snelheid, brandstof en motoruren.</p>
+  <ul>
+    <li><b>Kaart</b> toont de route van die reis op een kaart.</li>
+    <li><b>Log</b> toont de posities, koers en snelheid onderweg, met de watertemperatuur en hoeveel de boot bewoog.</li>
+    <li><b>Overzicht</b> naast een jaartal zet alle reizen van dat jaar op één kaart.</li>
+    <li>De vlaggetjes bovenaan wisselen de taal van het logboek.</li>
+  </ul>
+  <p>Het logboek volgt de telefoon: licht of donker zoals de telefoon is (of zoals je kiest in Instellingen, onder Weergave), en een <b>kaart</b> per reis op een telefoon rechtop, een <b>tabel</b> op een breed scherm.</p>
+</div>
+<div lang="fr">
+  <p>Chaque trajet a sa propre carte (ou ligne, sur un grand écran) avec les ports, les heures, la distance, la vitesse, le carburant et les heures moteur.</p>
+  <ul>
+    <li><b>Carte</b> montre la route de ce trajet sur une carte.</li>
+    <li><b>Journal</b> montre les positions, le cap et la vitesse en cours de route, avec la température de l'eau et les mouvements du bateau.</li>
+    <li><b>Aperçu</b>, à côté d'une année, place tous les trajets de cette année sur une seule carte.</li>
+    <li>Les drapeaux en haut changent la langue du journal de bord.</li>
+  </ul>
+  <p>Le journal suit le téléphone : clair ou sombre comme le téléphone (ou comme vous le choisissez dans les Paramètres, sous Apparence), et une <b>carte</b> par trajet sur un téléphone tenu à la verticale, un <b>tableau</b> sur un grand écran.</p>
+</div>
+<div lang="de">
+  <p>Jede Fahrt hat ihre eigene Karte (oder Zeile, auf einem breiten Bildschirm) mit Häfen, Zeiten, Strecke, Geschwindigkeit, Kraftstoff und Motorstunden.</p>
+  <ul>
+    <li><b>Karte</b> zeigt die Route dieser Fahrt auf einer Karte.</li>
+    <li><b>Log</b> zeigt Positionen, Kurs und Geschwindigkeit unterwegs, mit der Wassertemperatur und wie stark sich das Boot bewegte.</li>
+    <li><b>Übersicht</b> neben einem Jahr zeigt alle Fahrten dieses Jahres auf einer Karte.</li>
+    <li>Die Flaggen oben wechseln die Sprache des Bordbuchs.</li>
+  </ul>
+  <p>Das Bordbuch folgt dem Telefon: hell oder dunkel wie das Telefon (oder wie Sie es in den Einstellungen unter Darstellung wählen), und eine <b>Karte</b> pro Fahrt auf einem aufrecht gehaltenen Telefon, eine <b>Tabelle</b> auf einem breiten Bildschirm.</p>
+</div>
+<figure>
+  <img src="img/logbook.png" alt="">
+  <figcaption lang="en">The logbook</figcaption>
+  <figcaption lang="nl">Het logboek</figcaption>
+  <figcaption lang="fr">Le journal de bord</figcaption>
+  <figcaption lang="de">Das Bordbuch</figcaption>
+</figure>
+<figure>
+  <img src="img/map-trip.png" alt="">
+  <figcaption lang="en">The map of one trip</figcaption>
+  <figcaption lang="nl">De kaart van één reis</figcaption>
+  <figcaption lang="fr">La carte d'un trajet</figcaption>
+  <figcaption lang="de">Die Karte einer Fahrt</figcaption>
+</figure>
+<div class="note" lang="en"><p>Place names come from OpenStreetMap and need internet when the logbook is assembled. Without internet you see coordinates instead; assemble again later and the names appear.</p></div>
+<div class="note" lang="nl"><p>Plaatsnamen komen van OpenStreetMap en hebben internet nodig als het logboek wordt samengesteld. Zonder internet zie je coördinaten; stel het later opnieuw samen en de namen verschijnen.</p></div>
+<div class="note" lang="fr"><p>Les noms de lieux viennent d'OpenStreetMap et demandent internet lors de l'assemblage du journal. Sans internet, vous voyez des coordonnées ; réassemblez plus tard et les noms apparaissent.</p></div>
+<div class="note" lang="de"><p>Die Ortsnamen stammen von OpenStreetMap und brauchen Internet, wenn das Bordbuch zusammengestellt wird. Ohne Internet sehen Sie Koordinaten; stellen Sie es später neu zusammen, dann erscheinen die Namen.</p></div>
+</section>
+
+<section id="publish">
+<h2 lang="en">5. Publishing to your website</h2>
+<h2 lang="nl">5. Publiceren op je website</h2>
+<h2 lang="fr">5. Publier sur votre site</h2>
+<h2 lang="de">5. Auf Ihrer Website veröffentlichen</h2>
+<div lang="en">
+  <p>Optional. If you have a WordPress site set up for this, fill in Settings &rarr; Publish: pick <b>WordPress</b>, then the site's
+  address (<code>your-site.example</code> is enough), a user name and an Application Password. Use the address of the site, not the
+  address of the logbook page: that one forwards to a login page and uploads nothing.</p>
+  <p>Picking <b>Don't publish</b> keeps what you typed, so switching back finds it again.</p>
+  <p>How to set up the WordPress side is in the <a href="https://github.com/Ayuus/nmea2log#readme">nmea2log readme</a>.</p>
+</div>
+<div lang="nl">
+  <p>Optioneel. Heb je een WordPress-site hiervoor ingericht, vul dan Instellingen &rarr; Publiceren in: kies <b>WordPress</b>, dan het adres
+  van de site (<code>jouw-site.nl</code> is genoeg), een gebruikersnaam en een applicatiewachtwoord. Gebruik het adres van de site, niet het
+  adres van de logboekpagina: die stuurt je door naar een inlogpagina en uploadt niets.</p>
+  <p>Kies je <b>Niet publiceren</b>, dan blijft wat je typte bewaard, zodat terugschakelen het weer vindt.</p>
+  <p>Hoe je de WordPress-kant inricht staat in de <a href="https://github.com/Ayuus/nmea2log#readme">nmea2log readme</a>.</p>
+</div>
+<div lang="fr">
+  <p>Facultatif. Si vous avez configuré un site WordPress pour cela, renseignez Paramètres &rarr; Publier : choisissez <b>WordPress</b>, puis l'adresse du site
+  (<code>votre-site.example</code> suffit), un nom d'utilisateur et un mot de passe d'application. Utilisez l'adresse du site, pas celle de la page du
+  journal : celle-ci renvoie vers une page de connexion et ne transmet rien.</p>
+  <p>Choisir <b>Ne pas publier</b> conserve ce que vous avez saisi : en revenant en arrière, vous le retrouvez.</p>
+  <p>La configuration côté WordPress est décrite dans le <a href="https://github.com/Ayuus/nmea2log#readme">readme de nmea2log</a>.</p>
+</div>
+<div lang="de">
+  <p>Optional. Wenn Sie dafür eine WordPress-Website eingerichtet haben, füllen Sie Einstellungen &rarr; Veröffentlichen aus: Wählen Sie <b>WordPress</b>, dann die Adresse
+  der Website (<code>ihre-website.example</code> genügt), einen Benutzernamen und ein Anwendungspasswort. Verwenden Sie die Adresse der Website, nicht die
+  der Bordbuch-Seite: Diese leitet auf eine Anmeldeseite weiter und lädt nichts hoch.</p>
+  <p>Wenn Sie <b>Nicht veröffentlichen</b> wählen, bleibt das Eingegebene erhalten, sodass es beim Zurückwechseln wieder da ist.</p>
+  <p>Wie die WordPress-Seite eingerichtet wird, steht in der <a href="https://github.com/Ayuus/nmea2log#readme">nmea2log-Readme</a>.</p>
+</div>
+</section>
+
+<section id="boat-mode">
+<h2 lang="en">6. Boat mode</h2>
+<h2 lang="nl">6. Boot-modus</h2>
+<h2 lang="fr">6. Mode bateau</h2>
+<h2 lang="de">6. Boot-Modus</h2>
+<div lang="en">
+  <p>With the sailboat button on, the app looks for the W2K-2 every few minutes. Once it finds it, it downloads new data and assembles
+  the logbook, then waits for the interval you chose before the next round. It recognises when you are in harbour (not moving, engine off)
+  or have left the boat (the W2K-2 no longer answers) and can then do a final round and publish.</p>
+  <p>All of that is in Settings under Boat mode: how often, and what ends the voyage. You can also have it switch itself on when the app opens.</p>
+  <p data-platform="android">Android's battery saving can hold back a background app while the phone lies still. The first time you turn boat mode on, the app asks to be exempted. Declining is safe; rounds are then just less punctual.</p>
+  <p data-platform="ios">iOS decides when a background app may run, sometimes hours after the time the app asked for, and not at all in Low Power Mode or with Background App Refresh off. A quiet notification shows the progress of a round and the result replaces it. When you open the app, it tries right away.</p>
+</div>
+<div lang="nl">
+  <p>Met de zeilbootknop aan zoekt de app om de paar minuten naar de W2K-2. Zodra hij hem vindt, haalt hij nieuwe gegevens op en stelt hij
+  het logboek samen, en wacht dan het gekozen interval af voor de volgende ronde. Hij merkt wanneer je in de haven ligt (niet bewegen, motor uit)
+  of de boot hebt verlaten (de W2K-2 antwoordt niet meer) en kan dan een laatste ronde doen en publiceren.</p>
+  <p>Dat alles staat in Instellingen onder Boot-modus: hoe vaak, en wat de reis beëindigt. Je kunt hem ook automatisch laten starten als de app opent.</p>
+  <p data-platform="android">Het batterijbesparen van Android kan een app op de achtergrond tegenhouden zolang de telefoon stilligt. De eerste keer dat je de boot-modus aanzet, vraagt de app om uitgezonderd te worden. Weigeren kan zonder risico; de rondes zijn dan alleen minder stipt.</p>
+  <p data-platform="ios">iOS bepaalt wanneer een app op de achtergrond mag draaien, soms uren na het gevraagde tijdstip, en helemaal niet in de Low Power Mode of met Achtergrond-appvernieuwing uit. Een stille melding toont de voortgang van een ronde en het resultaat vervangt hem. Als je de app opent, probeert hij het meteen.</p>
+</div>
+<div lang="fr">
+  <p>Avec le bouton voilier activé, l'application cherche le W2K-2 toutes les quelques minutes. Dès qu'elle le trouve, elle télécharge les nouvelles données et assemble
+  le journal, puis attend l'intervalle choisi avant le tour suivant. Elle reconnaît quand vous êtes au port (à l'arrêt, moteur coupé)
+  ou que vous avez quitté le bateau (le W2K-2 ne répond plus), et peut alors faire un dernier tour et publier.</p>
+  <p>Tout cela se règle dans les Paramètres, sous Mode bateau : la fréquence, et ce qui met fin à la traversée. Vous pouvez aussi le faire démarrer tout seul à l'ouverture de l'application.</p>
+  <p data-platform="android">Les économies de batterie d'Android peuvent retenir une application en arrière-plan tant que le téléphone reste immobile. La première fois que vous activez le mode bateau, l'application demande à en être exemptée. Refuser est sans danger ; les tours sont alors simplement moins ponctuels.</p>
+  <p data-platform="ios">iOS décide quand une application en arrière-plan peut s'exécuter, parfois des heures après l'heure demandée, et jamais en mode économie d'énergie ou avec l'actualisation en arrière-plan désactivée. Une notification discrète montre la progression d'un tour, et le résultat la remplace. Quand vous ouvrez l'application, elle essaie tout de suite.</p>
+</div>
+<div lang="de">
+  <p>Bei eingeschalteter Segelboot-Schaltfläche sucht die App alle paar Minuten nach dem W2K-2. Sobald sie es findet, lädt sie neue Daten herunter und stellt
+  das Bordbuch zusammen, und wartet dann das gewählte Intervall bis zur nächsten Runde. Sie erkennt, wenn Sie im Hafen liegen (keine Bewegung, Motor aus)
+  oder das Boot verlassen haben (das W2K-2 antwortet nicht mehr), und kann dann eine letzte Runde machen und veröffentlichen.</p>
+  <p>All das steht in den Einstellungen unter Boot-Modus: wie oft, und was die Fahrt beendet. Sie können ihn auch beim Öffnen der App automatisch starten lassen.</p>
+  <p data-platform="android">Die Akku-Sparfunktion von Android kann eine App im Hintergrund zurückhalten, solange das Telefon still liegt. Beim ersten Einschalten des Boot-Modus bittet die App um eine Ausnahme. Ablehnen ist ungefährlich; die Runden sind dann nur weniger pünktlich.</p>
+  <p data-platform="ios">iOS entscheidet, wann eine App im Hintergrund laufen darf, manchmal Stunden nach der gewünschten Zeit, und gar nicht im Stromsparmodus oder bei ausgeschalteter Hintergrundaktualisierung. Eine leise Mitteilung zeigt den Fortschritt einer Runde, und das Ergebnis ersetzt sie. Wenn Sie die App öffnen, versucht sie es sofort.</p>
+</div>
+<figure>
+  <img src="img/boat-mode.png" alt="">
+  <figcaption lang="en">Boat mode on: the sailboat button is filled</figcaption>
+  <figcaption lang="nl">Boot-modus aan: de zeilbootknop is gevuld</figcaption>
+  <figcaption lang="fr">Mode bateau activé : le bouton voilier est plein</figcaption>
+  <figcaption lang="de">Boot-Modus an: die Segelboot-Schaltfläche ist gefüllt</figcaption>
+</figure>
+</section>
+
+<section id="backup">
+<h2 lang="en">7. Keeping your data safe</h2>
+<h2 lang="nl">7. Je gegevens veilig houden</h2>
+<h2 lang="fr">7. Sauvegarder vos données</h2>
+<h2 lang="de">7. Daten sichern</h2>
+<div lang="en">
+  <p>What is worth keeping is the <b>archive of <code>.ebl</code> files</b>: the logbook is rebuilt from it with one tap on Assemble. Copy it after every trip or season, and before you use Settings &rarr; Local .ebl files &rarr; Delete.</p>
+  <ul data-platform="android">
+    <li>The archive is the folder <code>Android/data/com.ayuus.mysailinglogbook/files/Actisense/</code> on the phone. Connect the phone to a PC with a USB cable (file transfer) and copy that folder, best into a folder your cloud storage keeps in sync. The phone's own file apps often cannot open <code>Android/data</code>; a PC can.</li>
+    <li>To restore: install the app, start it once, copy the folder back and tap Assemble.</li>
+  </ul>
+  <ul data-platform="ios">
+    <li>The archive is the folder <code>Actisense</code> of the app. It shows in the <b>Files</b> app (On My iPhone &rarr; My Sailing Logbook). The simplest backup: copy the folder to <b>iCloud Drive</b>.</li>
+    <li>To restore: copy the folder back into the app's folder in Files and tap Assemble.</li>
+    <li>The file <code>settings.json</code> next to it holds your logins in plain text: keep it out of cloud folders you do not trust.</li>
+  </ul>
+  <p>If you publish, the built logbook is also on your website.</p>
+</div>
+<div lang="nl">
+  <p>Wat het bewaren waard is, is het <b>archief met <code>.ebl</code>-bestanden</b>: het logboek wordt er met één tik op Samenstellen weer uit opgebouwd. Kopieer het na elke reis of elk seizoen, en voordat je Instellingen &rarr; Lokale .ebl-bestanden &rarr; Verwijderen gebruikt.</p>
+  <ul data-platform="android">
+    <li>Het archief is de map <code>Android/data/com.ayuus.mysailinglogbook/files/Actisense/</code> op de telefoon. Sluit de telefoon met een USB-kabel (bestandsoverdracht) aan op een pc en kopieer die map, het liefst naar een map die je cloudopslag synchroniseert. De bestanden-apps van de telefoon kunnen <code>Android/data</code> vaak niet openen; een pc wel.</li>
+    <li>Terugzetten: installeer de app, start hem één keer, kopieer de map terug en tik op Samenstellen.</li>
+  </ul>
+  <ul data-platform="ios">
+    <li>Het archief is de map <code>Actisense</code> van de app. Hij staat in de app <b>Bestanden</b> (Op mijn iPhone &rarr; My Sailing Logbook). De eenvoudigste back-up: kopieer de map naar <b>iCloud Drive</b>.</li>
+    <li>Terugzetten: kopieer de map terug naar de map van de app in Bestanden en tik op Samenstellen.</li>
+    <li>Het bestand <code>settings.json</code> ernaast bevat je inlogs als platte tekst: houd het buiten cloudmappen die je niet vertrouwt.</li>
+  </ul>
+  <p>Als je publiceert, staat het gebouwde logboek ook op je website.</p>
+</div>
+<div lang="fr">
+  <p>Ce qui vaut la peine d'être conservé, c'est l'<b>archive des fichiers <code>.ebl</code></b> : le journal en est reconstruit d'une simple pression sur Assembler. Copiez-la après chaque trajet ou saison, et avant d'utiliser Paramètres &rarr; Fichiers .ebl locaux &rarr; Supprimer.</p>
+  <ul data-platform="android">
+    <li>L'archive est le dossier <code>Android/data/com.ayuus.mysailinglogbook/files/Actisense/</code> du téléphone. Branchez le téléphone à un PC avec un câble USB (transfert de fichiers) et copiez ce dossier, de préférence dans un dossier que votre stockage en nuage synchronise. Les applications de fichiers du téléphone ne peuvent souvent pas ouvrir <code>Android/data</code> ; un PC le peut.</li>
+    <li>Pour restaurer : installez l'application, lancez-la une fois, recopiez le dossier et touchez Assembler.</li>
+  </ul>
+  <ul data-platform="ios">
+    <li>L'archive est le dossier <code>Actisense</code> de l'application. Il apparaît dans l'application <b>Fichiers</b> (Sur mon iPhone &rarr; My Sailing Logbook). La sauvegarde la plus simple : copier le dossier dans <b>iCloud Drive</b>.</li>
+    <li>Pour restaurer : recopiez le dossier dans celui de l'application dans Fichiers et touchez Assembler.</li>
+    <li>Le fichier <code>settings.json</code> à côté contient vos identifiants en clair : gardez-le hors des dossiers en nuage auxquels vous ne faites pas confiance.</li>
+  </ul>
+  <p>Si vous publiez, le journal construit se trouve aussi sur votre site.</p>
+</div>
+<div lang="de">
+  <p>Aufbewahrenswert ist das <b>Archiv der <code>.ebl</code>-Dateien</b>: Das Bordbuch wird daraus mit einem Tipp auf Zusammenstellen neu aufgebaut. Kopieren Sie es nach jeder Fahrt oder Saison und bevor Sie Einstellungen &rarr; Lokale .ebl-Dateien &rarr; Löschen benutzen.</p>
+  <ul data-platform="android">
+    <li>Das Archiv ist der Ordner <code>Android/data/com.ayuus.mysailinglogbook/files/Actisense/</code> auf dem Telefon. Verbinden Sie das Telefon per USB-Kabel (Dateiübertragung) mit einem PC und kopieren Sie diesen Ordner, am besten in einen Ordner, den Ihr Cloud-Speicher synchronisiert. Die Datei-Apps des Telefons können <code>Android/data</code> oft nicht öffnen; ein PC kann es.</li>
+    <li>Wiederherstellen: App installieren, einmal starten, den Ordner zurückkopieren und auf Zusammenstellen tippen.</li>
+  </ul>
+  <ul data-platform="ios">
+    <li>Das Archiv ist der Ordner <code>Actisense</code> der App. Er erscheint in der App <b>Dateien</b> (Auf meinem iPhone &rarr; My Sailing Logbook). Die einfachste Sicherung: den Ordner in <b>iCloud Drive</b> kopieren.</li>
+    <li>Wiederherstellen: den Ordner in Dateien zurück in den Ordner der App kopieren und auf Zusammenstellen tippen.</li>
+    <li>Die Datei <code>settings.json</code> daneben enthält Ihre Zugangsdaten im Klartext: Halten Sie sie aus Cloud-Ordnern heraus, denen Sie nicht vertrauen.</li>
+  </ul>
+  <p>Wenn Sie veröffentlichen, liegt das fertige Bordbuch auch auf Ihrer Website.</p>
+</div>
+</section>
+
+<section id="problems">
+<h2 lang="en">8. When something goes wrong</h2>
+<h2 lang="nl">8. Als er iets misgaat</h2>
+<h2 lang="fr">8. En cas de problème</h2>
+<h2 lang="de">8. Wenn etwas schiefgeht</h2>
+<dl lang="en">
+  <dt>The W2K-2 is not found</dt>
+  <dd>Check that the W2K-2 has power and that the phone and the W2K-2 are on the same network (<a href="#connect">Connecting</a>), that the login in Settings is right,
+  and then try again. <span data-platform="ios">Also check that the app may use the local network (iPhone Settings &rarr; My Sailing Logbook).</span></dd>
+  <dt>"No trips found"</dt>
+  <dd>There is no data yet, or the voyage was too short to count as a trip. Download first, or import files.</dd>
+  <dt>Coordinates instead of place names</dt>
+  <dd>The phone had no internet while the logbook was assembled. Assemble again with internet.</dd>
+  <dt>The logbook does not show a change I made</dt>
+  <dd>Tap Assemble: a setting such as the boat name only ends up in the logbook when it is built again.</dd>
+  <dt>Publishing says a login page was returned</dt>
+  <dd>Fill in the address of the site, not of the logbook page (<a href="#publish">Publishing</a>).</dd>
+</dl>
+<dl lang="nl">
+  <dt>De W2K-2 wordt niet gevonden</dt>
+  <dd>Controleer of de W2K-2 stroom heeft en of de telefoon en de W2K-2 op hetzelfde netwerk zitten (<a href="#connect">Verbinden</a>), of de inlog in Instellingen klopt,
+  en probeer het opnieuw. <span data-platform="ios">Kijk ook of de app het lokale netwerk mag gebruiken (iPhone Instellingen &rarr; My Sailing Logbook).</span></dd>
+  <dt>"Geen reizen gevonden"</dt>
+  <dd>Er zijn nog geen gegevens, of de tocht was te kort om als reis te tellen. Download eerst, of importeer bestanden.</dd>
+  <dt>Coördinaten in plaats van plaatsnamen</dt>
+  <dd>De telefoon had geen internet toen het logboek werd samengesteld. Stel het opnieuw samen met internet.</dd>
+  <dt>Het logboek toont een wijziging niet die ik maakte</dt>
+  <dd>Tik op Samenstellen: een instelling zoals de bootnaam komt pas in het logboek als het opnieuw wordt gebouwd.</dd>
+  <dt>Publiceren meldt dat er een inlogpagina terugkwam</dt>
+  <dd>Vul het adres van de site in, niet dat van de logboekpagina (<a href="#publish">Publiceren</a>).</dd>
+</dl>
+<dl lang="fr">
+  <dt>Le W2K-2 n'est pas trouvé</dt>
+  <dd>Vérifiez que le W2K-2 est alimenté, que le téléphone et le W2K-2 sont sur le même réseau (<a href="#connect">Se connecter</a>) et que les identifiants dans les Paramètres sont corrects,
+  puis réessayez. <span data-platform="ios">Vérifiez aussi que l'application a le droit d'utiliser le réseau local (Réglages de l'iPhone &rarr; My Sailing Logbook).</span></dd>
+  <dt>« Aucun trajet trouvé »</dt>
+  <dd>Il n'y a pas encore de données, ou la traversée était trop courte pour compter comme un trajet. Téléchargez d'abord, ou importez des fichiers.</dd>
+  <dt>Des coordonnées au lieu de noms de lieux</dt>
+  <dd>Le téléphone n'avait pas internet lors de l'assemblage du journal. Réassemblez avec internet.</dd>
+  <dt>Le journal n'affiche pas une modification que j'ai faite</dt>
+  <dd>Touchez Assembler : un réglage comme le nom du bateau n'apparaît dans le journal que lorsqu'il est reconstruit.</dd>
+  <dt>La publication indique qu'une page de connexion a été renvoyée</dt>
+  <dd>Saisissez l'adresse du site, pas celle de la page du journal (<a href="#publish">Publier sur votre site</a>).</dd>
+</dl>
+<dl lang="de">
+  <dt>Das W2K-2 wird nicht gefunden</dt>
+  <dd>Prüfen Sie, ob das W2K-2 Strom hat und ob Telefon und W2K-2 im selben Netzwerk sind (<a href="#connect">Verbindung</a>), ob die Zugangsdaten in den Einstellungen stimmen,
+  und versuchen Sie es dann erneut. <span data-platform="ios">Prüfen Sie auch, ob die App das lokale Netzwerk nutzen darf (iPhone-Einstellungen &rarr; My Sailing Logbook).</span></dd>
+  <dt>„Keine Fahrten gefunden“</dt>
+  <dd>Es gibt noch keine Daten, oder die Fahrt war zu kurz, um als Fahrt zu zählen. Laden Sie zuerst herunter oder importieren Sie Dateien.</dd>
+  <dt>Koordinaten statt Ortsnamen</dt>
+  <dd>Das Telefon hatte kein Internet, als das Bordbuch zusammengestellt wurde. Stellen Sie es mit Internet neu zusammen.</dd>
+  <dt>Das Bordbuch zeigt eine Änderung nicht, die ich gemacht habe</dt>
+  <dd>Tippen Sie auf Zusammenstellen: Eine Einstellung wie der Bootsname kommt erst ins Bordbuch, wenn es neu aufgebaut wird.</dd>
+  <dt>Beim Veröffentlichen heißt es, eine Anmeldeseite sei zurückgekommen</dt>
+  <dd>Tragen Sie die Adresse der Website ein, nicht die der Bordbuch-Seite (<a href="#publish">Auf Ihrer Website veröffentlichen</a>).</dd>
+</dl>
+<p lang="en">More, and the source code: <a href="https://github.com/Ayuus/nmea2log#readme">nmea2log</a>. Problems and questions: <a href="https://github.com/Ayuus/nmea2log/issues">GitHub issues</a>.</p>
+<p lang="nl">Meer, en de broncode: <a href="https://github.com/Ayuus/nmea2log#readme">nmea2log</a>. Problemen en vragen: <a href="https://github.com/Ayuus/nmea2log/issues">GitHub issues</a>.</p>
+<p lang="fr">Plus d'informations et le code source : <a href="https://github.com/Ayuus/nmea2log#readme">nmea2log</a>. Problèmes et questions : <a href="https://github.com/Ayuus/nmea2log/issues">GitHub issues</a>.</p>
+<p lang="de">Mehr und der Quellcode: <a href="https://github.com/Ayuus/nmea2log#readme">nmea2log</a>. Probleme und Fragen: <a href="https://github.com/Ayuus/nmea2log/issues">GitHub issues</a>.</p>
+</section>
+</body>
+</html>
