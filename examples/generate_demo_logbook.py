@@ -17,54 +17,23 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 from nmea2log.tripbuilder import TripLeg, NavSample, EngineHealth, BatteryHealth
 from nmea2log.html_writer import write_html_logbook
 
-# Fictional Wadden Sea cruise -- real, well-known public harbours (not identifying of any
-# individual boat/owner), but a fictional boat, fictional MMSI/call sign, fictional dates and
-# fictional trip statistics throughout.
-STOPS = [
-    ("Enkhuizen", 52.7040, 5.2913),
-    ("Medemblik", 52.7690, 5.1050),
-    ("Den Oever", 52.9330, 5.0300),
-    ("Oudeschild (Texel)", 53.0400, 4.8460),
-    ("West-Terschelling", 53.3610, 5.2230),
-    ("Enkhuizen", 52.7040, 5.2913),
-]
+import demo_cruise  # the cruise itself (harbours, route, times), shared with generate_demo_ebl.py
+from demo_cruise import STOPS, VIA_POINTS
 
-# (distance_nm, duration_hours, avg_speed, max_speed, fuel_liters, min_depth_m)
-STATS = [
-    (11.5, 2.3, 5.0, 6.8, 4.2, 2.8),
-    (14.0, 2.6, 5.4, 7.1, 5.1, 3.5),
-    (16.8, 3.1, 5.4, 7.4, 6.0, 4.1),
-    (34.2, 5.8, 5.9, 7.9, 12.4, 6.2),
-    (36.0, 6.4, 5.6, 7.6, 13.1, 5.4),
-]
-
-# Extra via-points per leg so the drawn track follows open water instead of a straight
-# point-to-point line -- a pure straight line cuts across land in several places here (e.g.
-# Enkhuizen-Medemblik crosses the Andijk peninsula, Medemblik-Den Oever crosses the
-# Wieringermeer polder) -- found by checking each leg's rendered map against OpenStreetMap.
-# Each entry is a list of (lat, lon) waypoints inserted between depart and arrive.
-VIA_POINTS = [
-    [(52.76, 5.33)],                   # Enkhuizen -> Medemblik: around the Andijk peninsula
-    [(52.85, 5.25)],                   # Medemblik -> Den Oever: around the Wieringermeer coast
-    [(53.02, 4.92)],                   # Den Oever -> Oudeschild: through the open Waddenzee
-    [(53.305, 5.205)],                 # Oudeschild -> West-Terschelling: through the Vliestroom gap
-    [(53.075, 5.341), (52.85, 5.30)],  # West-Terschelling -> Enkhuizen: through the Kornwerderzand
-    # lock (the only gap in the Afsluitdijk near here) -- a waypoint that isn't actually at the
-    # lock leaves the straight segment either side of it cutting across the dijk itself, found by
-    # checking against OpenStreetMap after the first fix still crossed the dijk.
-]
-
-start = datetime(2025, 6, 14, 8, 0, 0)
+# (distance_nm, duration_hours, avg_speed, max_speed, fuel_liters, min_depth_m) of each leg, from the route of demo_cruise
+STATS = []
+for _leg, _dur in enumerate(demo_cruise.DURATIONS_H):
+    _dist = round(demo_cruise.leg_distance_nm(_leg), 1)
+    _avg = round(_dist / _dur, 1)
+    STATS.append((_dist, _dur, _avg, round(_avg * 1.25, 1), round(_dist * demo_cruise.FUEL_PER_NM, 1), demo_cruise.MIN_DEPTH_M[_leg]))
 
 trips = []
-t = start
 for i in range(5):
     depart_name, depart_lat, depart_lon = STOPS[i]
     arrive_name, arrive_lat, arrive_lon = STOPS[i + 1]
     dist, dur_h, avg_kn, max_kn, fuel, min_depth = STATS[i]
 
-    depart_time = t
-    arrive_time = depart_time + timedelta(hours=dur_h)
+    depart_time, arrive_time = demo_cruise.leg_times(i)
 
     waypoints = [(depart_lat, depart_lon), *VIA_POINTS[i], (arrive_lat, arrive_lon)]
     # A handful of NavSamples per leg, spread evenly along the whole via-point polyline (not
@@ -105,7 +74,7 @@ for i in range(5):
             fuel_liters=fuel,
             fuel_liters_device=None,
             engine_hours={0: dur_h},
-            engine_hours_total={0: 1200.0 + i * dur_h},
+            engine_hours_total={0: demo_cruise.ENGINE_HOURS_AT_START + sum(demo_cruise.DURATIONS_H[: i + 1])},
             engine_health={
                 0: EngineHealth(
                     oil_pressure_bar_avg=3.2,
@@ -133,7 +102,6 @@ for i in range(5):
         )
     )
 
-    t = arrive_time + timedelta(hours=20)  # overnight stay before the next leg
 
 parser = argparse.ArgumentParser(description="Writes the fictional demo logbook.")
 parser.add_argument("--boat-name", default="Zeezwaluw", help="the (fictional) boat's name")

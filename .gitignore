@@ -21,6 +21,8 @@ nmea2log.log
 # local W2K-2 download configuration/data -- contains credentials, must never go into git
 nmea2log.ini
 Actisense/
+# ... except the made-up demo files (examples/generate_demo_ebl.py), which are meant to be public
+!examples/demo-data/Actisense/
 downloads/
 
 # optional local overrides for nmea2log.bat/nmea2log-no-download.bat (e.g. VIEW_URL) -- see the
