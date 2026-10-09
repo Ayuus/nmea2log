@@ -120,8 +120,8 @@ und funktioniert deshalb auch auf See.</p>
 <div lang="en">
   <p>The phone and the W2K-2 must be on the same private network. Normally that is the phone's own hotspot with the W2K-2
   joined to it (the setup the W2K-2's own app expects). Any shared network works too, for example both on the marina's WiFi.</p>
-  <p>The app only looks on the network the phone is on right now, never on the internet. Only the place names in the logbook
-  need internet, and only when the logbook is assembled; the download from the W2K-2 never does.</p>
+  <p>The app only looks on the network the phone is on right now, never on the internet. Only the place names and the data from Open-Meteo (weather and waves)
+  in the logbook need internet, and only when the logbook is assembled; the download from the W2K-2 never does.</p>
   <p data-platform="android">Boat mode's automatic start needs the phone's own hotspot to be on: that is how it knows you are on the boat.</p>
   <p data-platform="ios">Boat mode's automatic start works on any private network.</p>
 </div>
@@ -129,15 +129,15 @@ und funktioniert deshalb auch auf See.</p>
   <p>De telefoon en de W2K-2 moeten op hetzelfde besloten netwerk zitten. Meestal is dat de eigen hotspot van de telefoon met
   de W2K-2 daaraan verbonden (de opzet die de eigen app van de W2K-2 verwacht). Elk gedeeld netwerk werkt ook, bijvoorbeeld
   allebei op het wifi van de jachthaven.</p>
-  <p>De app zoekt alleen op het netwerk waar de telefoon nu op zit, nooit op internet. Alleen de plaatsnamen in het logboek
-  hebben internet nodig, en alleen als het logboek wordt samengesteld; het ophalen bij de W2K-2 nooit.</p>
+  <p>De app zoekt alleen op het netwerk waar de telefoon nu op zit, nooit op internet. Alleen de plaatsnamen en de gegevens van Open-Meteo (weer en golven)
+  in het logboek hebben internet nodig, en alleen als het logboek wordt samengesteld; het ophalen bij de W2K-2 nooit.</p>
   <p data-platform="android">De automatische start van de boot-modus heeft de eigen hotspot van de telefoon nodig: daaraan merkt hij dat je op de boot bent.</p>
   <p data-platform="ios">De automatische start van de boot-modus werkt op elk besloten netwerk.</p>
 </div>
 <div lang="fr">
   <p>Le téléphone et le W2K-2 doivent être sur le même réseau privé. Normalement, c'est le point d'accès du téléphone, auquel le W2K-2
   est connecté (la configuration qu'attend l'application du W2K-2 elle-même). Tout réseau partagé convient aussi, par exemple le wifi du port pour les deux.</p>
-  <p>L'application cherche uniquement sur le réseau où se trouve le téléphone en ce moment, jamais sur internet. Seuls les noms de lieux
+  <p>L'application cherche uniquement sur le réseau où se trouve le téléphone en ce moment, jamais sur internet. Seuls les noms de lieux et les données d'Open-Meteo (météo et vagues)
   du journal demandent internet, et seulement lors de l'assemblage du journal ; le téléchargement depuis le W2K-2 n'en a jamais besoin.</p>
   <p data-platform="android">Le démarrage automatique du mode bateau nécessite que le point d'accès du téléphone soit activé : c'est ainsi qu'il sait que vous êtes à bord.</p>
   <p data-platform="ios">Le démarrage automatique du mode bateau fonctionne sur n'importe quel réseau privé.</p>
@@ -145,8 +145,8 @@ und funktioniert deshalb auch auf See.</p>
 <div lang="de">
   <p>Telefon und W2K-2 müssen im selben privaten Netzwerk sein. Normalerweise ist das der eigene Hotspot des Telefons, mit dem das W2K-2
   verbunden ist (der Aufbau, den die eigene App des W2K-2 erwartet). Jedes gemeinsame Netzwerk funktioniert ebenfalls, zum Beispiel beide im WLAN des Hafens.</p>
-  <p>Die App sucht nur in dem Netzwerk, in dem das Telefon gerade ist, nie im Internet. Nur die Ortsnamen im Bordbuch brauchen Internet,
-  und nur wenn das Bordbuch zusammengestellt wird; der Download vom W2K-2 nie.</p>
+  <p>Die App sucht nur in dem Netzwerk, in dem das Telefon gerade ist, nie im Internet. Nur die Ortsnamen und die Daten von Open-Meteo (Wetter und Wellen) im Bordbuch
+  brauchen Internet, und nur wenn das Bordbuch zusammengestellt wird; der Download vom W2K-2 nie.</p>
   <p data-platform="android">Der automatische Start des Boot-Modus braucht den eingeschalteten Hotspot des Telefons: daran erkennt er, dass Sie an Bord sind.</p>
   <p data-platform="ios">Der automatische Start des Boot-Modus funktioniert in jedem privaten Netzwerk.</p>
 </div>
@@ -159,44 +159,44 @@ und funktioniert deshalb auch auf See.</p>
 <h2 lang="de">3. Die Schaltflächen oben</h2>
 <dl lang="en">
   <dt>Download</dt><dd>Fetches new data from the W2K-2 and assembles the logbook.</dd>
-  <dt>Import</dt><dd>Copies <code>.ebl</code> files from an SD card or USB drive instead, for example a card taken straight from the instrument. No W2K-2 needed.</dd>
-  <dt>Assemble</dt><dd>Builds the logbook again from what is already on the phone. Handy after you changed a setting, or to look at your logbook away from the boat.</dd>
-  <dt>Publish</dt><dd>Sends the logbook to your website. It is sent as it is when it is up to date, and assembled first when new data or a changed setting makes it out of date.</dd>
-  <dt>View logbook</dt><dd>Shows the logbook full screen; tap again to go back to the log.</dd>
+  <dt>Import</dt><dd>Copies <code>.ebl</code> files from an SD card or USB drive instead, for example a card taken straight from the instrument, and then assembles the logbook. No W2K-2 needed.</dd>
+  <dt>Assemble</dt><dd>Builds the logbook again from what is already on the phone, without a W2K-2 and without new files. Handy after you changed a setting, or to fetch place names, weather and waves that were missing.</dd>
+  <dt>Publish</dt><dd>Sends the logbook to your website, assembling it first when it is out of date. Handy when you assembled on board without internet, or when publishing failed before.</dd>
+  <dt>View logbook</dt><dd>Shows the local logbook, the one on the phone, full screen; tap again to go back to the log.</dd>
   <dt>Boat mode</dt><dd>The sailboat button, see <a href="#boat-mode">Boat mode</a>.</dd>
   <dt>Settings</dt><dd>The gear.</dd>
 </dl>
 <dl lang="nl">
   <dt>Downloaden</dt><dd>Haalt nieuwe gegevens op bij de W2K-2 en stelt het logboek samen.</dd>
-  <dt>Importeren</dt><dd>Kopieert <code>.ebl</code>-bestanden van een SD-kaart of USB-stick, bijvoorbeeld een kaart rechtstreeks uit het instrument. Geen W2K-2 nodig.</dd>
-  <dt>Samenstellen</dt><dd>Bouwt het logboek opnieuw op uit wat al op de telefoon staat. Handig na het wijzigen van een instelling, of om je logboek te bekijken terwijl je niet bij de boot bent.</dd>
-  <dt>Publiceren</dt><dd>Stuurt het logboek naar je website. Het gaat zoals het is als het actueel is, en wordt eerst opnieuw samengesteld als nieuwe gegevens of een gewijzigde instelling het verouderd hebben.</dd>
-  <dt>Logboek bekijken</dt><dd>Toont het logboek schermvullend; tik nog eens om terug te gaan naar het log.</dd>
+  <dt>Importeren</dt><dd>Kopieert <code>.ebl</code>-bestanden van een SD-kaart of USB-stick, bijvoorbeeld een kaart rechtstreeks uit het instrument, en stelt daarna het logboek samen. Geen W2K-2 nodig.</dd>
+  <dt>Samenstellen</dt><dd>Bouwt het logboek opnieuw op uit wat al op de telefoon staat, zonder W2K-2 en zonder nieuwe bestanden. Handig na het wijzigen van een instelling, of om ontbrekende plaatsnamen, weer en golven alsnog op te halen.</dd>
+  <dt>Publiceren</dt><dd>Stuurt het logboek naar je website, en stelt het eerst opnieuw samen als het verouderd is. Handig als je aan boord zonder internet hebt samengesteld, of als publiceren eerder mislukte.</dd>
+  <dt>Logboek bekijken</dt><dd>Toont het lokale logboek, dat op de telefoon staat, schermvullend; tik nog eens om terug te gaan naar het log.</dd>
   <dt>Boot-modus</dt><dd>De zeilbootknop, zie <a href="#boat-mode">Boot-modus</a>.</dd>
   <dt>Instellingen</dt><dd>Het tandwiel.</dd>
 </dl>
 <dl lang="fr">
   <dt>Télécharger</dt><dd>Récupère les nouvelles données du W2K-2 et assemble le journal de bord.</dd>
-  <dt>Importer</dt><dd>Copie des fichiers <code>.ebl</code> depuis une carte SD ou une clé USB, par exemple une carte retirée directement de l'instrument. Pas besoin du W2K-2.</dd>
-  <dt>Assembler</dt><dd>Reconstruit le journal à partir de ce qui se trouve déjà sur le téléphone. Pratique après avoir modifié un réglage, ou pour consulter votre journal loin du bateau.</dd>
-  <dt>Publier</dt><dd>Envoie le journal à votre site. Il part tel quel s'il est à jour, et il est d'abord réassemblé si de nouvelles données ou un réglage modifié l'ont rendu obsolète.</dd>
-  <dt>Consulter le journal</dt><dd>Affiche le journal en plein écran ; touchez à nouveau pour revenir au journal d'activité.</dd>
+  <dt>Importer</dt><dd>Copie des fichiers <code>.ebl</code> depuis une carte SD ou une clé USB, par exemple une carte retirée directement de l'instrument, puis assemble le journal. Pas besoin du W2K-2.</dd>
+  <dt>Assembler</dt><dd>Reconstruit le journal à partir de ce qui se trouve déjà sur le téléphone, sans W2K-2 et sans nouveaux fichiers. Pratique après avoir modifié un réglage, ou pour récupérer les noms de lieux, la météo et les vagues qui manquaient.</dd>
+  <dt>Publier</dt><dd>Envoie le journal à votre site, en le réassemblant d'abord s'il est obsolète. Pratique si vous avez assemblé à bord sans internet, ou si la publication a échoué auparavant.</dd>
+  <dt>Consulter le journal</dt><dd>Affiche le journal local, celui du téléphone, en plein écran ; touchez à nouveau pour revenir au journal d'activité.</dd>
   <dt>Mode bateau</dt><dd>Le bouton voilier, voir <a href="#boat-mode">Mode bateau</a>.</dd>
   <dt>Paramètres</dt><dd>La roue dentée.</dd>
 </dl>
 <dl lang="de">
   <dt>Herunterladen</dt><dd>Holt neue Daten vom W2K-2 und stellt das Bordbuch zusammen.</dd>
-  <dt>Importieren</dt><dd>Kopiert <code>.ebl</code>-Dateien stattdessen von einer SD-Karte oder einem USB-Stick, zum Beispiel einer Karte direkt aus dem Instrument. Kein W2K-2 nötig.</dd>
-  <dt>Zusammenstellen</dt><dd>Baut das Bordbuch aus dem, was schon auf dem Telefon liegt, neu auf. Praktisch nach einer geänderten Einstellung oder um das Bordbuch auch fern vom Boot anzusehen.</dd>
-  <dt>Veröffentlichen</dt><dd>Sendet das Bordbuch an Ihre Website. Es wird unverändert gesendet, wenn es aktuell ist, und zuerst neu zusammengestellt, wenn neue Daten oder eine geänderte Einstellung es veraltet haben.</dd>
-  <dt>Bordbuch ansehen</dt><dd>Zeigt das Bordbuch im Vollbild; noch einmal tippen, um zum Log zurückzukehren.</dd>
+  <dt>Importieren</dt><dd>Kopiert <code>.ebl</code>-Dateien von einer SD-Karte oder einem USB-Stick, zum Beispiel einer Karte direkt aus dem Instrument, und stellt danach das Bordbuch zusammen. Kein W2K-2 nötig.</dd>
+  <dt>Zusammenstellen</dt><dd>Baut das Bordbuch aus dem, was schon auf dem Telefon liegt, neu auf, ohne W2K-2 und ohne neue Dateien. Praktisch nach einer geänderten Einstellung oder um fehlende Ortsnamen, Wetter und Wellen nachzuholen.</dd>
+  <dt>Veröffentlichen</dt><dd>Sendet das Bordbuch an Ihre Website und stellt es vorher neu zusammen, wenn es veraltet ist. Praktisch, wenn Sie an Bord ohne Internet zusammengestellt haben oder das Veröffentlichen zuvor fehlschlug.</dd>
+  <dt>Bordbuch ansehen</dt><dd>Zeigt das lokale Bordbuch, das auf dem Telefon liegt, im Vollbild; noch einmal tippen, um zum Log zurückzukehren.</dd>
   <dt>Boot-Modus</dt><dd>Die Segelboot-Schaltfläche, siehe <a href="#boat-mode">Boot-Modus</a>.</dd>
   <dt>Einstellungen</dt><dd>Das Zahnrad.</dd>
 </dl>
-<p lang="en">A button that is busy pulses; tap it again to cancel. While the app is not on screen the notification shows the same.</p>
-<p lang="nl">Een knop die bezig is, pulseert; tik er nog eens op om te annuleren. Zolang de app niet in beeld is, laat de melding hetzelfde zien.</p>
-<p lang="fr">Un bouton occupé pulse ; touchez-le à nouveau pour annuler. Tant que l'application n'est pas à l'écran, la notification affiche la même chose.</p>
-<p lang="de">Eine Schaltfläche, die arbeitet, pulsiert; noch einmal tippen bricht ab. Solange die App nicht auf dem Bildschirm ist, zeigt die Mitteilung dasselbe.</p>
+<p lang="en">Download, Import and Assemble also publish the logbook afterwards when "Publish automatically after assembling" is on in Settings. A button that is busy pulses; tap it again to cancel. While the app is not on screen the notification shows the same.</p>
+<p lang="nl">Downloaden, Importeren en Samenstellen publiceren het logboek daarna ook als "Automatisch publiceren na samenstellen" aan staat in Instellingen. Een knop die bezig is, pulseert; tik er nog eens op om te annuleren. Zolang de app niet in beeld is, laat de melding hetzelfde zien.</p>
+<p lang="fr">Télécharger, Importer et Assembler publient aussi le journal ensuite si « Publier automatiquement après l'assemblage » est activé dans les Paramètres. Un bouton occupé pulse ; touchez-le à nouveau pour annuler. Tant que l'application n'est pas à l'écran, la notification affiche la même chose.</p>
+<p lang="de">Herunterladen, Importieren und Zusammenstellen veröffentlichen das Bordbuch anschließend auch, wenn „Nach dem Zusammenstellen automatisch veröffentlichen“ in den Einstellungen an ist. Eine Schaltfläche, die arbeitet, pulsiert; noch einmal tippen bricht ab. Solange die App nicht auf dem Bildschirm ist, zeigt die Mitteilung dasselbe.</p>
 </section>
 
 <section id="logbook">
@@ -258,10 +258,10 @@ und funktioniert deshalb auch auf See.</p>
   <figcaption lang="fr">La carte d'un trajet</figcaption>
   <figcaption lang="de">Die Karte einer Fahrt</figcaption>
 </figure>
-<div class="note" lang="en"><p>Place names come from OpenStreetMap and need internet when the logbook is assembled. Without internet you see coordinates instead; assemble again later and the names appear.</p></div>
-<div class="note" lang="nl"><p>Plaatsnamen komen van OpenStreetMap en hebben internet nodig als het logboek wordt samengesteld. Zonder internet zie je coördinaten; stel het later opnieuw samen en de namen verschijnen.</p></div>
-<div class="note" lang="fr"><p>Les noms de lieux viennent d'OpenStreetMap et demandent internet lors de l'assemblage du journal. Sans internet, vous voyez des coordonnées ; réassemblez plus tard et les noms apparaissent.</p></div>
-<div class="note" lang="de"><p>Die Ortsnamen stammen von OpenStreetMap und brauchen Internet, wenn das Bordbuch zusammengestellt wird. Ohne Internet sehen Sie Koordinaten; stellen Sie es später neu zusammen, dann erscheinen die Namen.</p></div>
+<div class="note" lang="en"><p>Place names come from OpenStreetMap; wind, rain, cloud cover and waves from Open-Meteo. Both need internet when the logbook is assembled. Open-Meteo gives regional model data for the nearest point, so it is indicative. What your boat measures itself (wind, temperature, humidity, if the sensors are on the network) comes from the W2K-2 log files and needs no internet. Without internet you see coordinates and no Open-Meteo data. Assemble the logbook again later, with internet, and the place names and that data are filled in.</p></div>
+<div class="note" lang="nl"><p>Plaatsnamen komen van OpenStreetMap; wind, regen, bewolking en golven van Open-Meteo. Beide hebben internet nodig als het logboek wordt samengesteld. Open-Meteo geeft gegevens van een regionaal model voor het dichtstbijzijnde punt, dus indicatief. Wat je boot zelf meet (wind, temperatuur, luchtvochtigheid, als de sensoren op het netwerk zitten) komt uit de logbestanden van de W2K-2 en heeft geen internet nodig. Zonder internet zie je coördinaten en geen gegevens van Open-Meteo. Stel het logboek later met internet opnieuw samen: dan staan de plaatsnamen en die gegevens er alsnog in.</p></div>
+<div class="note" lang="fr"><p>Les noms de lieux viennent d'OpenStreetMap ; le vent, la pluie, la nébulosité et les vagues d'Open-Meteo. Les deux demandent internet lors de l'assemblage du journal. Open-Meteo fournit les données d'un modèle régional pour le point le plus proche : elles sont indicatives. Ce que votre bateau mesure lui-même (vent, température, humidité, si les capteurs sont sur le réseau) vient des fichiers journaux du W2K-2 et n'a pas besoin d'internet. Sans internet, vous voyez des coordonnées et aucune donnée d'Open-Meteo. Assemblez à nouveau le journal plus tard, avec internet : les noms de lieux et ces données y seront alors.</p></div>
+<div class="note" lang="de"><p>Die Ortsnamen stammen von OpenStreetMap; Wind, Regen, Bewölkung und Wellen von Open-Meteo. Beides braucht Internet, wenn das Bordbuch zusammengestellt wird. Open-Meteo liefert Daten eines regionalen Modells für den nächstgelegenen Punkt, sie sind also Richtwerte. Was Ihr Boot selbst misst (Wind, Temperatur, Luftfeuchtigkeit, wenn die Sensoren im Netzwerk sind), stammt aus den Logdateien des W2K-2 und braucht kein Internet. Ohne Internet sehen Sie Koordinaten und keine Open-Meteo-Daten. Stellen Sie das Bordbuch später mit Internet neu zusammen: Dann stehen die Ortsnamen und diese Daten darin.</p></div>
 </section>
 
 <section id="publish">
@@ -273,28 +273,28 @@ und funktioniert deshalb auch auf See.</p>
   <p>Optional. If you have a WordPress site set up for this, fill in Settings &rarr; Publish: pick <b>WordPress</b>, then the site's
   address (<code>your-site.example</code> is enough), a user name and an Application Password. Use the address of the site, not the
   address of the logbook page: that one forwards to a login page and uploads nothing.</p>
-  <p>Picking <b>Don't publish</b> keeps what you typed, so switching back finds it again.</p>
+  <p>On the published page you can add a remark to each trip (the <b>Remark</b> button).</p>
   <p>How to set up the WordPress side is in the <a href="https://github.com/Ayuus/nmea2log#readme">nmea2log readme</a>.</p>
 </div>
 <div lang="nl">
   <p>Optioneel. Heb je een WordPress-site hiervoor ingericht, vul dan Instellingen &rarr; Publiceren in: kies <b>WordPress</b>, dan het adres
   van de site (<code>jouw-site.nl</code> is genoeg), een gebruikersnaam en een applicatiewachtwoord. Gebruik het adres van de site, niet het
   adres van de logboekpagina: die stuurt je door naar een inlogpagina en uploadt niets.</p>
-  <p>Kies je <b>Niet publiceren</b>, dan blijft wat je typte bewaard, zodat terugschakelen het weer vindt.</p>
+  <p>Op de gepubliceerde pagina kun je bij elke reis een opmerking plaatsen (de knop <b>Opmerking</b>).</p>
   <p>Hoe je de WordPress-kant inricht staat in de <a href="https://github.com/Ayuus/nmea2log#readme">nmea2log readme</a>.</p>
 </div>
 <div lang="fr">
   <p>Facultatif. Si vous avez configuré un site WordPress pour cela, renseignez Paramètres &rarr; Publier : choisissez <b>WordPress</b>, puis l'adresse du site
   (<code>votre-site.example</code> suffit), un nom d'utilisateur et un mot de passe d'application. Utilisez l'adresse du site, pas celle de la page du
   journal : celle-ci renvoie vers une page de connexion et ne transmet rien.</p>
-  <p>Choisir <b>Ne pas publier</b> conserve ce que vous avez saisi : en revenant en arrière, vous le retrouvez.</p>
+  <p>Sur la page publiée, vous pouvez ajouter une remarque à chaque trajet (le bouton <b>Remarque</b>).</p>
   <p>La configuration côté WordPress est décrite dans le <a href="https://github.com/Ayuus/nmea2log#readme">readme de nmea2log</a>.</p>
 </div>
 <div lang="de">
   <p>Optional. Wenn Sie dafür eine WordPress-Website eingerichtet haben, füllen Sie Einstellungen &rarr; Veröffentlichen aus: Wählen Sie <b>WordPress</b>, dann die Adresse
   der Website (<code>ihre-website.example</code> genügt), einen Benutzernamen und ein Anwendungspasswort. Verwenden Sie die Adresse der Website, nicht die
   der Bordbuch-Seite: Diese leitet auf eine Anmeldeseite weiter und lädt nichts hoch.</p>
-  <p>Wenn Sie <b>Nicht veröffentlichen</b> wählen, bleibt das Eingegebene erhalten, sodass es beim Zurückwechseln wieder da ist.</p>
+  <p>Auf der veröffentlichten Seite können Sie zu jeder Fahrt eine Bemerkung hinzufügen (die Schaltfläche <b>Bemerkung</b>).</p>
   <p>Wie die WordPress-Seite eingerichtet wird, steht in der <a href="https://github.com/Ayuus/nmea2log#readme">nmea2log-Readme</a>.</p>
 </div>
 </section>
@@ -305,32 +305,32 @@ und funktioniert deshalb auch auf See.</p>
 <h2 lang="fr">6. Mode bateau</h2>
 <h2 lang="de">6. Boot-Modus</h2>
 <div lang="en">
-  <p>With the sailboat button on, the app looks for the W2K-2 every few minutes. Once it finds it, it downloads new data and assembles
-  the logbook, then waits for the interval you chose before the next round. It recognises when you are in harbour (not moving, engine off)
+  <p>With the sailboat button on, the app looks for the W2K-2 periodically (every 5 minutes: a short check that downloads nothing, so the first round starts soon after the connection is there). As soon as the W2K-2 answers, it downloads new data and assembles
+  the logbook, then waits for the interval you chose (30 minutes to 3 hours) before the next round. It recognises when you are in harbour (not moving, engine off)
   or have left the boat (the W2K-2 no longer answers) and can then do a final round and publish.</p>
   <p>All of that is in Settings under Boat mode: how often, and what ends the voyage. You can also have it switch itself on when the app opens.</p>
   <p data-platform="android">Android's battery saving can hold back a background app while the phone lies still. The first time you turn boat mode on, the app asks to be exempted. Declining is safe; rounds are then just less punctual.</p>
   <p data-platform="ios">iOS decides when a background app may run, sometimes hours after the time the app asked for, and not at all in Low Power Mode or with Background App Refresh off. A quiet notification shows the progress of a round and the result replaces it. When you open the app, it tries right away.</p>
 </div>
 <div lang="nl">
-  <p>Met de zeilbootknop aan zoekt de app om de paar minuten naar de W2K-2. Zodra hij hem vindt, haalt hij nieuwe gegevens op en stelt hij
-  het logboek samen, en wacht dan het gekozen interval af voor de volgende ronde. Hij merkt wanneer je in de haven ligt (niet bewegen, motor uit)
+  <p>Met de zeilbootknop aan zoekt de app periodiek naar de W2K-2 (elke 5 minuten: een korte controle die niets downloadt, zodat de eerste ronde snel begint zodra de verbinding er is). Zodra de W2K-2 antwoordt, haalt hij nieuwe gegevens op en stelt hij
+  het logboek samen, en wacht dan het gekozen interval af (30 minuten tot 3 uur) voor de volgende ronde. Hij merkt wanneer je in de haven ligt (niet bewegen, motor uit)
   of de boot hebt verlaten (de W2K-2 antwoordt niet meer) en kan dan een laatste ronde doen en publiceren.</p>
   <p>Dat alles staat in Instellingen onder Boot-modus: hoe vaak, en wat de reis beëindigt. Je kunt hem ook automatisch laten starten als de app opent.</p>
   <p data-platform="android">Het batterijbesparen van Android kan een app op de achtergrond tegenhouden zolang de telefoon stilligt. De eerste keer dat je de boot-modus aanzet, vraagt de app om uitgezonderd te worden. Weigeren kan zonder risico; de rondes zijn dan alleen minder stipt.</p>
   <p data-platform="ios">iOS bepaalt wanneer een app op de achtergrond mag draaien, soms uren na het gevraagde tijdstip, en helemaal niet in de Low Power Mode of met Achtergrond-appvernieuwing uit. Een stille melding toont de voortgang van een ronde en het resultaat vervangt hem. Als je de app opent, probeert hij het meteen.</p>
 </div>
 <div lang="fr">
-  <p>Avec le bouton voilier activé, l'application cherche le W2K-2 toutes les quelques minutes. Dès qu'elle le trouve, elle télécharge les nouvelles données et assemble
-  le journal, puis attend l'intervalle choisi avant le tour suivant. Elle reconnaît quand vous êtes au port (à l'arrêt, moteur coupé)
+  <p>Avec le bouton voilier activé, l'application cherche le W2K-2 périodiquement (toutes les 5 minutes : un court contrôle qui ne télécharge rien, pour que le premier tour démarre vite dès que la connexion est là). Dès que le W2K-2 répond, elle télécharge les nouvelles données et assemble
+  le journal, puis attend l'intervalle choisi (de 30 minutes à 3 heures) avant le tour suivant. Elle reconnaît quand vous êtes au port (à l'arrêt, moteur coupé)
   ou que vous avez quitté le bateau (le W2K-2 ne répond plus), et peut alors faire un dernier tour et publier.</p>
   <p>Tout cela se règle dans les Paramètres, sous Mode bateau : la fréquence, et ce qui met fin à la traversée. Vous pouvez aussi le faire démarrer tout seul à l'ouverture de l'application.</p>
   <p data-platform="android">Les économies de batterie d'Android peuvent retenir une application en arrière-plan tant que le téléphone reste immobile. La première fois que vous activez le mode bateau, l'application demande à en être exemptée. Refuser est sans danger ; les tours sont alors simplement moins ponctuels.</p>
   <p data-platform="ios">iOS décide quand une application en arrière-plan peut s'exécuter, parfois des heures après l'heure demandée, et jamais en mode économie d'énergie ou avec l'actualisation en arrière-plan désactivée. Une notification discrète montre la progression d'un tour, et le résultat la remplace. Quand vous ouvrez l'application, elle essaie tout de suite.</p>
 </div>
 <div lang="de">
-  <p>Bei eingeschalteter Segelboot-Schaltfläche sucht die App alle paar Minuten nach dem W2K-2. Sobald sie es findet, lädt sie neue Daten herunter und stellt
-  das Bordbuch zusammen, und wartet dann das gewählte Intervall bis zur nächsten Runde. Sie erkennt, wenn Sie im Hafen liegen (keine Bewegung, Motor aus)
+  <p>Bei eingeschalteter Segelboot-Schaltfläche sucht die App regelmäßig nach dem W2K-2 (alle 5 Minuten: eine kurze Prüfung, die nichts herunterlädt, damit die erste Runde bald beginnt, sobald die Verbindung da ist). Sobald das W2K-2 antwortet, lädt sie neue Daten herunter und stellt
+  das Bordbuch zusammen, und wartet dann das gewählte Intervall (30 Minuten bis 3 Stunden) bis zur nächsten Runde. Sie erkennt, wenn Sie im Hafen liegen (keine Bewegung, Motor aus)
   oder das Boot verlassen haben (das W2K-2 antwortet nicht mehr), und kann dann eine letzte Runde machen und veröffentlichen.</p>
   <p>All das steht in den Einstellungen unter Boot-Modus: wie oft, und was die Fahrt beendet. Sie können ihn auch beim Öffnen der App automatisch starten lassen.</p>
   <p data-platform="android">Die Akku-Sparfunktion von Android kann eine App im Hintergrund zurückhalten, solange das Telefon still liegt. Beim ersten Einschalten des Boot-Modus bittet die App um eine Ausnahme. Ablehnen ist ungefährlich; die Runden sind dann nur weniger pünktlich.</p>
@@ -415,7 +415,7 @@ und funktioniert deshalb auch auf See.</p>
   and then try again. <span data-platform="ios">Also check that the app may use the local network (iPhone Settings &rarr; My Sailing Logbook).</span></dd>
   <dt>"No trips found"</dt>
   <dd>There is no data yet, or the voyage was too short to count as a trip. Download first, or import files.</dd>
-  <dt>Coordinates instead of place names</dt>
+  <dt>Coordinates instead of place names, or no weather and waves</dt>
   <dd>The phone had no internet while the logbook was assembled. Assemble again with internet.</dd>
   <dt>The logbook does not show a change I made</dt>
   <dd>Tap Assemble: a setting such as the boat name only ends up in the logbook when it is built again.</dd>
@@ -428,7 +428,7 @@ und funktioniert deshalb auch auf See.</p>
   en probeer het opnieuw. <span data-platform="ios">Kijk ook of de app het lokale netwerk mag gebruiken (iPhone Instellingen &rarr; My Sailing Logbook).</span></dd>
   <dt>"Geen reizen gevonden"</dt>
   <dd>Er zijn nog geen gegevens, of de tocht was te kort om als reis te tellen. Download eerst, of importeer bestanden.</dd>
-  <dt>Coördinaten in plaats van plaatsnamen</dt>
+  <dt>Coördinaten in plaats van plaatsnamen, of geen weer en golven</dt>
   <dd>De telefoon had geen internet toen het logboek werd samengesteld. Stel het opnieuw samen met internet.</dd>
   <dt>Het logboek toont een wijziging niet die ik maakte</dt>
   <dd>Tik op Samenstellen: een instelling zoals de bootnaam komt pas in het logboek als het opnieuw wordt gebouwd.</dd>
@@ -441,7 +441,7 @@ und funktioniert deshalb auch auf See.</p>
   puis réessayez. <span data-platform="ios">Vérifiez aussi que l'application a le droit d'utiliser le réseau local (Réglages de l'iPhone &rarr; My Sailing Logbook).</span></dd>
   <dt>« Aucun trajet trouvé »</dt>
   <dd>Il n'y a pas encore de données, ou la traversée était trop courte pour compter comme un trajet. Téléchargez d'abord, ou importez des fichiers.</dd>
-  <dt>Des coordonnées au lieu de noms de lieux</dt>
+  <dt>Des coordonnées au lieu de noms de lieux, ou ni météo ni vagues</dt>
   <dd>Le téléphone n'avait pas internet lors de l'assemblage du journal. Réassemblez avec internet.</dd>
   <dt>Le journal n'affiche pas une modification que j'ai faite</dt>
   <dd>Touchez Assembler : un réglage comme le nom du bateau n'apparaît dans le journal que lorsqu'il est reconstruit.</dd>
@@ -454,7 +454,7 @@ und funktioniert deshalb auch auf See.</p>
   und versuchen Sie es dann erneut. <span data-platform="ios">Prüfen Sie auch, ob die App das lokale Netzwerk nutzen darf (iPhone-Einstellungen &rarr; My Sailing Logbook).</span></dd>
   <dt>„Keine Fahrten gefunden“</dt>
   <dd>Es gibt noch keine Daten, oder die Fahrt war zu kurz, um als Fahrt zu zählen. Laden Sie zuerst herunter oder importieren Sie Dateien.</dd>
-  <dt>Koordinaten statt Ortsnamen</dt>
+  <dt>Koordinaten statt Ortsnamen, oder weder Wetter noch Wellen</dt>
   <dd>Das Telefon hatte kein Internet, als das Bordbuch zusammengestellt wurde. Stellen Sie es mit Internet neu zusammen.</dd>
   <dt>Das Bordbuch zeigt eine Änderung nicht, die ich gemacht habe</dt>
   <dd>Tippen Sie auf Zusammenstellen: Eine Einstellung wie der Bootsname kommt erst ins Bordbuch, wenn es neu aufgebaut wird.</dd>
