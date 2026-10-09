@@ -22,13 +22,13 @@ Actisense/
 
 ## Try it in the Android app
 
-1. Download [`demo-ebl.zip`](https://github.com/Ayuus/nmea2log/releases/download/demo-data/demo-ebl.zip) and unzip it on a computer.
-2. Start the app once (so that its folder exists), then connect the phone with a USB cable (file transfer) and copy the folder
-   `Actisense` into `Android/data/com.ayuus.mysailinglogbook/files/` on the phone.
-3. In the app, tap **Assemble** (the third button), then **View logbook**: five trips.
+1. Download [`demo-ebl.zip`](https://github.com/Ayuus/nmea2log/releases/download/demo-data/demo-ebl.zip) on the phone and unzip it (in
+   the Files app, open the zip and tap *Extract*): that makes a folder `demo-ebl` in Downloads, with the folder `Actisense` in it.
+2. In the app, tap **Import** (the second button) and pick that folder. Android does not let an app pick Downloads itself, only a
+   folder inside it: pick `demo-ebl` (or `Actisense`), then *Use this folder* and *Allow*.
+3. The app copies the five files and builds the logbook. Tap **View logbook**.
 
-The **Import** button is for the files of an SD card or USB drive (it offers only those); a folder on the phone itself is not
-something it can pick. To start over with your own data afterwards, use Settings > Local .ebl files > Delete.
+To start over with your own data afterwards, use Settings > Local .ebl files > Delete.
 
 ## Try it in the iOS app
 
