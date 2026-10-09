@@ -13,7 +13,7 @@ software like OpenCPN/Navionics) — same name as `-o`, different extension.
 **[View an example logbook](https://ayuus.github.io/nmea2log/examples/demo-logbook.html)** — a fictional boat and trips ([examples/demo-logbook.html](examples/demo-logbook.html)), showing what the generated HTML output looks like.
 
 **[Try it yourself with demo data](examples/demo-data/README.md)** — the `.ebl` files of that made-up cruise (no real boat behind
-them): import them in the Android or iOS app, or run `nmea2log` on them, and you get the same five trips.
+them): put them in the Android or iOS app (the instructions are there), or run `nmea2log` on them, and you get the same five trips.
 
 > **Looking for testers**: so far this has only been run against one boat's NMEA2000 network — a
 > **motorboat** (one Actisense W2K-2, one particular mix of engine/GPS/depth/battery instruments).

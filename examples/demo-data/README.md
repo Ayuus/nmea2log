@@ -20,14 +20,23 @@ Actisense/
     000001_005.ebl   West-Terschelling -> Enkhuizen
 ```
 
-## Try it in the Android or iOS app
+## Try it in the Android app
 
-1. Download [`demo-ebl.zip`](https://github.com/Ayuus/nmea2log/releases/download/demo-data/demo-ebl.zip) on the phone and unzip it
-   (Android: open it in the Files app and tap *Extract*; iPhone: tap the zip in the Files app).
-2. In the app, tap **Import** (the second button) and pick the unzipped `Actisense` folder.
-3. The app copies the files and builds the logbook. Tap **View logbook**.
+1. Download [`demo-ebl.zip`](https://github.com/Ayuus/nmea2log/releases/download/demo-data/demo-ebl.zip) and unzip it on a computer.
+2. Start the app once (so that its folder exists), then connect the phone with a USB cable (file transfer) and copy the folder
+   `Actisense` into `Android/data/com.ayuus.mysailinglogbook/files/` on the phone.
+3. In the app, tap **Assemble** (the third button), then **View logbook**: five trips.
 
-To start over with your own data afterwards, use Settings > Local .ebl files > Delete.
+The **Import** button is for the files of an SD card or USB drive (it offers only those); a folder on the phone itself is not
+something it can pick. To start over with your own data afterwards, use Settings > Local .ebl files > Delete.
+
+## Try it in the iOS app
+
+1. Download [`demo-ebl.zip`](https://github.com/Ayuus/nmea2log/releases/download/demo-data/demo-ebl.zip) and unzip it (in the Files
+   app, tap the zip).
+2. In the app, tap **Import** (the second button) and pick the unzipped `Actisense` folder. Or copy that folder into the app's own
+   folder in Files (On My iPhone > My Sailing Logbook) and tap **Assemble**.
+3. Tap **View logbook**: five trips.
 
 ## Try it on a computer
 
