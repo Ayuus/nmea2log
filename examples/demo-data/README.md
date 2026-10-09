@@ -23,8 +23,8 @@ Actisense/
 ## Try it in the Android app
 
 1. Download [`demo-ebl.zip`](https://github.com/Ayuus/nmea2log/releases/download/demo-data/demo-ebl.zip) on the phone and unzip it (in
-   the Files app, open the zip and tap *Extract*): that makes a folder `demo-ebl` in Downloads, with the folder `Actisense` in it.
-2. In the app, tap **Import** (the second button) and pick that folder. Android does not let an app pick Downloads itself, only a
+   the Files app, open the zip and tap *Extract*): that makes a folder `demo-ebl` in the phone's **Download** folder (some apps call it "Downloads"), with the folder `Actisense` in it.
+2. In the app, tap **Import** (the second button) and pick that folder. Android does not let an app pick the Download folder itself, only a
    folder inside it: pick `demo-ebl` (or `Actisense`), then *Use this folder* and *Allow*.
 3. The app copies the five files and builds the logbook. Tap **View logbook**.
 
