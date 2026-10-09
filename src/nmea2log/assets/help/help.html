@@ -193,10 +193,10 @@ und funktioniert deshalb auch auf See.</p>
   <dt>Boot-Modus</dt><dd>Die Segelboot-Schaltfläche, siehe <a href="#boat-mode">Boot-Modus</a>.</dd>
   <dt>Einstellungen</dt><dd>Das Zahnrad.</dd>
 </dl>
-<p lang="en">Download, Import and Assemble also publish the logbook afterwards when "Publish automatically after assembling" is on in Settings. A button that is busy pulses; tap it again to cancel. While the app is not on screen the notification shows the same.</p>
-<p lang="nl">Downloaden, Importeren en Samenstellen publiceren het logboek daarna ook als "Automatisch publiceren na samenstellen" aan staat in Instellingen. Een knop die bezig is, pulseert; tik er nog eens op om te annuleren. Zolang de app niet in beeld is, laat de melding hetzelfde zien.</p>
-<p lang="fr">Télécharger, Importer et Assembler publient aussi le journal ensuite si « Publier automatiquement après l'assemblage » est activé dans les Paramètres. Un bouton occupé pulse ; touchez-le à nouveau pour annuler. Tant que l'application n'est pas à l'écran, la notification affiche la même chose.</p>
-<p lang="de">Herunterladen, Importieren und Zusammenstellen veröffentlichen das Bordbuch anschließend auch, wenn „Nach dem Zusammenstellen automatisch veröffentlichen“ in den Einstellungen an ist. Eine Schaltfläche, die arbeitet, pulsiert; noch einmal tippen bricht ab. Solange die App nicht auf dem Bildschirm ist, zeigt die Mitteilung dasselbe.</p>
+<p lang="en">Download, Import and Assemble also publish the logbook afterwards when "Publish automatically after assembling" is on in Settings. A button that is busy pulses; tap it again to cancel. <span data-platform="android">While the app is not on screen the notification shows the same.</span><span data-platform="ios">Stay in the app until it is done: iOS pauses an app shortly after you leave it.</span></p>
+<p lang="nl">Downloaden, Importeren en Samenstellen publiceren het logboek daarna ook als "Automatisch publiceren na samenstellen" aan staat in Instellingen. Een knop die bezig is, pulseert; tik er nog eens op om te annuleren. <span data-platform="android">Zolang de app niet in beeld is, laat de melding hetzelfde zien.</span><span data-platform="ios">Blijf in de app tot het klaar is: iOS pauzeert een app kort nadat je hem verlaat.</span></p>
+<p lang="fr">Télécharger, Importer et Assembler publient aussi le journal ensuite si « Publier automatiquement après l'assemblage » est activé dans les Paramètres. Un bouton occupé pulse ; touchez-le à nouveau pour annuler. <span data-platform="android">Tant que l'application n'est pas à l'écran, la notification affiche la même chose.</span><span data-platform="ios">Restez dans l'application jusqu'à la fin : iOS met une application en pause peu après que vous l'avez quittée.</span></p>
+<p lang="de">Herunterladen, Importieren und Zusammenstellen veröffentlichen das Bordbuch anschließend auch, wenn „Nach dem Zusammenstellen automatisch veröffentlichen“ in den Einstellungen an ist. Eine Schaltfläche, die arbeitet, pulsiert; noch einmal tippen bricht ab. <span data-platform="android">Solange die App nicht auf dem Bildschirm ist, zeigt die Mitteilung dasselbe.</span><span data-platform="ios">Bleiben Sie in der App, bis es fertig ist: iOS pausiert eine App kurz nachdem Sie sie verlassen haben.</span></p>
 </section>
 
 <section id="logbook">
@@ -305,7 +305,7 @@ und funktioniert deshalb auch auf See.</p>
 <h2 lang="fr">6. Mode bateau</h2>
 <h2 lang="de">6. Boot-Modus</h2>
 <div lang="en">
-  <p>With the sailboat button on, the app looks for the W2K-2 periodically (every 5 minutes: a short check that downloads nothing, so the first round starts soon after the connection is there). As soon as the W2K-2 answers, it downloads new data and assembles
+  <p>With the sailboat button on, the app looks for the W2K-2 periodically (every 5 minutes<span data-platform="ios"> while the app is open</span>: a short check that downloads nothing, so the first round starts soon after the connection is there). As soon as the W2K-2 answers, it downloads new data and assembles
   the logbook, then waits for the interval you chose (30 minutes to 3 hours) before the next round. It recognises when you are in harbour (not moving, engine off)
   or have left the boat (the W2K-2 no longer answers) and can then do a final round and publish.</p>
   <p>All of that is in Settings under Boat mode: how often, and what ends the voyage. You can also have it switch itself on when the app opens.</p>
@@ -313,7 +313,7 @@ und funktioniert deshalb auch auf See.</p>
   <p data-platform="ios">iOS decides when a background app may run, sometimes hours after the time the app asked for, and not at all in Low Power Mode or with Background App Refresh off. A quiet notification shows the progress of a round and the result replaces it. When you open the app, it tries right away.</p>
 </div>
 <div lang="nl">
-  <p>Met de zeilbootknop aan zoekt de app periodiek naar de W2K-2 (elke 5 minuten: een korte controle die niets downloadt, zodat de eerste ronde snel begint zodra de verbinding er is). Zodra de W2K-2 antwoordt, haalt hij nieuwe gegevens op en stelt hij
+  <p>Met de zeilbootknop aan zoekt de app periodiek naar de W2K-2 (elke 5 minuten<span data-platform="ios"> zolang de app open is</span>: een korte controle die niets downloadt, zodat de eerste ronde snel begint zodra de verbinding er is). Zodra de W2K-2 antwoordt, haalt hij nieuwe gegevens op en stelt hij
   het logboek samen, en wacht dan het gekozen interval af (30 minuten tot 3 uur) voor de volgende ronde. Hij merkt wanneer je in de haven ligt (niet bewegen, motor uit)
   of de boot hebt verlaten (de W2K-2 antwoordt niet meer) en kan dan een laatste ronde doen en publiceren.</p>
   <p>Dat alles staat in Instellingen onder Boot-modus: hoe vaak, en wat de reis beëindigt. Je kunt hem ook automatisch laten starten als de app opent.</p>
@@ -321,7 +321,7 @@ und funktioniert deshalb auch auf See.</p>
   <p data-platform="ios">iOS bepaalt wanneer een app op de achtergrond mag draaien, soms uren na het gevraagde tijdstip, en helemaal niet in de Low Power Mode of met Achtergrond-appvernieuwing uit. Een stille melding toont de voortgang van een ronde en het resultaat vervangt hem. Als je de app opent, probeert hij het meteen.</p>
 </div>
 <div lang="fr">
-  <p>Avec le bouton voilier activé, l'application cherche le W2K-2 périodiquement (toutes les 5 minutes : un court contrôle qui ne télécharge rien, pour que le premier tour démarre vite dès que la connexion est là). Dès que le W2K-2 répond, elle télécharge les nouvelles données et assemble
+  <p>Avec le bouton voilier activé, l'application cherche le W2K-2 périodiquement (toutes les 5 minutes<span data-platform="ios"> tant que l'application est ouverte</span> : un court contrôle qui ne télécharge rien, pour que le premier tour démarre vite dès que la connexion est là). Dès que le W2K-2 répond, elle télécharge les nouvelles données et assemble
   le journal, puis attend l'intervalle choisi (de 30 minutes à 3 heures) avant le tour suivant. Elle reconnaît quand vous êtes au port (à l'arrêt, moteur coupé)
   ou que vous avez quitté le bateau (le W2K-2 ne répond plus), et peut alors faire un dernier tour et publier.</p>
   <p>Tout cela se règle dans les Paramètres, sous Mode bateau : la fréquence, et ce qui met fin à la traversée. Vous pouvez aussi le faire démarrer tout seul à l'ouverture de l'application.</p>
@@ -329,7 +329,7 @@ und funktioniert deshalb auch auf See.</p>
   <p data-platform="ios">iOS décide quand une application en arrière-plan peut s'exécuter, parfois des heures après l'heure demandée, et jamais en mode économie d'énergie ou avec l'actualisation en arrière-plan désactivée. Une notification discrète montre la progression d'un tour, et le résultat la remplace. Quand vous ouvrez l'application, elle essaie tout de suite.</p>
 </div>
 <div lang="de">
-  <p>Bei eingeschalteter Segelboot-Schaltfläche sucht die App regelmäßig nach dem W2K-2 (alle 5 Minuten: eine kurze Prüfung, die nichts herunterlädt, damit die erste Runde bald beginnt, sobald die Verbindung da ist). Sobald das W2K-2 antwortet, lädt sie neue Daten herunter und stellt
+  <p>Bei eingeschalteter Segelboot-Schaltfläche sucht die App regelmäßig nach dem W2K-2 (alle 5 Minuten<span data-platform="ios">, solange die App geöffnet ist</span>: eine kurze Prüfung, die nichts herunterlädt, damit die erste Runde bald beginnt, sobald die Verbindung da ist). Sobald das W2K-2 antwortet, lädt sie neue Daten herunter und stellt
   das Bordbuch zusammen, und wartet dann das gewählte Intervall (30 Minuten bis 3 Stunden) bis zur nächsten Runde. Sie erkennt, wenn Sie im Hafen liegen (keine Bewegung, Motor aus)
   oder das Boot verlassen haben (das W2K-2 antwortet nicht mehr), und kann dann eine letzte Runde machen und veröffentlichen.</p>
   <p>All das steht in den Einstellungen unter Boot-Modus: wie oft, und was die Fahrt beendet. Sie können ihn auch beim Öffnen der App automatisch starten lassen.</p>
