@@ -2,7 +2,7 @@
 
 ### Sailing logbook generator for the Actisense W2K-2
 
-Pure Python application that turns NMEA2000 log files from an **Actisense W2K-2** into a
+Pure Python application that turns NMEA2000 log files from an **[Actisense W2K-2](https://actisense.com/products/w2k-2-nmea-2000-wifi-gateway/)** into a
 sailing logbook: departure/arrival port, fuel consumption (from engine data, not a tank sensor),
 and engine hours. By default writes an **HTML logbook** (`.html`) — one self-contained file with
 the boat name, totals (distance/fuel/engine hours/average consumption), trips grouped by
