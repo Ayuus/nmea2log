@@ -424,6 +424,48 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "fr": "Supprimer les {count} fichiers .ebl ({size}) de cet appareil ? Le livre de bord déjà créé reste tel quel. Un nouveau téléchargement récupère à nouveau les fichiers depuis le W2K-2 (ce qui peut prendre longtemps), et sans eux on ne peut pas créer un nouveau livre de bord. Les fichiers qui ne sont plus sur le W2K-2 sont perdus définitivement.",
         "de": "Alle {count} .ebl-Dateien ({size}) von diesem Gerät löschen? Das bereits erstellte Logbuch bleibt erhalten. Ein neuer Download holt die Dateien erneut vom W2K-2 (das kann lange dauern), und ohne sie lässt sich kein neues Logbuch zusammenstellen. Dateien, die nicht mehr auf dem W2K-2 liegen, sind endgültig verloren.",
     },
+    "label_ebl_backup": {
+        "en": "Copy the raw logfiles to a folder you pick (USB drive, cloud, ...)",
+        "nl": "De ruwe logbestanden kopiëren naar een map die je kiest (USB-stick, cloud, ...)",
+        "fr": "Copier les fichiers journaux bruts dans un dossier de votre choix (clé USB, cloud, ...)",
+        "de": "Die rohen Logdateien in einen Ordner Ihrer Wahl kopieren (USB-Speicher, Cloud, ...)",
+    },
+    "button_copy": {
+        "en": "Copy",
+        "nl": "Kopiëren",
+        "fr": "Copier",
+        "de": "Kopieren",
+    },
+    "dialog_ebl_backup_copying": {
+        "en": "Copying .ebl files... {current}/{total}",
+        "nl": "Bezig met kopiëren van .ebl-bestanden... {current}/{total}",
+        "fr": "Copie des fichiers .ebl... {current}/{total}",
+        "de": "Kopiere .ebl-Dateien... {current}/{total}",
+    },
+    "toast_ebl_backup_done": {
+        "en": "{copied} .ebl files copied ({skipped} were already there)",
+        "nl": "{copied} .ebl-bestanden gekopieerd ({skipped} stonden er al)",
+        "fr": "{copied} fichiers .ebl copiés ({skipped} y étaient déjà)",
+        "de": "{copied} .ebl-Dateien kopiert ({skipped} waren schon da)",
+    },
+    "toast_ebl_backup_errors": {
+        "en": "{errors} .ebl files could not be copied -- is there room on the drive?",
+        "nl": "{errors} .ebl-bestanden konden niet worden gekopieerd -- is er ruimte op de schijf?",
+        "fr": "{errors} fichiers .ebl n'ont pas pu être copiés -- reste-t-il de la place sur le support ?",
+        "de": "{errors} .ebl-Dateien konnten nicht kopiert werden -- ist auf dem Datenträger noch Platz?",
+    },
+    "toast_ebl_backup_failed": {
+        "en": "Copying failed: {detail}",
+        "nl": "Kopiëren mislukt: {detail}",
+        "fr": "La copie a échoué : {detail}",
+        "de": "Kopieren fehlgeschlagen: {detail}",
+    },
+    "error_backup_no_folder": {
+        "en": "Could not make the folder in the place you picked",
+        "nl": "Kon de map niet aanmaken op de plek die je koos",
+        "fr": "Impossible de créer le dossier à l'endroit choisi",
+        "de": "Der Ordner konnte an der gewählten Stelle nicht angelegt werden",
+    },
     "toast_ebl_files_deleted": {
         "en": "{count} .ebl files deleted ({size} freed)",
         "nl": "{count} .ebl-bestanden verwijderd ({size} vrijgemaakt)",

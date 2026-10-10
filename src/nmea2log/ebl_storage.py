@@ -1,10 +1,16 @@
-"""The raw ``.ebl`` files kept on a phone: counting them and deleting them (the "Local .ebl files" setting of the
-Android and iOS apps). The logic is here once, so both apps do exactly the same; the apps only show the result."""
+"""The raw ``.ebl`` files kept on a phone: counting them, deleting them and copying them to a folder (the "Local .ebl files"
+setting of the Android and iOS apps). The logic is here once, so both apps do exactly the same; the apps only show the result.
+(The Android app cannot use ``backup_to``: the folder it copies to is a content:// tree, not a path, so it follows the same
+rules in Kotlin: ``<folder>/Actisense/<the same sub-folders>/<name>``, a file already there with the same size is left alone.)"""
 
 from __future__ import annotations
 
+import os
+import shutil
 from pathlib import Path
-from typing import List, Tuple
+from typing import Callable, List, Optional, Tuple
+
+from .app_constants import EBL_DIR_NAME
 
 
 def ebl_files(root: Path) -> List[Path]:
@@ -53,3 +59,44 @@ def delete_all(root: Path) -> Tuple[int, str]:
             except OSError:
                 pass  # not empty: something else is in it
     return deleted, format_size(freed)
+
+
+
+def backup_to(
+    root: Path,
+    destination: Path,
+    progress: Optional[Callable[[int, int, str], None]] = None,
+    folder_name: str = EBL_DIR_NAME,
+) -> dict:
+    """Copies every .ebl file under ``root`` to ``destination``/``folder_name``/..., keeping the folders they are in, so the
+    copy is the same archive and can be imported again as it is. A file that is already there with the same size is left
+    alone (a second copy only adds what is new). A file is first written under a temporary name and then renamed, so a stick
+    pulled halfway never leaves a half file under the real name.
+
+    ``progress(current, total, name)`` is called after each file. Returns ``{"copied": n, "skipped": n, "errors": [name, ...],
+    "size": text}`` (``size`` is what was copied, like describe()). A file that cannot be copied (no room, the drive went away)
+    is recorded and the rest is still tried."""
+    root = Path(root)
+    target_root = Path(destination) / folder_name
+    files = ebl_files(root)
+    copied = skipped = 0
+    copied_bytes = 0
+    errors: List[str] = []
+    for index, source in enumerate(files, 1):
+        target = target_root / source.relative_to(root)
+        try:
+            size = source.stat().st_size
+            if target.is_file() and target.stat().st_size == size:
+                skipped += 1
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                temporary = target.with_name(target.name + ".part")
+                shutil.copyfile(source, temporary)
+                os.replace(temporary, target)
+                copied += 1
+                copied_bytes += size
+        except OSError:
+            errors.append(source.name)
+        if progress is not None:
+            progress(index, len(files), source.name)
+    return {"copied": copied, "skipped": skipped, "errors": errors, "size": format_size(copied_bytes)}
