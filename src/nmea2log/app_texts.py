@@ -17,22 +17,22 @@ from typing import Dict
 
 TEXTS: Dict[str, Dict[str, str]] = {
     "section_w2k2_boat": {
-        "en": "W2K-2 & boat",
-        "nl": "W2K-2 & boot",
-        "fr": "W2K-2 et bateau",
-        "de": "W2K-2 & Boot",
+        "en": "Actisense W2K-2 & boat",
+        "nl": "Actisense W2K-2 & boot",
+        "fr": "Actisense W2K-2 et bateau",
+        "de": "Actisense W2K-2 & Boot",
     },
     "label_w2k2_user": {
-        "en": "W2K-2 username",
-        "nl": "W2K-2 gebruikersnaam",
-        "fr": "Nom d'utilisateur W2K-2",
-        "de": "W2K-2-Benutzername",
+        "en": "Actisense W2K-2 username (of the device itself)",
+        "nl": "Gebruikersnaam van de Actisense W2K-2 (van het apparaat zelf)",
+        "fr": "Nom d'utilisateur de l'Actisense W2K-2 (de l'appareil lui-même)",
+        "de": "Benutzername des Actisense W2K-2 (des Geräts selbst)",
     },
     "label_w2k2_password": {
-        "en": "W2K-2 password",
-        "nl": "W2K-2 wachtwoord",
-        "fr": "Mot de passe W2K-2",
-        "de": "W2K-2-Passwort",
+        "en": "Actisense W2K-2 password (of the device itself)",
+        "nl": "Wachtwoord van de Actisense W2K-2 (van het apparaat zelf)",
+        "fr": "Mot de passe de l'Actisense W2K-2 (de l'appareil lui-même)",
+        "de": "Passwort des Actisense W2K-2 (des Geräts selbst)",
     },
     "label_boat_name": {
         "en": "Boat name",
@@ -329,10 +329,10 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "de": "Willkommen",
     },
     "dialog_help_message": {
-        "en": "A short guide explains how to connect to the W2K-2 and what the buttons do. Open it now? You can always find it later in Settings.",
-        "nl": "Een korte handleiding legt uit hoe je verbinding maakt met de W2K-2 en wat de knoppen doen. Nu openen? Je vindt hem later altijd in Instellingen.",
-        "fr": "Un court guide explique comment se connecter au W2K-2 et à quoi servent les boutons. Ouvrir maintenant ? Vous le retrouverez toujours dans les réglages.",
-        "de": "Eine kurze Anleitung erklärt, wie man sich mit dem W2K-2 verbindet und was die Schaltflächen tun. Jetzt öffnen? Sie finden sie später immer in den Einstellungen.",
+        "en": "A short guide explains how to connect to the Actisense W2K-2 and what the buttons do. Open it now? You can always find it later in Settings.",
+        "nl": "Een korte handleiding legt uit hoe je verbinding maakt met de Actisense W2K-2 en wat de knoppen doen. Nu openen? Je vindt hem later altijd in Instellingen.",
+        "fr": "Un court guide explique comment se connecter à l'Actisense W2K-2 et à quoi servent les boutons. Ouvrir maintenant ? Vous le retrouverez toujours dans les réglages.",
+        "de": "Eine kurze Anleitung erklärt, wie man sich mit dem Actisense W2K-2 verbindet und was die Schaltflächen tun. Jetzt öffnen? Sie finden sie später immer in den Einstellungen.",
     },
     "dialog_help_read": {
         "en": "Read the guide",
@@ -491,10 +491,10 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "de": "Einstellungen gespeichert",
     },
     "log_fill_w2k2_credentials": {
-        "en": "Fill in the W2K-2 username and password via Settings first.",
-        "nl": "Vul eerst de W2K-2 gebruikersnaam en het wachtwoord in via Instellingen.",
-        "fr": "Renseignez d'abord le nom d'utilisateur et le mot de passe W2K-2 dans les Paramètres.",
-        "de": "Trage zuerst den W2K-2-Benutzernamen und das Passwort in den Einstellungen ein.",
+        "en": "Fill in the Actisense W2K-2 username and password via Settings first.",
+        "nl": "Vul eerst de gebruikersnaam en het wachtwoord van de Actisense W2K-2 in via Instellingen.",
+        "fr": "Renseignez d'abord le nom d'utilisateur et le mot de passe de l'Actisense W2K-2 dans les Paramètres.",
+        "de": "Tragen Sie zuerst den Benutzernamen und das Passwort des Actisense W2K-2 in den Einstellungen ein.",
     },
     "log_boat_busy": {
         "en": "Boat mode is busy with a round or a publish; try again in a moment.",
@@ -735,6 +735,18 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "nl": "logboek kon niet worden getoond: {error}",
         "fr": "impossible d'afficher le journal : {error}",
         "de": "Bordbuch konnte nicht angezeigt werden: {error}",
+    },
+    "log_w2k2_not_configured": {
+        "en": "Actisense W2K-2 username and password not filled in (see Settings) -- download and boat mode buttons disabled.",
+        "nl": "Gebruikersnaam en wachtwoord van de Actisense W2K-2 niet ingevuld (zie Instellingen) -- download- en bootknop uitgeschakeld.",
+        "fr": "Nom d'utilisateur et mot de passe de l'Actisense W2K-2 non renseignés (voir Paramètres) -- boutons de téléchargement et du mode bateau désactivés.",
+        "de": "Benutzername und Passwort des Actisense W2K-2 nicht eingetragen (siehe Einstellungen) -- Schaltflächen Herunterladen und Bootsmodus deaktiviert.",
+    },
+    "tooltip_w2k2_not_configured": {
+        "en": "Fill in the Actisense W2K-2 login first",
+        "nl": "Vul eerst de inlog van de Actisense W2K-2 in",
+        "fr": "Renseignez d'abord l'identifiant de l'Actisense W2K-2",
+        "de": "Tragen Sie zuerst die Zugangsdaten des Actisense W2K-2 ein",
     },
     "log_publish_not_configured": {
         "en": "No publish destination configured -- publish button disabled.",
