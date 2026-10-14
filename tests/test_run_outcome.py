@@ -49,7 +49,7 @@ def test_a_cancelled_run_says_which_kind_was_stopped():
 
 
 def test_no_w2k2_found_is_a_calm_line_and_the_existing_logbook():
-    result = {"ok": False, "error": "No W2K-2 found on 192.168.1.0/24 -- is it joined to this hotspot?",
+    result = {"ok": False, "error": "No W2K-2 found on 192.168.1.1-254 -- is it on this network?",
               "error_kind": W2K2_NOT_FOUND}
 
     outcome = describe_result(result, "download")
@@ -67,7 +67,7 @@ def test_no_ebl_files_is_a_friendly_line_not_an_error():
 
 
 def test_a_result_without_error_kind_is_recognised_from_its_text():
-    assert error_kind({"error": "No W2K-2 found on 10.0.0.0/24 -- x"}) == W2K2_NOT_FOUND
+    assert error_kind({"error": "No W2K-2 found on 10.0.0.1-254 -- x"}) == W2K2_NOT_FOUND
     assert error_kind({"error": "No .ebl files given."}) == NO_EBL_FILES
     assert error_kind({"error": "HTTP 401"}) is None
 

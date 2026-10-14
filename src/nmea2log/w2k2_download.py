@@ -298,7 +298,7 @@ def discover_w2k2(subnet_prefix: Optional[str] = None) -> Optional[str]:
     """
     prefixes = [subnet_prefix] if subnet_prefix is not None else _candidate_subnet_prefixes()
     for prefix in prefixes:
-        log(f"[info] Scanning {prefix}0/24 for a W2K-2...", file=sys.stderr)
+        log(f"[info] Scanning {prefix}1-254 for a W2K-2...", file=sys.stderr)
         hosts = [f"{prefix}{i}" for i in range(1, 255)]
         with concurrent.futures.ThreadPoolExecutor(max_workers=_DISCOVERY_MAX_WORKERS) as executor:
             for ip, found in zip(hosts, executor.map(_looks_like_w2k2, hosts)):

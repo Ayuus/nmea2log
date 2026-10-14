@@ -496,6 +496,12 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "fr": "Renseignez d'abord le nom d'utilisateur et le mot de passe de l'Actisense W2K-2 dans les Paramètres.",
         "de": "Tragen Sie zuerst den Benutzernamen und das Passwort des Actisense W2K-2 in den Einstellungen ein.",
     },
+    "log_local_network_denied": {
+        "en": "Access to the local network was not allowed, so the W2K-2 cannot be reached. Allow it in the phone's settings: Apps > My Sailing Logbook > Permissions > Nearby devices.",
+        "nl": "Toegang tot het lokale netwerk is niet toegestaan, dus de W2K-2 is niet te bereiken. Sta het toe in de instellingen van de telefoon: Apps > My Sailing Logbook > Rechten > Apparaten in de buurt.",
+        "fr": "L'accès au réseau local n'a pas été autorisé, le W2K-2 est donc inaccessible. Autorisez-le dans les réglages du téléphone : Applications > My Sailing Logbook > Autorisations > Appareils à proximité.",
+        "de": "Der Zugriff auf das lokale Netzwerk wurde nicht erlaubt, daher ist das W2K-2 nicht erreichbar. Erlauben Sie ihn in den Telefoneinstellungen: Apps > My Sailing Logbook > Berechtigungen > Geräte in der Nähe.",
+    },
     "log_boat_busy": {
         "en": "Boat mode is busy with a round or a publish; try again in a moment.",
         "nl": "De boot-modus is bezig met een ronde of publicatie; probeer het zo opnieuw.",
@@ -635,10 +641,10 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "de": "Kein privates Netzwerk gefunden (oder der W2K-2 ist nicht darauf) -- schalte deinen Hotspot ein oder verbinde dich mit demselben Netzwerk wie der W2K-2, um herunterzuladen.",
     },
     "status_listing_files": {
-        "en": "Fetching file list (subnet {subnet}0/24)...",
-        "nl": "Bestandenlijst ophalen (subnet {subnet}0/24)...",
-        "fr": "Récupération de la liste des fichiers (sous-réseau {subnet}0/24)...",
-        "de": "Dateiliste wird abgerufen (Subnetz {subnet}0/24)...",
+        "en": "Fetching file list (subnet {subnet}1-254)...",
+        "nl": "Bestandenlijst ophalen (subnet {subnet}1-254)...",
+        "fr": "Récupération de la liste des fichiers (sous-réseau {subnet}1-254)...",
+        "de": "Dateiliste wird abgerufen (Subnetz {subnet}1-254)...",
     },
     "status_building_with_existing_data": {
         "en": "Assembling logbook with existing data...",

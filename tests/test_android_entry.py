@@ -237,7 +237,7 @@ def test_sync_from_w2k2_returns_error_when_no_host_found(tmp_path, monkeypatch):
     )
 
     assert result["ok"] is False
-    assert "192.168.43.0/24" in result["error"]
+    assert "192.168.43.1-254" in result["error"]
 
 
 def test_sync_from_w2k2_returns_a_real_error_for_an_unanticipated_exception(tmp_path, monkeypatch):
