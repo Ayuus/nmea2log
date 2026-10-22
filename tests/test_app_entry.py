@@ -1,10 +1,11 @@
 import json
+import urllib.error
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-from nmea2log import android_entry, pipeline
+from nmea2log import app_entry, pipeline
 from nmea2log.geocode import NoGeocoder
 from nmea2log.marine import NoMarine
 from nmea2log.model import PositionFix, SogSample
@@ -20,7 +21,7 @@ def _write_fake_ebl(tmp_path: Path, name: str = "000000_000.ebl") -> Path:
 def _stub_one_trip_samples(monkeypatch):
     """Same 12min stationary -> 30min underway -> 12min stationary shape as test_cli.py's
     _run_with_one_trip, but patching pipeline.py's names -- the decode helpers run there, shared
-    by both cli.py's _run() and android_entry's run_pipeline()."""
+    by both cli.py's _run() and app_entry's run_pipeline()."""
 
     def _dt(minute):
         return datetime(2026, 7, 15, 8, 0, 0) + timedelta(minutes=minute)
@@ -44,13 +45,13 @@ def _stub_one_trip_samples(monkeypatch):
     # its own doc comment) -- stubbed out here the same way test_cli.py's own tests always pass
     # --no-geocode/--no-weather/--no-marine, so a plain test run never makes a real network request
     # (Nominatim/Overpass/Open-Meteo).
-    monkeypatch.setattr(android_entry, "Geocoder", lambda **kwargs: NoGeocoder())
-    monkeypatch.setattr(android_entry, "WeatherFetcher", lambda **kwargs: NoWeather())
-    monkeypatch.setattr(android_entry, "MarineFetcher", lambda **kwargs: NoMarine())
+    monkeypatch.setattr(app_entry, "Geocoder", lambda **kwargs: NoGeocoder())
+    monkeypatch.setattr(app_entry, "WeatherFetcher", lambda **kwargs: NoWeather())
+    monkeypatch.setattr(app_entry, "MarineFetcher", lambda **kwargs: NoMarine())
 
 
 def test_run_pipeline_returns_error_for_no_ebl_paths(tmp_path):
-    result = android_entry.run_pipeline(
+    result = app_entry.run_pipeline(
         ebl_paths=[],
         output_html_path=str(tmp_path / "logbook.html"),
         sample_cache_path=str(tmp_path / "cache.pkl"),
@@ -63,7 +64,7 @@ def test_run_pipeline_returns_error_for_no_ebl_paths(tmp_path):
 
 
 def test_run_pipeline_returns_error_for_a_missing_file(tmp_path):
-    result = android_entry.run_pipeline(
+    result = app_entry.run_pipeline(
         ebl_paths=[str(tmp_path / "does_not_exist.ebl")],
         output_html_path=str(tmp_path / "logbook.html"),
         sample_cache_path=str(tmp_path / "cache.pkl"),
@@ -82,7 +83,7 @@ def test_run_pipeline_returns_error_when_no_position_data(tmp_path, monkeypatch)
     monkeypatch.setattr(pipeline, "_collect_samples", lambda frames: empty_samples)
     monkeypatch.setattr(pipeline, "_iter_frames_for_path", lambda path, state: iter([]))
 
-    result = android_entry.run_pipeline(
+    result = app_entry.run_pipeline(
         ebl_paths=[str(ebl_path)],
         output_html_path=str(tmp_path / "logbook.html"),
         sample_cache_path=str(tmp_path / "cache.pkl"),
@@ -120,7 +121,7 @@ def test_run_pipeline_stops_decoding_once_cancelled(tmp_path, monkeypatch):
         calls.append(1)
         return len(calls) > 1  # allow the first file, cancel before the second
 
-    result = android_entry.run_pipeline(
+    result = app_entry.run_pipeline(
         ebl_paths=[str(ebl_a), str(ebl_b)],
         output_html_path=str(tmp_path / "logbook.html"),
         sample_cache_path=str(tmp_path / "cache.pkl"),
@@ -139,7 +140,7 @@ def test_run_pipeline_writes_html_and_reports_trip_count(tmp_path, monkeypatch):
     _stub_one_trip_samples(monkeypatch)
     html_path = tmp_path / "logbook.html"
 
-    result = android_entry.run_pipeline(
+    result = app_entry.run_pipeline(
         ebl_paths=[str(ebl_path)],
         output_html_path=str(html_path),
         sample_cache_path=str(tmp_path / "cache.pkl"),
@@ -180,7 +181,7 @@ def test_run_pipeline_honors_a_min_stop_minutes_override(tmp_path, monkeypatch):
     _stub_one_trip_samples(monkeypatch)
     html_path = tmp_path / "logbook.html"
 
-    result = android_entry.run_pipeline(
+    result = app_entry.run_pipeline(
         ebl_paths=[str(ebl_path)],
         output_html_path=str(html_path),
         sample_cache_path=str(tmp_path / "cache.pkl"),
@@ -208,7 +209,7 @@ def test_run_pipeline_enables_the_remarks_column(tmp_path, monkeypatch):
     _stub_one_trip_samples(monkeypatch)
     html_path = tmp_path / "logbook.html"
 
-    android_entry.run_pipeline(
+    app_entry.run_pipeline(
         ebl_paths=[str(ebl_path)],
         output_html_path=str(html_path),
         sample_cache_path=str(tmp_path / "cache.pkl"),
@@ -222,9 +223,9 @@ def test_run_pipeline_enables_the_remarks_column(tmp_path, monkeypatch):
 
 
 def test_sync_from_w2k2_returns_error_when_no_host_found(tmp_path, monkeypatch):
-    monkeypatch.setattr(android_entry.w2k2_download, "discover_w2k2", lambda subnet_prefix: None)
+    monkeypatch.setattr(app_entry.w2k2_download, "discover_w2k2_hosts", lambda subnet_prefix: [])
 
-    result = android_entry.sync_from_w2k2(
+    result = app_entry.sync_from_w2k2(
         user="skipper",
         password="geheim",
         subnet_prefix="192.168.43.",
@@ -247,14 +248,14 @@ def test_sync_from_w2k2_returns_a_real_error_for_an_unanticipated_exception(tmp_
     uncaught past this call (Kotlin's own generic catch would then have nothing but a bare
     exception, and Kotlin's result.error ends up null, which showSyncResult() has no better
     fallback for than a useless "onbekende fout", asked for explicitly to fix)."""
-    monkeypatch.setattr(android_entry.w2k2_download, "discover_w2k2", lambda subnet_prefix: "http://10.0.0.5")
+    monkeypatch.setattr(app_entry.w2k2_download, "discover_w2k2_hosts", lambda subnet_prefix: ["http://10.0.0.5"])
 
     def broken_make_session(host, config):
         raise ValueError("could not parse the login response")
 
-    monkeypatch.setattr(android_entry.w2k2_download, "make_session", broken_make_session)
+    monkeypatch.setattr(app_entry.w2k2_download, "make_session", broken_make_session)
 
-    result = android_entry.sync_from_w2k2(
+    result = app_entry.sync_from_w2k2(
         user="skipper",
         password="geheim",
         subnet_prefix="192.168.43.",
@@ -271,7 +272,7 @@ def test_sync_from_w2k2_returns_a_real_error_for_an_unanticipated_exception(tmp_
 
 
 def test_sync_from_w2k2_returns_a_real_error_when_discover_w2k2_itself_raises(tmp_path, monkeypatch):
-    """Regression test: discover_w2k2() used to sit outside the try block entirely, so anything it
+    """Regression test: discover_w2k2_hosts() used to sit outside the try block entirely, so anything it
     raised (found in practice on a memory-pressured device: its subnet-scan thread pool failing to
     start a worker thread) propagated uncaught past this call -- same "onbekende fout" symptom as
     test_sync_from_w2k2_returns_a_real_error_for_an_unanticipated_exception, just from a different,
@@ -280,9 +281,9 @@ def test_sync_from_w2k2_returns_a_real_error_when_discover_w2k2_itself_raises(tm
     def broken_discover(subnet_prefix):
         raise RuntimeError("can't start new thread")
 
-    monkeypatch.setattr(android_entry.w2k2_download, "discover_w2k2", broken_discover)
+    monkeypatch.setattr(app_entry.w2k2_download, "discover_w2k2_hosts", broken_discover)
 
-    result = android_entry.sync_from_w2k2(
+    result = app_entry.sync_from_w2k2(
         user="skipper",
         password="geheim",
         subnet_prefix="192.168.43.",
@@ -306,21 +307,21 @@ def test_sync_from_w2k2_returns_a_real_error_when_run_pipeline_itself_raises(tmp
     Kotlin side at all (MainActivity.runSync()'s own generic catch just sets plain status text),
     so this is a stricter regression guard than the "onbekende fout" dialog cases above: the
     caller must always get back a real dict, never an escaped exception."""
-    monkeypatch.setattr(android_entry.w2k2_download, "discover_w2k2", lambda subnet_prefix: "http://10.0.0.5")
+    monkeypatch.setattr(app_entry.w2k2_download, "discover_w2k2_hosts", lambda subnet_prefix: ["http://10.0.0.5"])
 
     class _FakeSession:
         def download_to(self, path, params, target, expected_size=None, should_cancel=None):
             target.write_bytes(b"x" * 10)
 
-    monkeypatch.setattr(android_entry.w2k2_download, "make_session", lambda host, config: _FakeSession())
-    monkeypatch.setattr(android_entry.w2k2_download, "get_folders", lambda session: [])
+    monkeypatch.setattr(app_entry.w2k2_download, "make_session", lambda host, config: _FakeSession())
+    monkeypatch.setattr(app_entry.w2k2_download, "get_folders", lambda session: [])
 
     def broken_run_pipeline(**kwargs):
         raise ValueError("boom while building trips")
 
-    monkeypatch.setattr(android_entry, "run_pipeline", broken_run_pipeline)
+    monkeypatch.setattr(app_entry, "run_pipeline", broken_run_pipeline)
 
-    result = android_entry.sync_from_w2k2(
+    result = app_entry.sync_from_w2k2(
         user="skipper",
         password="geheim",
         subnet_prefix="192.168.43.",
@@ -349,7 +350,7 @@ def test_build_from_local_files_forwards_log_lines_to_the_callback(tmp_path, mon
         log("[info] ...decoded 1/1 logfile(s) so far")
         return {"ok": True, "trip_count": 1, "html_path": str(tmp_path / "logbook.html")}
 
-    monkeypatch.setattr(android_entry, "run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr(app_entry, "run_pipeline", fake_run_pipeline)
 
     lines = []
 
@@ -374,7 +375,7 @@ def test_build_from_local_files_forwards_log_lines_to_the_callback(tmp_path, mon
         def onResult(self, ok, error, cancelled, trip_count, html_path, downloaded_count):
             pass
 
-    result = android_entry.build_from_local_files(
+    result = app_entry.build_from_local_files(
         ebl_paths=[str(tmp_path / "000000_000.ebl")],
         output_html_path=str(tmp_path / "logbook.html"),
         sample_cache_path=str(tmp_path / "cache.pkl"),
@@ -395,15 +396,15 @@ def test_sync_from_w2k2_forwards_log_lines_to_the_callback(tmp_path, monkeypatch
     the sink must be cleared afterward so it doesn't keep forwarding into a finished call."""
     import nmea2log.log as log_module
 
-    monkeypatch.setattr(android_entry.w2k2_download, "discover_w2k2", lambda subnet_prefix: "http://10.0.0.5")
+    monkeypatch.setattr(app_entry.w2k2_download, "discover_w2k2_hosts", lambda subnet_prefix: ["http://10.0.0.5"])
 
     class _FakeSession:
         def download_to(self, path, params, target, expected_size=None, should_cancel=None):
             target.write_bytes(b"x" * 10)
 
-    monkeypatch.setattr(android_entry.w2k2_download, "make_session", lambda host, config: _FakeSession())
-    monkeypatch.setattr(android_entry.w2k2_download, "get_folders", lambda session: [])
-    monkeypatch.setattr(android_entry, "run_pipeline", lambda **kwargs: {"ok": True, "trip_count": 0})
+    monkeypatch.setattr(app_entry.w2k2_download, "make_session", lambda host, config: _FakeSession())
+    monkeypatch.setattr(app_entry.w2k2_download, "get_folders", lambda session: [])
+    monkeypatch.setattr(app_entry, "run_pipeline", lambda **kwargs: {"ok": True, "trip_count": 0})
 
     lines = []
 
@@ -428,7 +429,7 @@ def test_sync_from_w2k2_forwards_log_lines_to_the_callback(tmp_path, monkeypatch
         def onResult(self, ok, error, cancelled, trip_count, html_path, downloaded_count):
             pass
 
-    android_entry.sync_from_w2k2(
+    app_entry.sync_from_w2k2(
         user="skipper",
         password="geheim",
         subnet_prefix="192.168.43.",
@@ -452,20 +453,20 @@ def test_sync_from_w2k2_calls_on_download_complete_once_before_the_pipeline_runs
     Android 15+, no reason to keep spending it during the CPU-only part)."""
     events = []
 
-    monkeypatch.setattr(android_entry.w2k2_download, "discover_w2k2", lambda subnet_prefix: "http://10.0.0.5")
+    monkeypatch.setattr(app_entry.w2k2_download, "discover_w2k2_hosts", lambda subnet_prefix: ["http://10.0.0.5"])
 
     class _FakeSession:
         def download_to(self, path, params, target, expected_size=None, should_cancel=None):
             target.write_bytes(b"x" * 10)
 
-    monkeypatch.setattr(android_entry.w2k2_download, "make_session", lambda host, config: _FakeSession())
-    monkeypatch.setattr(android_entry.w2k2_download, "get_folders", lambda session: [])
+    monkeypatch.setattr(app_entry.w2k2_download, "make_session", lambda host, config: _FakeSession())
+    monkeypatch.setattr(app_entry.w2k2_download, "get_folders", lambda session: [])
 
     def fake_run_pipeline(**kwargs):
         events.append("run_pipeline")
         return {"ok": True, "trip_count": 0}
 
-    monkeypatch.setattr(android_entry, "run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr(app_entry, "run_pipeline", fake_run_pipeline)
 
     class _Listener:
         def report(self, current, total, file_name):
@@ -488,7 +489,7 @@ def test_sync_from_w2k2_calls_on_download_complete_once_before_the_pipeline_runs
         def onResult(self, ok, error, cancelled, trip_count, html_path, downloaded_count):
             pass
 
-    android_entry.sync_from_w2k2(
+    app_entry.sync_from_w2k2(
         user="skipper",
         password="geheim",
         subnet_prefix="192.168.43.",
@@ -528,14 +529,14 @@ def test_sync_from_w2k2_downloads_then_runs_the_pipeline(tmp_path, monkeypatch):
             target.write_bytes(b"x" * file_sizes[target.name])
 
     fake_session = _FakeSession()
-    monkeypatch.setattr(android_entry.w2k2_download.time, "sleep", lambda s: None)
-    monkeypatch.setattr(android_entry.w2k2_download, "discover_w2k2", lambda subnet_prefix: "http://10.0.0.5")
-    monkeypatch.setattr(android_entry.w2k2_download, "make_session", lambda host, config: fake_session)
+    monkeypatch.setattr(app_entry.w2k2_download.time, "sleep", lambda s: None)
+    monkeypatch.setattr(app_entry.w2k2_download, "discover_w2k2_hosts", lambda subnet_prefix: ["http://10.0.0.5"])
+    monkeypatch.setattr(app_entry.w2k2_download, "make_session", lambda host, config: fake_session)
     monkeypatch.setattr(
-        android_entry.w2k2_download, "get_folders", lambda session: [{"name": "EBL000001"}]
+        app_entry.w2k2_download, "get_folders", lambda session: [{"name": "EBL000001"}]
     )
     monkeypatch.setattr(
-        android_entry.w2k2_download,
+        app_entry.w2k2_download,
         "get_files",
         lambda session, folder: [
             {"file_name": "000001_000.ebl", "file_size": file_sizes["000001_000.ebl"], "file_time": 0},
@@ -549,10 +550,10 @@ def test_sync_from_w2k2_downloads_then_runs_the_pipeline(tmp_path, monkeypatch):
         captured.update(kwargs)
         return {"ok": True, "trip_count": 3, "html_path": kwargs["output_html_path"]}
 
-    monkeypatch.setattr(android_entry, "run_pipeline", _fake_run_pipeline)
+    monkeypatch.setattr(app_entry, "run_pipeline", _fake_run_pipeline)
 
     download_dir = tmp_path / "Actisense"
-    result = android_entry.sync_from_w2k2(
+    result = app_entry.sync_from_w2k2(
         user="skipper",
         password="geheim",
         subnet_prefix="192.168.43.",
@@ -579,19 +580,19 @@ def test_sync_from_w2k2_reports_progress_only_for_files_it_actually_fetches(tmp_
         def download_to(self, path, params, target, expected_size=None, should_cancel=None):
             target.write_bytes(b"x" * 10)
 
-    monkeypatch.setattr(android_entry.w2k2_download.time, "sleep", lambda s: None)
-    monkeypatch.setattr(android_entry.w2k2_download, "discover_w2k2", lambda subnet_prefix: "http://10.0.0.5")
-    monkeypatch.setattr(android_entry.w2k2_download, "make_session", lambda host, config: _FakeSession())
-    monkeypatch.setattr(android_entry.w2k2_download, "get_folders", lambda session: [{"name": "EBL000001"}])
+    monkeypatch.setattr(app_entry.w2k2_download.time, "sleep", lambda s: None)
+    monkeypatch.setattr(app_entry.w2k2_download, "discover_w2k2_hosts", lambda subnet_prefix: ["http://10.0.0.5"])
+    monkeypatch.setattr(app_entry.w2k2_download, "make_session", lambda host, config: _FakeSession())
+    monkeypatch.setattr(app_entry.w2k2_download, "get_folders", lambda session: [{"name": "EBL000001"}])
     monkeypatch.setattr(
-        android_entry.w2k2_download,
+        app_entry.w2k2_download,
         "get_files",
         lambda session, folder: [
             {"file_name": "000001_000.ebl", "file_size": 10, "file_time": 0},
             {"file_name": "000001_001.ebl", "file_size": 1_000_000, "file_time": 0},
         ],
     )
-    monkeypatch.setattr(android_entry, "run_pipeline", lambda **kwargs: {"ok": True, "trip_count": 0})
+    monkeypatch.setattr(app_entry, "run_pipeline", lambda **kwargs: {"ok": True, "trip_count": 0})
 
     calls = []
 
@@ -616,7 +617,7 @@ def test_sync_from_w2k2_reports_progress_only_for_files_it_actually_fetches(tmp_
         def onResult(self, ok, error, cancelled, trip_count, html_path, downloaded_count):
             pass
 
-    android_entry.sync_from_w2k2(
+    app_entry.sync_from_w2k2(
         user="skipper",
         password="geheim",
         subnet_prefix="192.168.43.",
@@ -641,12 +642,12 @@ def test_sync_from_w2k2_stops_between_files_when_cancelled(tmp_path, monkeypatch
         def download_to(self, path, params, target, expected_size=None, should_cancel=None):
             target.write_bytes(b"x" * 10)
 
-    monkeypatch.setattr(android_entry.w2k2_download.time, "sleep", lambda s: None)
-    monkeypatch.setattr(android_entry.w2k2_download, "discover_w2k2", lambda subnet_prefix: "http://10.0.0.5")
-    monkeypatch.setattr(android_entry.w2k2_download, "make_session", lambda host, config: _FakeSession())
-    monkeypatch.setattr(android_entry.w2k2_download, "get_folders", lambda session: [{"name": "EBL000001"}])
+    monkeypatch.setattr(app_entry.w2k2_download.time, "sleep", lambda s: None)
+    monkeypatch.setattr(app_entry.w2k2_download, "discover_w2k2_hosts", lambda subnet_prefix: ["http://10.0.0.5"])
+    monkeypatch.setattr(app_entry.w2k2_download, "make_session", lambda host, config: _FakeSession())
+    monkeypatch.setattr(app_entry.w2k2_download, "get_folders", lambda session: [{"name": "EBL000001"}])
     monkeypatch.setattr(
-        android_entry.w2k2_download,
+        app_entry.w2k2_download,
         "get_files",
         lambda session, folder: [
             {"file_name": "000001_000.ebl", "file_size": 10, "file_time": 0},
@@ -654,7 +655,7 @@ def test_sync_from_w2k2_stops_between_files_when_cancelled(tmp_path, monkeypatch
         ],
     )
     run_pipeline_calls = []
-    monkeypatch.setattr(android_entry, "run_pipeline", lambda **kwargs: run_pipeline_calls.append(kwargs))
+    monkeypatch.setattr(app_entry, "run_pipeline", lambda **kwargs: run_pipeline_calls.append(kwargs))
 
     class _CancelAfterFirstFile:
         """Cancelled becomes true only once the first file has actually been reported downloaded
@@ -686,7 +687,7 @@ def test_sync_from_w2k2_stops_between_files_when_cancelled(tmp_path, monkeypatch
             pass
 
     controller = _CancelAfterFirstFile()
-    result = android_entry.sync_from_w2k2(
+    result = app_entry.sync_from_w2k2(
         user="skipper",
         password="geheim",
         subnet_prefix="192.168.43.",
@@ -710,10 +711,10 @@ def test_sync_from_w2k2_returns_error_on_network_failure(tmp_path, monkeypatch):
     def _raise(host, config):
         raise ConnectionResetError("connection reset")
 
-    monkeypatch.setattr(android_entry.w2k2_download, "discover_w2k2", lambda subnet_prefix: "http://10.0.0.5")
-    monkeypatch.setattr(android_entry.w2k2_download, "make_session", _raise)
+    monkeypatch.setattr(app_entry.w2k2_download, "discover_w2k2_hosts", lambda subnet_prefix: ["http://10.0.0.5"])
+    monkeypatch.setattr(app_entry.w2k2_download, "make_session", _raise)
 
-    result = android_entry.sync_from_w2k2(
+    result = app_entry.sync_from_w2k2(
         user="skipper",
         password="geheim",
         subnet_prefix="192.168.43.",
@@ -736,16 +737,16 @@ def test_sync_from_w2k2_reports_the_final_result_via_onresult_too(tmp_path, monk
     an early cancellation. onResult() is called explicitly, with plain primitives, while still
     inside this same call -- verify it actually receives the real values, not just that the
     returned dict does (that was never in doubt)."""
-    monkeypatch.setattr(android_entry.w2k2_download, "discover_w2k2", lambda subnet_prefix: "http://10.0.0.5")
+    monkeypatch.setattr(app_entry.w2k2_download, "discover_w2k2_hosts", lambda subnet_prefix: ["http://10.0.0.5"])
 
     class _FakeSession:
         def download_to(self, path, params, target, expected_size=None, should_cancel=None):
             target.write_bytes(b"x" * 10)
 
-    monkeypatch.setattr(android_entry.w2k2_download, "make_session", lambda host, config: _FakeSession())
-    monkeypatch.setattr(android_entry.w2k2_download, "get_folders", lambda session: [])
+    monkeypatch.setattr(app_entry.w2k2_download, "make_session", lambda host, config: _FakeSession())
+    monkeypatch.setattr(app_entry.w2k2_download, "get_folders", lambda session: [])
     monkeypatch.setattr(
-        android_entry,
+        app_entry,
         "run_pipeline",
         lambda **kwargs: {"ok": True, "trip_count": 3, "html_path": "/fake/logbook.html"},
     )
@@ -773,7 +774,7 @@ def test_sync_from_w2k2_reports_the_final_result_via_onresult_too(tmp_path, monk
         def onResult(self, ok, error, cancelled, trip_count, html_path, downloaded_count):
             calls.append((ok, error, cancelled, trip_count, html_path, downloaded_count))
 
-    android_entry.sync_from_w2k2(
+    app_entry.sync_from_w2k2(
         user="skipper",
         password="geheim",
         subnet_prefix="192.168.43.",
@@ -810,37 +811,9 @@ def test_report_result_uses_minus_one_for_a_missing_trip_or_downloaded_count(tmp
         def onResult(self, ok, error, cancelled, trip_count, html_path, downloaded_count):
             calls.append((ok, error, cancelled, trip_count, html_path, downloaded_count))
 
-    android_entry._report_result(_Listener(), {"ok": False, "error": "No trips found."})
+    app_entry._report_result(_Listener(), {"ok": False, "error": "No trips found."})
 
     assert calls == [(False, "No trips found.", False, -1, None, -1)]
-
-
-def test_discover_w2k2_only_reports_true_via_the_callback_when_found(monkeypatch):
-    monkeypatch.setattr(android_entry.w2k2_download, "discover_w2k2", lambda subnet_prefix: "http://10.0.0.5")
-
-    calls = []
-
-    class _Listener:
-        def onDiscoverResult(self, found):
-            calls.append(found)
-
-    android_entry.discover_w2k2_only("192.168.43.", _Listener())
-
-    assert calls == [True]
-
-
-def test_discover_w2k2_only_reports_false_via_the_callback_when_not_found(monkeypatch):
-    monkeypatch.setattr(android_entry.w2k2_download, "discover_w2k2", lambda subnet_prefix: None)
-
-    calls = []
-
-    class _Listener:
-        def onDiscoverResult(self, found):
-            calls.append(found)
-
-    android_entry.discover_w2k2_only("192.168.43.", _Listener())
-
-    assert calls == [False]
 
 
 def test_report_result_hands_the_boat_state_over_as_json_before_the_result():
@@ -854,8 +827,8 @@ def test_report_result_hands_the_boat_state_over_as_json_before_the_result():
             calls.append(("result", ok))
 
     boat = {"underway": False, "stationary_since": "2026-09-12T12:18:18"}
-    android_entry._report_result(_Listener(), {"ok": True, "trip_count": 3, "boat_state": boat})
-    android_entry._report_result(_Listener(), {"ok": False, "error": "x"})
+    app_entry._report_result(_Listener(), {"ok": True, "trip_count": 3, "boat_state": boat})
+    app_entry._report_result(_Listener(), {"ok": False, "error": "x"})
 
     assert calls == [
         ("boat", json.dumps(boat)), ("result", True),
@@ -871,37 +844,37 @@ class _ProbeListener:
         self.calls.append((found, has_new_files))
 
 
-def test_probe_reports_not_found_when_the_w2k2_does_not_answer(monkeypatch):
-    monkeypatch.setattr(android_entry.w2k2_download, "discover_w2k2", lambda subnet_prefix: None)
+def test_probe_reports_not_found_when_the_w2k2_does_not_answer(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_entry.w2k2_download, "discover_w2k2_hosts", lambda subnet_prefix: [])
     listener = _ProbeListener()
 
-    android_entry.probe_w2k2("u", "p", "192.168.43.", "/tmp/x", listener)
+    app_entry.probe_w2k2("u", "p", "192.168.43.", str(tmp_path / "Actisense"), listener)
 
     assert listener.calls == [(False, False)]
 
 
 @pytest.mark.parametrize("to_download, expected", [([], False), ([{"file_name": "a.ebl"}], True)])
-def test_probe_reports_whether_new_files_are_waiting(monkeypatch, to_download, expected):
-    monkeypatch.setattr(android_entry.w2k2_download, "discover_w2k2", lambda subnet_prefix: "http://10.0.0.5")
-    monkeypatch.setattr(android_entry.w2k2_download, "make_session", lambda host, config: object())
-    monkeypatch.setattr(android_entry.w2k2_download, "build_download_plan", lambda session, download_dir: ([], to_download))
+def test_probe_reports_whether_new_files_are_waiting(monkeypatch, tmp_path, to_download, expected):
+    monkeypatch.setattr(app_entry.w2k2_download, "discover_w2k2_hosts", lambda subnet_prefix: ["http://10.0.0.5"])
+    monkeypatch.setattr(app_entry.w2k2_download, "make_session", lambda host, config: object())
+    monkeypatch.setattr(app_entry.w2k2_download, "build_download_plan", lambda session, download_dir: ([], to_download))
     listener = _ProbeListener()
 
-    android_entry.probe_w2k2("u", "p", "192.168.43.", "/tmp/x", listener)
+    app_entry.probe_w2k2("u", "p", "192.168.43.", str(tmp_path / "Actisense"), listener)
 
     assert listener.calls == [(True, expected)]
 
 
-def test_probe_still_counts_the_w2k2_as_found_when_its_file_lists_cannot_be_read(monkeypatch):
+def test_probe_still_counts_the_w2k2_as_found_when_its_file_lists_cannot_be_read(monkeypatch, tmp_path):
     def broken(session, download_dir):
         raise ValueError("garbled response")
 
-    monkeypatch.setattr(android_entry.w2k2_download, "discover_w2k2", lambda subnet_prefix: "http://10.0.0.5")
-    monkeypatch.setattr(android_entry.w2k2_download, "make_session", lambda host, config: object())
-    monkeypatch.setattr(android_entry.w2k2_download, "build_download_plan", broken)
+    monkeypatch.setattr(app_entry.w2k2_download, "discover_w2k2_hosts", lambda subnet_prefix: ["http://10.0.0.5"])
+    monkeypatch.setattr(app_entry.w2k2_download, "make_session", lambda host, config: object())
+    monkeypatch.setattr(app_entry.w2k2_download, "build_download_plan", broken)
     listener = _ProbeListener()
 
-    android_entry.probe_w2k2("u", "p", "192.168.43.", "/tmp/x", listener)
+    app_entry.probe_w2k2("u", "p", "192.168.43.", str(tmp_path / "Actisense"), listener)
 
     assert listener.calls == [(True, False)]
 
@@ -909,15 +882,48 @@ def test_probe_still_counts_the_w2k2_as_found_when_its_file_lists_cannot_be_read
 def test_the_log_file_is_next_to_the_logbook_unless_a_log_directory_is_set(tmp_path):
     from pathlib import Path
 
-    android_entry.set_log_directory(None)
+    app_entry.set_log_directory(None)
     html = str(tmp_path / "logbook.html")
 
-    assert android_entry._log_file_path(html) == tmp_path / "nmea2log.log"
+    assert app_entry._log_file_path(html) == tmp_path / "nmea2log.log"
 
     elsewhere = tmp_path / "pc_visible"
-    android_entry.set_log_directory(str(elsewhere))
+    app_entry.set_log_directory(str(elsewhere))
     try:
-        assert android_entry._log_file_path(html) == elsewhere / "nmea2log.log"
-        assert isinstance(android_entry._log_file_path(html), Path)
+        assert app_entry._log_file_path(html) == elsewhere / "nmea2log.log"
+        assert isinstance(app_entry._log_file_path(html), Path)
     finally:
-        android_entry.set_log_directory(None)
+        app_entry.set_log_directory(None)
+
+
+def test_probe_still_counts_the_w2k2_as_found_when_its_login_is_refused(monkeypatch, tmp_path):
+    """A W2K-2 answered but does not accept the login (wrong password): found, nothing new -- the round that follows
+    reports the real error."""
+    monkeypatch.setattr(app_entry.w2k2_download, "discover_w2k2_hosts", lambda subnet_prefix: ["http://10.0.0.5"])
+
+    def refused(host, config):
+        raise urllib.error.HTTPError(host, 401, "Unauthorized", {}, None)
+
+    monkeypatch.setattr(app_entry.w2k2_download, "make_session", refused)
+    listener = _ProbeListener()
+
+    app_entry.probe_w2k2("u", "p", "192.168.43.", str(tmp_path / "Actisense"), listener)
+
+    assert listener.calls == [(True, False)]
+
+
+def test_probe_does_not_count_a_crashed_scan_as_a_found_w2k2(monkeypatch, tmp_path):
+    """Only a W2K-2 that answered counts as found: an error of the scan itself (here the thread pool failing to start,
+    seen on a memory-pressured device) is not swallowed as one."""
+
+    def broken(subnet_prefix):
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(app_entry.w2k2_download, "discover_w2k2_hosts", broken)
+    listener = _ProbeListener()
+
+    with pytest.raises(RuntimeError):
+        app_entry.probe_w2k2("u", "p", "192.168.43.", str(tmp_path / "Actisense"), listener)
+
+    assert listener.calls == []
+

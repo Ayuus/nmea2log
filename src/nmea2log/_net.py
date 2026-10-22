@@ -1,5 +1,5 @@
-"""Small networking helper shared by geocode.py/weather.py/marine.py -- the only thing these
-three modules need beyond plain urllib.request.urlopen()."""
+"""Small networking helper shared by geocode.py, open_meteo.py and help_page.py -- the only thing these
+modules need beyond plain urllib.request.urlopen()."""
 
 from __future__ import annotations
 
@@ -84,7 +84,7 @@ def urlopen_ipv4_first(request: urllib.request.Request, timeout: float) -> Any:
 
     # Not thread-safe against *concurrent* network calls elsewhere in the same process -- fine
     # here, since geocode.py/weather.py/marine.py are only ever called sequentially, one lookup
-    # at a time, from a single background thread (see android_entry.py/cli.py).
+    # at a time, from a single background thread (see app_entry.py/cli.py).
     socket.getaddrinfo = _ipv4_preferred
     try:
         return urllib.request.urlopen(request, timeout=timeout)

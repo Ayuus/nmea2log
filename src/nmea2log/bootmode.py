@@ -161,9 +161,9 @@ RoundOutcome = Union[RoundOk, RoundNotFound, RoundFailed]
 
 
 def round_outcome_from_result(result: dict) -> RoundOutcome:
-    """The outcome of a round from android_entry.sync_from_w2k2()'s result dict: a cancelled run counts as
+    """The outcome of a round from app_entry.sync_from_w2k2()'s result dict: a cancelled run counts as
     failed, a failure without a message gets a generic one, and the downloaded count is floored at 0
-    (android_entry reports -1 for "not applicable"). Used by the iOS app; the Android executor makes the
+    (app_entry reports -1 for "not applicable"). Used by the iOS app; the Android executor makes the
     same three outcomes from the primitives its callback receives."""
     if result.get("cancelled"):
         return RoundFailed(message=result.get("error") or "cancelled")

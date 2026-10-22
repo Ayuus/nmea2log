@@ -273,7 +273,7 @@ class FixArray(_SampleArray):
     def replace_columns_with(self, other: "FixArray") -> None:
         """Swaps this array's own columns for another FixArray's, in place -- used by
         tripbuilder.py's _reject_gps_outliers_array() so a season-wide FixArray a caller already
-        holds a reference to (e.g. android_entry.py's all_fixes, alive for build_trips()'s
+        holds a reference to (e.g. app_entry.py's all_fixes, alive for build_trips()'s
         *entire* run) gets its outlier-rejected/sorted data written back into the very same
         object, instead of a second, separate FixArray staying resident alongside the original
         for no reason -- the caller's own reference means the *original*, larger columns would

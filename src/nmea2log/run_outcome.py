@@ -6,7 +6,7 @@ and "no .ebl files" as errors where Android reports them calmly, lacked the clos
 the result differently, and counted "nothing set up to publish to" as a failed publish (which kept the log
 over the new logbook). The decision is made here once; an app only turns the answer into its own widgets.
 
-The result dict is what android_entry returns (``ok``, ``cancelled``, ``error``, ``error_kind``,
+The result dict is what app_entry returns (``ok``, ``cancelled``, ``error``, ``error_kind``,
 ``trip_count``, ``downloaded_count``). The texts are keys into ``app_texts.TEXTS``.
 """
 

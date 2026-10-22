@@ -78,7 +78,7 @@ DEFAULT_LOG_INTERVAL_MINUTES = 30.0
 # credentials and so can't have a working built-in default, this is the same fixed path for every
 # run on every platform, with nothing left to configure. Used to be an empty, disabled-by-default
 # ini setting instead, but that only ever got applied on the desktop CLI (nmea2log.ini isn't read
-# on Android at all, see android_entry.py's run_pipeline docstring) -- found in practice: every
+# on Android at all, see app_entry.py's run_pipeline docstring) -- found in practice: every
 # phone-built logbook silently had no remarks column at all, only ever a desktop-built one did.
 # Still overridable with --remarks-api-url (empty disables it) for local testing/development.
 DEFAULT_REMARKS_API_URL = "/wp-json/nmea2log/v1/remarks"

@@ -24,9 +24,9 @@ def test_the_log_texts_the_pipeline_really_logs_are_recognised():
     """The regexes must match the texts of the log() calls themselves, not only these examples."""
     import inspect
 
-    from nmea2log import android_entry, cli, pipeline, tripbuilder
+    from nmea2log import app_entry, cli, pipeline, tripbuilder
 
-    source = "".join(inspect.getsource(module) for module in (android_entry, cli, pipeline, tripbuilder))
+    source = "".join(inspect.getsource(module) for module in (app_entry, cli, pipeline, tripbuilder))
     for fragment in ("logfile(s) so far", "navigation samples merged, classifying trips", "classified, computing per-trip statistics", "found, writing logbook", "Building trips from"):
         assert fragment in source, fragment
 

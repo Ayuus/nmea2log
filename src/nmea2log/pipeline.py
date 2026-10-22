@@ -1,5 +1,5 @@
 """The decode -> trips pipeline shared by the desktop CLI (cli.py's _run()) and the Android entry
-point (android_entry.py's run_pipeline()): decode every .ebl file (through the sample cache),
+point (app_entry.py's run_pipeline()): decode every .ebl file (through the sample cache),
 merge the samples per source, pick the primary GPS, build the trips (reusing already-settled ones
 from the trip cache, see trip_cache.py) and resolve their place names. What differs between the
 two callers -- reading settings, writing the outputs, uploading, reporting errors -- stays in the

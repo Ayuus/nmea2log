@@ -24,6 +24,13 @@ def _isolate_cwd_from_the_real_nmea2log_ini(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
 
+@pytest.fixture(autouse=True)
+def _forget_the_last_w2k2_host(monkeypatch):
+    """w2k2_download remembers the W2K-2 it used last for as long as the process lives; a test must not start with the
+    one an earlier test used (monkeypatch puts the value from before back afterwards)."""
+    monkeypatch.setattr("nmea2log.w2k2_download._last_host", None)
+
+
 @pytest.fixture
 def log_lines():
     """Every line nmea2log.log.log() emits while the test runs (capsys can't see them: log()

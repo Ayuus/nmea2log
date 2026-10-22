@@ -49,7 +49,7 @@ The log *view* in the app is a separate thing: a list in memory (Android and iOS
 
 `DEFAULT_LOG_RETENTION_DAYS = 30`. Lines older than that are dropped when the next **run starts** (a
 download, an assemble, a boat-mode round: whatever calls `set_log_file()` -- in the apps that is
-`android_entry.sync_from_w2k2()` and `build_from_local_files()`). Nothing trims the file in between, so
+`app_entry.sync_from_w2k2()` and `build_from_local_files()`). Nothing trims the file in between, so
 lines older than 30 days can still sit in it until the next run. On the desktop the period is
 `--log-retention-days`. A line that does not start with a timestamp is never dropped.
 
@@ -65,7 +65,7 @@ tablet, otherwise worked out from the code):
   logs a progress line per file).
 - **A download or boat-mode round against the W2K-2 writes one debug line per file the W2K-2 holds**
   (`[skip] EBL000012/000012_007.ebl already complete locally`, about 85 bytes), also for files that are
-  already on the device: `android_entry.sync_from_w2k2()` walks the whole download plan and
+  already on the device: `app_entry.sync_from_w2k2()` walks the whole download plan and
   `w2k2_download.download_file()` logs the skip. With ~2,300 files that is about **0.2 MB per run**.
 
 The last point is what can make the file large: the boat mode does a round every 30 minutes to a few
@@ -79,5 +79,5 @@ single summary line, to leave the debug lines out of the file, or to cap its siz
 - `src/nmea2log/log.py`: `log()`, `set_log_file()` (append mode, `_prune_old_lines()`), `set_log_level()`,
   `log_exception()`, `stamp_line()`.
 - `src/nmea2log/app_constants.py`: `LOG_FILE_NAME`, the tags that are coloured red/yellow, the log view's limits.
-- Android: `LogFile.kt` (where the file is, and the move from private storage), `AppLog.kt` (writes the app's own lines), `LogBuffer.kt`/`LogAdapter.kt` (the log view); `android_entry.set_log_directory()` tells Python the folder.
+- Android: `LogFile.kt` (where the file is, and the move from private storage), `AppLog.kt` (writes the app's own lines), `LogBuffer.kt`/`LogAdapter.kt` (the log view); `app_entry.set_log_directory()` tells Python the folder.
 - iOS: `MySailingLogbook.log()` and `_append_to_log_file()` in `app.py`.

@@ -48,9 +48,9 @@ def set_log_level(level: str) -> None:
 
 def set_log_sink(sink: Optional[Callable[[str], None]]) -> None:
     """Lets a caller receive every log() line as it's produced, on top of the normal print (and
-    the log file, if set) -- used by android_entry.py so the Android app can show the exact same
+    the log file, if set) -- used by app_entry.py so the Android app can show the exact same
     messages the desktop CLI shows, instead of maintaining a separate set of Android-specific UI
-    text. Pass None to clear (android_entry.py does this once a sync finishes, so a later desktop
+    text. Pass None to clear (app_entry.py does this once a sync finishes, so a later desktop
     test run in the same process -- e.g. under pytest -- doesn't keep forwarding to a stale
     sink)."""
     global _log_sink

@@ -227,9 +227,12 @@ ebl_dir = Actisense
 
 The W2K-2's IP address is never configured -- `nmea2log-download` finds it automatically every
 run by scanning this machine's own local subnet for a host whose web interface identifies itself
-as Actisense/W2K-2 (see `discover_w2k2` in `w2k2_download.py`). This only works while this
+as Actisense/W2K-2 (see `discover_w2k2_hosts` in `w2k2_download.py`). This only works while this
 machine is on the same wifi network as the W2K-2 (either its own access point, or a shared boat/
-home wifi router both are joined to as clients).
+home wifi router both are joined to as clients). When several W2K-2 answer on that network, each has a login
+of its own: the one from `[w2k2]` is tried on each, lowest address first, and the first that accepts it is used. The
+address that was used is remembered while the program runs (the boat mode of the apps, a long-running service, profits)
+and tried first next time, without a scan.
 
 Every setting in `[nmea2log]` can also be passed as a command-line flag instead (see "Useful
 options" below); an explicit flag always overrides what's in the config file. `[w2k2]` only has
@@ -513,7 +516,7 @@ Set `MYSAILINGLOGBOOK_ANDROID_RES` to the Android `res` directory and `pytest` a
   confirmed (`w2k2_download.py` tries a number of common names, see `_TOKEN_KEYS`); if login
   succeeds but no token is found, the command shows the raw response so the right name can be
   added.
-- **W2K-2 discovery**: `discover_w2k2` scans this machine's own /24 subnet (up to 254 addresses,
+- **W2K-2 discovery**: `discover_w2k2_hosts` scans this machine's own /24 subnet (up to 254 addresses,
   ~1 second with concurrent connections) for a host answering on port 80 whose page identifies
   itself as Actisense/W2K-2. This assumes a /24 network (true for basically every home/boat
   router) and that this machine is on the same subnet as the W2K-2 -- it won't find a device

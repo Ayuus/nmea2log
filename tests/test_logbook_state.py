@@ -2,7 +2,7 @@ import os
 import time
 from pathlib import Path
 
-from nmea2log import android_entry, logbook_state
+from nmea2log import app_entry, logbook_state
 
 
 def _setup(tmp_path: Path, trips: int = 5):
@@ -61,15 +61,15 @@ def test_no_logbook_no_record_or_no_ebl_files_means_assemble(tmp_path: Path):
 def test_publish_skips_the_build_when_the_logbook_is_current_and_builds_when_it_is_not(tmp_path: Path, monkeypatch):
     html, ebl, _ = _setup(tmp_path)
     built = []
-    monkeypatch.setattr(android_entry, "run_pipeline", lambda **kwargs: built.append(1) or {"ok": True, "trip_count": 7})
+    monkeypatch.setattr(app_entry, "run_pipeline", lambda **kwargs: built.append(1) or {"ok": True, "trip_count": 7})
     args = ([str(ebl)], str(html), str(tmp_path / "cache"), "Sea Swallow", "244012345", "PA1234")
 
-    result = android_entry.build_from_local_files(*args, min_stop_minutes=10.0, skip_if_current=True)
+    result = app_entry.build_from_local_files(*args, min_stop_minutes=10.0, skip_if_current=True)
 
     assert built == [] and result["ok"] is True and result["trip_count"] == 5 and result["html_path"] == str(html)
 
-    android_entry.build_from_local_files(*args, min_stop_minutes=5.0, skip_if_current=True)  # a setting changed
-    android_entry.build_from_local_files(*args, min_stop_minutes=10.0)  # not asked to skip
+    app_entry.build_from_local_files(*args, min_stop_minutes=5.0, skip_if_current=True)  # a setting changed
+    app_entry.build_from_local_files(*args, min_stop_minutes=10.0)  # not asked to skip
     assert built == [1, 1]
 
 

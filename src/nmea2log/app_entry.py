@@ -1,7 +1,7 @@
-"""Android entry point: the same decode -> build trips -> write HTML pipeline as cli.py's
-_run(), minus argparse and minus upload. Called from Kotlin via Chaquopy with a list of already-
-downloaded .ebl files and settings read from EncryptedSharedPreferences, instead of reading
-nmea2log.ini or parsing command-line flags.
+"""The entry points of the Android and the iOS app (this module used to be called android_entry): the same
+decode -> build trips -> write HTML pipeline as cli.py's _run(), minus argparse and minus upload. Called from
+Kotlin via Chaquopy (Android) or from Python (iOS) with a list of already-downloaded .ebl files and the settings
+the app holds, instead of reading nmea2log.ini or parsing command-line flags.
 
 run_pipeline() returns a plain dict instead of an exit code / raising SystemExit -- a background
 sync (or the manual "Sync now" test button) can't rely on stderr text or a process return code
@@ -294,7 +294,7 @@ def sync_from_w2k2(
     needs to supply the hotspot's subnet prefix (from its own NetworkInterface detection) and the
     settings the user entered.
 
-    subnet_prefix is required (unlike discover_w2k2()'s own default) -- self-detection would find
+    subnet_prefix is required (unlike discover_w2k2_hosts()'s own default) -- self-detection would find
     the phone's cellular subnet, not the hotspot's, since both are active at once on Android.
 
     progress_callback, if given, is any object with report(current, total, file_name),
@@ -360,24 +360,24 @@ def _sync_from_w2k2(
     should_cancel = progress_callback.isCancelled if progress_callback is not None else None
 
     try:
-        # discover_w2k2() itself used to sit outside this try block -- found in practice: whatever
-        # it raised (a real one seen on a memory-pressured device: the subnet scan's own thread
+        # The subnet scan (discover_w2k2_hosts(), inside connect_to_w2k2()) used to sit outside this try block --
+        # found in practice: whatever it raised (a real one seen on a memory-pressured device: the subnet scan's own thread
         # pool failing to start a worker thread) then had nothing at all to catch it, propagating
         # uncaught past Kotlin's own generic try/except the exact same way the exceptions below
         # already had a fix for once (see the broad except Exception at the bottom of this block,
         # and its own commit message) -- Kotlin's result.error ended up null, and showSyncResult()
         # had nothing better than a bare "onbekende fout" to show for it.
-        host = w2k2_download.discover_w2k2(subnet_prefix=subnet_prefix)
-        if host is None:
+        config = w2k2_download.W2K2Config(download_dir=Path(download_dir), token=None, user=user, password=password)
+        # "Found W2K-2 at ..." is logged in there (the same lines main() has on desktop); the one used last time is
+        # tried first, and with several W2K-2 on the network the one that accepts this login is used.
+        found = w2k2_download.connect_to_w2k2(subnet_prefix, config)
+        if found is None:
             return {
                 "ok": False,
                 "error": f"No W2K-2 found on {subnet_prefix}1-254 -- is it on this network?",
                 "error_kind": "w2k2_not_found",
             }
-        log(f"[info] Found W2K-2 at {host}")  # same message main() prints on desktop (see w2k2_download.py)
-
-        config = w2k2_download.W2K2Config(download_dir=Path(download_dir), token=None, user=user, password=password)
-        session = w2k2_download.make_session(host, config)
+        _host, session = found
         plan, to_download = w2k2_download.build_download_plan(
             session, config.download_dir, should_cancel=should_cancel
         )
@@ -466,40 +466,29 @@ def _sync_from_w2k2(
     return result
 
 
-def discover_w2k2_only(subnet_prefix: str, progress_callback) -> None:
-    """Chaquopy entry point for a plain "is the W2K-2 reachable right now" check -- the same
-    network scan sync_from_w2k2() does as its own first step, but standing alone, with no
-    download/decode/build attempted afterward. Used by the Android app to decide whether to
-    enable its sync button, before committing to a real sync (asked for explicitly: a cheap,
-    local-only "does this device's own hotspot look on" check isn't the same as the W2K-2 itself
-    actually being reachable on it).
-
-    Reports the result via progress_callback.onDiscoverResult(found: bool), not this call's own
-    return value -- same reasoning as _report_result() above: reading a returned PyObject's
-    fields after a Chaquopy call has already returned has been unreliable in this app, while
-    calling into Kotlin *during* the call has not."""
-    found = w2k2_download.discover_w2k2(subnet_prefix) is not None
-    progress_callback.onDiscoverResult(found)
-
-
 def probe_w2k2(user: str, password: str, subnet_prefix: str, download_dir: str, progress_callback) -> None:
     """A quiet look for the boat mode: is the W2K-2 reachable on the hotspot's subnet, and does it hold
     files that are not downloaded yet? Reports ``progress_callback.onProbeResult(found, has_new_files)``
-    (during the call, like discover_w2k2_only()). Nothing is downloaded and nothing is logged -- it
-    runs every few minutes while the boat mode waits. When the file lists cannot be read, the W2K-2
-    still counts as found (with no new files): the round that follows reports the real error."""
-    host = w2k2_download.discover_w2k2(subnet_prefix)
-    if host is None:
+    (during the call, like sync_from_w2k2()'s result). Nothing is downloaded -- it runs every few minutes while
+    the boat mode waits, and logs only what the login does (the W2K-2 used, a host that did not accept it). When a
+    W2K-2 answered but cannot be used (login refused, file lists unreadable), it still counts as found (with no
+    new files): the round that follows reports the real error."""
+    config = w2k2_download.W2K2Config(download_dir=Path(download_dir), token=None, user=user, password=password)
+    try:
+        found = w2k2_download.connect_to_w2k2(subnet_prefix, config)
+    except w2k2_download.LOGIN_ERRORS:
+        progress_callback.onProbeResult(True, False)
+        return
+    if found is None:
         progress_callback.onProbeResult(False, False)
         return
+    _host, session = found
     has_new_files = False
     try:
-        config = w2k2_download.W2K2Config(download_dir=Path(download_dir), token=None, user=user, password=password)
-        session = w2k2_download.make_session(host, config)
         _plan, to_download = w2k2_download.build_download_plan(session, config.download_dir)
         has_new_files = len(to_download) > 0
     except Exception:
-        pass
+        pass  # the file lists cannot be read: see above
     progress_callback.onProbeResult(True, has_new_files)
 
 

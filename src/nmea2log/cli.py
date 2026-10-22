@@ -536,7 +536,7 @@ def _run(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     # Already sorted (see discover_ebl_files's own docstring) -- the resume-cache logic below
     # (resume_index as a plain cutoff into this list) and every season-wide sample array
     # build_trips() accumulates (fixes/sogs/attitude/...) both assume file order corresponds to
-    # chronological order -- see android_entry.py's own run_pipeline() for the real-world version
+    # chronological order -- see app_entry.py's own run_pipeline() for the real-world version
     # of this same assumption breaking (Kotlin's file listing has no ordering guarantee there).
     args.logfiles = discover_ebl_files(args.ebl_dir)
     if not args.logfiles:

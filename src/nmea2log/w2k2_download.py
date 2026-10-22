@@ -2,7 +2,7 @@
 
 The W2K-2's IP address is never configured -- it's found automatically every run by scanning
 this machine's own local /24 subnet for a host whose web interface identifies itself as
-Actisense/W2K-2 (see ``discover_w2k2``). This only works while this machine is on the same wifi
+Actisense/W2K-2 (see ``discover_w2k2_hosts``). This only works while this machine is on the same wifi
 network as the W2K-2 (either joined to its own access point, or both joined to the same boat/
 home wifi router).
 
@@ -57,6 +57,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .config import DEFAULT_CONFIG_PATH, load_section
 from .log import log, set_log_level
+from .subnet import outbound_ipv4, subnet_prefix_of
 
 SD_LOG_ROOT = "/sdcard/logs/ebl_data_logs"
 
@@ -66,7 +67,7 @@ class DownloadCancelled(Exception):
     should_cancel() callback returns True -- deliberately NOT a subclass of OSError/URLError, so
     it isn't caught by download_file()'s own retry-on-transient-failure loop and instead
     propagates straight up. Only ever raised when should_cancel is explicitly passed (Android's
-    sync_from_w2k2(), see android_entry.py) -- the desktop CLI never passes one, so this never
+    sync_from_w2k2(), see app_entry.py) -- the desktop CLI never passes one, so this never
     happens there."""
 
 TIMEOUT = 30  # seconds per API request
@@ -121,7 +122,7 @@ def load_config(path: Optional[Path] = None) -> W2K2Config:
     """Reads the config file. Fills in missing credentials from environment variables
     (W2K2_TOKEN/W2K2_USER/W2K2_PASS/W2K2_DOWNLOAD_DIR), so the old way of working (env vars, or
     interactive login) still works too. The W2K-2's address itself is never read from here --
-    see ``discover_w2k2``."""
+    see ``discover_w2k2_hosts``."""
     section: Dict[str, str] = load_section("w2k2", path or DEFAULT_CONFIG_PATH)
 
     download_dir = Path(
@@ -132,11 +133,6 @@ def load_config(path: Optional[Path] = None) -> W2K2Config:
     password = os.environ.get("W2K2_PASS") or section.get("password") or None
 
     return W2K2Config(download_dir=download_dir, token=token, user=user, password=password)
-
-
-def _is_private_ipv4(octets: List[str]) -> bool:
-    first, second = int(octets[0]), int(octets[1])
-    return first == 10 or (first == 172 and 16 <= second <= 31) or (first == 192 and second == 168)
 
 
 # Adapter description/alias substrings (case-insensitive) that mean "not a real wifi/ethernet
@@ -160,7 +156,7 @@ def _windows_private_subnet_prefixes() -> List[str]:
     interface Windows treats as "primary" when there's no real default route to disambiguate by
     (nothing connected to the W2K-2's own isolated hotspot ever has one), with no guarantee that's
     the same interface actually joined to the W2K-2's own network. Enumerating every candidate
-    and trying each one (see discover_w2k2()) sidesteps the guessing entirely -- costs at most a
+    and trying each one (see discover_w2k2_hosts()) sidesteps the guessing entirely -- costs at most a
     few extra seconds (each /24 scan takes about one, see _DISCOVERY_MAX_WORKERS), and is
     reliable regardless of which adapter Windows happens to prefer internally.
 
@@ -192,11 +188,8 @@ def _windows_private_subnet_prefixes() -> List[str]:
         ip = entry.get("IPv4")
         if not isinstance(ip, str):
             continue
-        octets = ip.split(".")
-        if len(octets) != 4 or not _is_private_ipv4(octets):
-            continue  # also excludes link-local (169.254.x.x) and loopback
-        prefix = ".".join(octets[:3]) + "."
-        if prefix in seen:
+        prefix = subnet_prefix_of(ip)  # None for what is not private: also link-local (169.254.x.x) and loopback
+        if prefix is None or prefix in seen:
             continue
         seen.add(prefix)
         haystack = f"{entry.get('Alias', '')} {entry.get('Description', '')}".lower()
@@ -230,12 +223,9 @@ def _local_subnet_prefix() -> str:
 
     Every fallback only runs once the one before it has already failed, so this costs nothing on
     a normal connection with real internet access."""
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-            sock.connect(("8.8.8.8", 80))
-            return sock.getsockname()[0].rsplit(".", 1)[0] + "."
-    except OSError:
-        pass
+    outbound = outbound_ipv4()
+    if outbound is not None:
+        return outbound.rsplit(".", 1)[0] + "."
 
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
@@ -247,9 +237,9 @@ def _local_subnet_prefix() -> str:
 
     _, _, addresses = socket.gethostbyname_ex(socket.gethostname())
     for address in addresses:
-        octets = address.split(".")
-        if len(octets) == 4 and _is_private_ipv4(octets):
-            return ".".join(octets[:3]) + "."
+        prefix = subnet_prefix_of(address)
+        if prefix is not None:
+            return prefix
     raise OSError(
         "[nmea2log] could not determine this machine's own local IPv4 address by any means "
         "(no internet route, broadcast, or resolvable private hostname address)"
@@ -282,29 +272,32 @@ def _candidate_subnet_prefixes() -> List[str]:
     return prefixes if prefixes else [_local_subnet_prefix()]
 
 
-def discover_w2k2(subnet_prefix: Optional[str] = None) -> Optional[str]:
-    """Finds the W2K-2 on the local network by scanning a /24 subnet for a host whose web
-    interface identifies itself as Actisense/W2K-2. Returns a base URL (e.g.
-    "http://10.169.127.101"), or None if nothing matched anywhere.
+def discover_w2k2_hosts(subnet_prefix: Optional[str] = None) -> List[str]:
+    """Finds every W2K-2 on the local network by scanning a /24 subnet (addresses 1 to 254) for hosts
+    whose web interface identifies itself as Actisense/W2K-2. Returns their base URLs in address order
+    (e.g. ["http://10.169.127.101"]), or an empty list if nothing matched anywhere. More than one can answer
+    on one network (a marina, a boatyard, a router several boats are joined to): each has a login of its
+    own, see connect_to_w2k2().
 
     By default (subnet_prefix=None) every subnet this machine currently has a private IPv4
-    address on gets tried in turn (see _candidate_subnet_prefixes()) -- found in practice, a real
-    dev machine with a Hyper-V virtual switch also up: guessing just one "the" local subnet isn't
-    reliable once more than one adapter is active at once, which desktop can no longer assume
-    never happens. On Android, where the hotspot and the cellular uplink are both active at once
-    but self-detection has no equivalent way to enumerate adapters, callers pass the hotspot's
-    own subnet explicitly (from NetworkInterface enumeration) to skip this entirely -- an explicit
-    subnet_prefix is always scanned alone, never combined with anything else.
+    address on gets tried in turn (see _candidate_subnet_prefixes()) until one has a W2K-2 -- found in
+    practice, a real dev machine with a Hyper-V virtual switch also up: guessing just one "the" local
+    subnet isn't reliable once more than one adapter is active at once, which desktop can no longer assume
+    never happens. On Android, where the hotspot and the cellular uplink are both active at once but
+    self-detection has no equivalent way to enumerate adapters, callers pass the hotspot's own subnet
+    explicitly (from NetworkInterface enumeration) to skip this entirely -- an explicit subnet_prefix is
+    always scanned alone, never combined with anything else.
     """
     prefixes = [subnet_prefix] if subnet_prefix is not None else _candidate_subnet_prefixes()
     for prefix in prefixes:
-        log(f"[info] Scanning {prefix}1-254 for a W2K-2...", file=sys.stderr)
+        if subnet_prefix is None:  # an app that passes the subnet says which one it looks at (the boat mode is quiet)
+            log(f"[info] Scanning {prefix}1-254 for a W2K-2...", file=sys.stderr)
         hosts = [f"{prefix}{i}" for i in range(1, 255)]
         with concurrent.futures.ThreadPoolExecutor(max_workers=_DISCOVERY_MAX_WORKERS) as executor:
-            for ip, found in zip(hosts, executor.map(_looks_like_w2k2, hosts)):
-                if found:
-                    return f"http://{ip}"
-    return None
+            found = [f"http://{ip}" for ip, ok in zip(hosts, executor.map(_looks_like_w2k2, hosts)) if ok]
+        if found:
+            return found
+    return []
 
 
 class _Session:
@@ -441,6 +434,94 @@ def make_session(host: str, config: W2K2Config) -> _Session:
     session.token = token
     log("[ok] logged in, token received")
     return session
+
+
+def _short_host(host: str) -> str:
+    return host[len("http://"):] if host.startswith("http://") else host
+
+
+# The W2K-2 that was used last time, kept for as long as the process lives: the next connect_to_w2k2() tries it first
+# (one request instead of a scan of 254 addresses, and the right one when there are several W2K-2). The boat mode, a
+# long-lived service, profits most; once the app has been closed the first search starts from scratch.
+_last_host: Optional[str] = None
+
+# What a login on a host that is not the right one raises: refused (401) or no such page (404) are HTTPError, so
+# URLError and OSError; a reply without a token makes make_session() exit.
+LOGIN_ERRORS = (OSError, SystemExit)
+
+
+def _remember_host(config: W2K2Config, host: str) -> None:
+    global _last_host
+    if not config.token:  # a token is not checked by logging in, so nothing proves this is the right host
+        _last_host = host
+
+
+def _login_on_one_of(
+    hosts: List[str], config: W2K2Config, failed: Dict[str, BaseException]
+) -> Tuple[str, _Session]:
+    """Logs in on the first of ``hosts`` that accepts the login. ``failed`` holds the hosts that were already tried and
+    why they failed. With one host that is the one, and a failed login raises as it always did. With several (each W2K-2
+    has its own username and password, the login of the device itself) they are tried in address order with the login
+    from Settings and the first that accepts it is used -- the others are somebody else's. If none accepts it, the
+    last error is raised, so the usual messages (invalid credentials, network error) still apply."""
+    if len(hosts) == 1:
+        host = hosts[0]
+        if host in failed:
+            raise failed[host]
+        log(f"[info] Found W2K-2 at {host}")
+        return host, make_session(host, config)
+
+    names = ", ".join(_short_host(host) for host in hosts)
+    log(f"[info] Found {len(hosts)} W2K-2 devices ({names}) -- trying the login from Settings on each")
+    last_error: Optional[BaseException] = None
+    for host in hosts:
+        error = failed.get(host)
+        if error is None:
+            try:
+                session = make_session(host, config)
+            except LOGIN_ERRORS as exc:
+                error = exc
+            else:
+                log(f"[info] Using the W2K-2 at {_short_host(host)}")
+                return host, session
+        log(f"[info] {_short_host(host)}: login not accepted ({error})")
+        last_error = error
+    raise last_error if last_error is not None else ValueError("no W2K-2 to connect to")
+
+
+def _try_last_host(host: str, config: W2K2Config) -> Tuple[Optional[_Session], Optional[BaseException]]:
+    """The session on the remembered host, or why there is none: (None, None) when nothing there answers as a W2K-2
+    any more (gone, or the address went to something else), (None, error) when it answers but the login fails."""
+    if not _looks_like_w2k2(_short_host(host)):
+        return None, None
+    log(f"[info] Found W2K-2 at {host} (the one used last time)")  # before the login, as with a W2K-2 found by the scan
+    try:
+        return make_session(host, config), None
+    except LOGIN_ERRORS as exc:
+        return None, exc
+
+
+def connect_to_w2k2(subnet_prefix: Optional[str], config: W2K2Config) -> Optional[Tuple[str, _Session]]:
+    """Finds the W2K-2 to use and logs in on it, returning its base URL and the session, or None when there is none on
+    the network (see discover_w2k2_hosts() for ``subnet_prefix``). The W2K-2 that was used last time is tried first,
+    when it is on this subnet: if it still answers and accepts the login nothing is scanned at all. Otherwise the subnet
+    is scanned and the W2K-2 found there are tried in turn (see _login_on_one_of()). The one that was used is remembered
+    for next time."""
+    failed: Dict[str, BaseException] = {}
+    last_host = _last_host
+    if last_host is not None and (subnet_prefix is None or last_host.startswith(f"http://{subnet_prefix}")):
+        session, error = _try_last_host(last_host, config)
+        if session is not None:
+            return last_host, session
+        if error is not None:
+            failed[last_host] = error
+
+    hosts = discover_w2k2_hosts(subnet_prefix)
+    if not hosts:
+        return None
+    host, session = _login_on_one_of(hosts, config, failed)
+    _remember_host(config, host)
+    return host, session
 
 
 def get_folders(session: _Session) -> List[dict]:
@@ -627,7 +708,7 @@ def build_download_plan(
     - to_download: the subset of those `info` dicts _will_download() says will actually be
       fetched -- for a pre-download summary/progress total.
 
-    Shared by main()'s pre-download summary and android_entry.sync_from_w2k2()'s progress
+    Shared by main()'s pre-download summary and app_entry.sync_from_w2k2()'s progress
     reporting, so both track the same set of files without a second, separately-maintained copy of
     the plan.
 
@@ -706,6 +787,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _exit_for_http_error(exc: urllib.error.HTTPError) -> None:
+    if exc.code == 401:
+        sys.exit(
+            "[error] 401: token expired or invalid credentials -- check your config file "
+            "or get a fresh token"
+        )
+    sys.exit(f"[error] HTTP {exc.code}: {exc}")
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_arg_parser().parse_args(argv)
     if args.verbose:
@@ -713,22 +803,23 @@ def main(argv: Optional[List[str]] = None) -> int:
     config = load_config(args.config)
 
     try:
-        host = discover_w2k2()
+        found = connect_to_w2k2(None, config)
+    except urllib.error.HTTPError as exc:  # the login was refused (HTTPError is an OSError too, so first)
+        _exit_for_http_error(exc)
     except OSError as exc:
         # _local_subnet_prefix() asks the OS for its own outbound-routing address; that fails
         # with a raw OSError ("network unreachable" etc.) when there's no active network
         # connection at all, not just when the W2K-2 isn't on it (found in practice).
         sys.exit(f"[error] network: {exc} -- make sure this device is connected to a network")
-    if host is None:
+    if found is None:
         sys.exit(
             "[error] Could not find a W2K-2 on the local network -- make sure this device is "
             "connected to the same wifi network as the W2K-2 (either its own access point, or "
             "the boat/home wifi router it's joined to as a client)."
         )
-    log(f"[info] Found W2K-2 at {host}", file=sys.stderr)
 
+    _host, session = found
     try:
-        session = make_session(host, config)
         plan, to_download = build_download_plan(session, config.download_dir)
         total_mb = sum(info["file_size"] for info in to_download) / 1e6
         # No "of M" denominator here -- build_download_plan() now skips already-complete folders
@@ -742,12 +833,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         for folder_name, info in plan:
             download_file(session, config.download_dir, folder_name, info)
     except urllib.error.HTTPError as exc:
-        if exc.code == 401:
-            sys.exit(
-                "[error] 401: token expired or invalid credentials -- check your config file "
-                "or get a fresh token"
-            )
-        sys.exit(f"[error] HTTP {exc.code}: {exc}")
+        _exit_for_http_error(exc)
     except (urllib.error.URLError, OSError) as exc:
         sys.exit(f"[error] network: {exc}")
     return 0

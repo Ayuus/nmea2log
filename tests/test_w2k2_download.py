@@ -13,7 +13,7 @@ from nmea2log.w2k2_download import (
     _will_download,
     _windows_private_subnet_prefixes,
     build_download_plan,
-    discover_w2k2,
+    discover_w2k2_hosts,
     download_file,
     load_config,
     main,
@@ -258,28 +258,28 @@ def test_local_subnet_prefix_reraises_when_every_fallback_finds_nothing_usable(m
         _local_subnet_prefix()
 
 
-def test_discover_w2k2_returns_the_matching_host(monkeypatch):
+def test_discover_w2k2_hosts_returns_the_matching_host(monkeypatch):
     import nmea2log.w2k2_download as w2k2_download
 
     monkeypatch.setattr(w2k2_download, "_candidate_subnet_prefixes", lambda: ["10.0.0."])
     monkeypatch.setattr(w2k2_download, "_looks_like_w2k2", lambda ip: ip == "10.0.0.42")
 
-    assert discover_w2k2() == "http://10.0.0.42"
+    assert discover_w2k2_hosts() == ["http://10.0.0.42"]
 
 
-def test_discover_w2k2_returns_none_when_nothing_on_any_subnet_matches(monkeypatch):
+def test_discover_w2k2_hosts_returns_none_when_nothing_on_any_subnet_matches(monkeypatch):
     import nmea2log.w2k2_download as w2k2_download
 
     monkeypatch.setattr(w2k2_download, "_candidate_subnet_prefixes", lambda: ["10.0.0."])
     monkeypatch.setattr(w2k2_download, "_looks_like_w2k2", lambda ip: False)
 
-    assert discover_w2k2() is None
+    assert discover_w2k2_hosts() == []
 
 
-def test_discover_w2k2_tries_the_next_candidate_subnet_when_the_first_has_nothing(monkeypatch):
+def test_discover_w2k2_hosts_tries_the_next_candidate_subnet_when_the_first_has_nothing(monkeypatch):
     """Regression test for a real bug found in practice, on a real dev machine: a Hyper-V virtual
     switch being up alongside the real wifi meant guessing just one "the" local subnet (see
-    _local_subnet_prefix()) wasn't reliable -- discover_w2k2() must keep trying every candidate,
+    _local_subnet_prefix()) wasn't reliable -- discover_w2k2_hosts() must keep trying every candidate,
     not give up after the first subnet comes up empty."""
     import nmea2log.w2k2_download as w2k2_download
 
@@ -288,10 +288,10 @@ def test_discover_w2k2_tries_the_next_candidate_subnet_when_the_first_has_nothin
     )
     monkeypatch.setattr(w2k2_download, "_looks_like_w2k2", lambda ip: ip == "172.16.121.101")
 
-    assert discover_w2k2() == "http://172.16.121.101"
+    assert discover_w2k2_hosts() == ["http://172.16.121.101"]
 
 
-def test_discover_w2k2_with_an_explicit_subnet_prefix_never_tries_others(monkeypatch):
+def test_discover_w2k2_hosts_with_an_explicit_subnet_prefix_never_tries_others(monkeypatch):
     """An explicitly given subnet_prefix (used on Android, see this function's own doc comment)
     must be scanned alone -- never combined with _candidate_subnet_prefixes()'s own enumeration,
     which doesn't apply there at all (cellular's own subnet would just be noise)."""
@@ -303,10 +303,10 @@ def test_discover_w2k2_with_an_explicit_subnet_prefix_never_tries_others(monkeyp
     monkeypatch.setattr(w2k2_download, "_candidate_subnet_prefixes", _fail_if_called)
     monkeypatch.setattr(w2k2_download, "_looks_like_w2k2", lambda ip: ip == "10.0.0.42")
 
-    assert discover_w2k2(subnet_prefix="10.0.0.") == "http://10.0.0.42"
+    assert discover_w2k2_hosts(subnet_prefix="10.0.0.") == ["http://10.0.0.42"]
 
 
-def test_discover_w2k2_with_explicit_subnet_prefix_skips_self_detection(monkeypatch):
+def test_discover_w2k2_hosts_with_explicit_subnet_prefix_skips_self_detection(monkeypatch):
     """Android runs with both a hotspot and a cellular uplink active at once, so self-detecting
     the local subnet (via a UDP-connect to 8.8.8.8) would find the cellular subnet, not the
     hotspot's -- passing subnet_prefix explicitly must skip that self-detection entirely."""
@@ -318,7 +318,7 @@ def test_discover_w2k2_with_explicit_subnet_prefix_skips_self_detection(monkeypa
     monkeypatch.setattr(w2k2_download, "_local_subnet_prefix", _fail_if_called)
     monkeypatch.setattr(w2k2_download, "_looks_like_w2k2", lambda ip: ip == "192.168.43.7")
 
-    assert discover_w2k2(subnet_prefix="192.168.43.") == "http://192.168.43.7"
+    assert discover_w2k2_hosts(subnet_prefix="192.168.43.") == ["http://192.168.43.7"]
 
 
 def test_main_reports_a_clear_error_when_no_w2k2_is_found_on_the_network(monkeypatch, tmp_path):
@@ -327,7 +327,7 @@ def test_main_reports_a_clear_error_when_no_w2k2_is_found_on_the_network(monkeyp
 
     import nmea2log.w2k2_download as w2k2_download
 
-    monkeypatch.setattr(w2k2_download, "discover_w2k2", lambda: None)
+    monkeypatch.setattr(w2k2_download, "discover_w2k2_hosts", lambda subnet_prefix=None: [])
 
     with pytest.raises(SystemExit) as exc_info:
         main(["--config", str(config_path)])
@@ -337,7 +337,7 @@ def test_main_reports_a_clear_error_when_no_w2k2_is_found_on_the_network(monkeyp
 
 def test_main_reports_a_clear_error_when_discovery_has_no_network_route(monkeypatch, tmp_path):
     """Regression test for a real crash: with no active network connection at all,
-    discover_w2k2() -> _local_subnet_prefix() raises a raw OSError ("network unreachable") when
+    discover_w2k2_hosts() -> _local_subnet_prefix() raises a raw OSError ("network unreachable") when
     it asks the OS for its own outbound-routing address -- that call happens before main()'s
     try/except, so it surfaced as a raw traceback instead of the same clean "[error] network: ..."
     message a connection failure during login/download already got."""
@@ -346,10 +346,10 @@ def test_main_reports_a_clear_error_when_discovery_has_no_network_route(monkeypa
 
     import nmea2log.w2k2_download as w2k2_download
 
-    def fake_discover_w2k2():
+    def fake_discover_w2k2_hosts(subnet_prefix=None):
         raise OSError("[WinError 10051] network is unreachable")
 
-    monkeypatch.setattr(w2k2_download, "discover_w2k2", fake_discover_w2k2)
+    monkeypatch.setattr(w2k2_download, "discover_w2k2_hosts", fake_discover_w2k2_hosts)
 
     with pytest.raises(SystemExit) as exc_info:
         main(["--config", str(config_path)])
@@ -370,7 +370,7 @@ def test_main_reports_a_clear_error_on_timeout_instead_of_a_raw_traceback(monkey
 
     import nmea2log.w2k2_download as w2k2_download
 
-    monkeypatch.setattr(w2k2_download, "discover_w2k2", lambda: "http://10.164.231.101")
+    monkeypatch.setattr(w2k2_download, "discover_w2k2_hosts", lambda subnet_prefix=None: ["http://10.164.231.101"])
 
     def fake_urlopen(request, timeout=None):
         raise TimeoutError("timed out")
@@ -397,7 +397,7 @@ def test_main_reports_a_clear_error_on_connection_reset_instead_of_a_raw_traceba
 
     import nmea2log.w2k2_download as w2k2_download
 
-    monkeypatch.setattr(w2k2_download, "discover_w2k2", lambda: "http://10.164.231.101")
+    monkeypatch.setattr(w2k2_download, "discover_w2k2_hosts", lambda subnet_prefix=None: ["http://10.164.231.101"])
 
     def fake_urlopen(request, timeout=None):
         raise ConnectionResetError("connection reset")
@@ -1010,3 +1010,241 @@ def test_needs_download_complete_file(tmp_path: Path):
     target.write_bytes(b"1234")
 
     assert _needs_download(target, 4) is False
+
+
+def test_discover_w2k2_hosts_returns_every_match_in_address_order(monkeypatch):
+    """A marina or boatyard network can have several W2K-2 (each with a login of its own): all of them are
+    returned, lowest address first."""
+    import nmea2log.w2k2_download as w2k2_download
+
+    monkeypatch.setattr(w2k2_download, "_looks_like_w2k2", lambda ip: ip in {"192.168.0.75", "192.168.0.3", "192.168.0.74"})
+
+    assert discover_w2k2_hosts(subnet_prefix="192.168.0.") == [
+        "http://192.168.0.3",
+        "http://192.168.0.74",
+        "http://192.168.0.75",
+    ]
+
+
+def _login_by_host(monkeypatch, outcomes):
+    """make_session() as a fake: ``outcomes`` maps a host to the exception it raises, or to a token. Returns the
+    hosts it was asked to log in on, in order."""
+    import nmea2log.w2k2_download as w2k2_download
+
+    tried = []
+
+    def fake_make_session(host, config):
+        tried.append(host)
+        outcome = outcomes[host]
+        if isinstance(outcome, BaseException):
+            raise outcome
+        session = w2k2_download._Session(host)
+        session.token = outcome
+        return session
+
+    monkeypatch.setattr(w2k2_download, "make_session", fake_make_session)
+    return tried
+
+
+def _scan_finds(monkeypatch, hosts):
+    """discover_w2k2_hosts() as a fake that returns ``hosts``; returns the list of prefixes it was asked to scan."""
+    import nmea2log.w2k2_download as w2k2_download
+
+    scanned = []
+
+    def fake_discover(subnet_prefix=None):
+        scanned.append(subnet_prefix)
+        return list(hosts)
+
+    monkeypatch.setattr(w2k2_download, "discover_w2k2_hosts", fake_discover)
+    return scanned
+
+
+def _http_error(code):
+    return urllib.error.HTTPError("http://x/api/login", code, "error", {}, None)
+
+
+def _config(tmp_path):
+    from nmea2log.w2k2_download import W2K2Config
+
+    return W2K2Config(download_dir=tmp_path / "Actisense", user="u", password="p")
+
+
+def test_connect_to_w2k2_returns_none_when_nothing_is_found(monkeypatch, tmp_path):
+    from nmea2log.w2k2_download import connect_to_w2k2
+
+    _scan_finds(monkeypatch, [])
+
+    assert connect_to_w2k2("192.168.0.", _config(tmp_path)) is None
+
+
+def test_connect_to_w2k2_with_one_w2k2_logs_in_on_it_and_lets_a_failure_through(monkeypatch, tmp_path):
+    from nmea2log.w2k2_download import connect_to_w2k2
+
+    _scan_finds(monkeypatch, ["http://10.0.0.5"])
+    _login_by_host(monkeypatch, {"http://10.0.0.5": _http_error(404)})
+
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        connect_to_w2k2("10.0.0.", _config(tmp_path))
+
+    assert exc_info.value.code == 404
+
+
+def test_connect_to_w2k2_skips_a_host_that_has_no_login_and_one_that_refuses_it(monkeypatch, tmp_path):
+    """The real case that was reported: the lowest address (192.168.0.3) matched the W2K-2 check but has no
+    /api/login (404), the next one refuses this login (401), the third accepts it -- that one is used."""
+    from nmea2log.w2k2_download import connect_to_w2k2
+
+    hosts = ["http://192.168.0.3", "http://192.168.0.74", "http://192.168.0.75"]
+    _scan_finds(monkeypatch, hosts)
+    tried = _login_by_host(
+        monkeypatch,
+        {hosts[0]: _http_error(404), hosts[1]: _http_error(401), hosts[2]: "token-75"},
+    )
+
+    host, session = connect_to_w2k2("192.168.0.", _config(tmp_path))
+
+    assert host == "http://192.168.0.75"
+    assert session.token == "token-75"
+    assert tried == hosts
+
+
+def test_connect_to_w2k2_uses_the_first_host_that_accepts_the_login(monkeypatch, tmp_path):
+    from nmea2log.w2k2_download import connect_to_w2k2
+
+    hosts = ["http://192.168.0.74", "http://192.168.0.75"]
+    _scan_finds(monkeypatch, hosts)
+    tried = _login_by_host(monkeypatch, {hosts[0]: "token-74", hosts[1]: "token-75"})
+
+    host, _session = connect_to_w2k2("192.168.0.", _config(tmp_path))
+
+    assert host == "http://192.168.0.74"
+    assert tried == [hosts[0]]  # the others are not even asked
+
+
+def test_connect_to_w2k2_raises_the_last_error_when_none_accepts_the_login(monkeypatch, tmp_path):
+    from nmea2log.w2k2_download import connect_to_w2k2
+
+    hosts = ["http://192.168.0.74", "http://192.168.0.75"]
+    _scan_finds(monkeypatch, hosts)
+    _login_by_host(monkeypatch, {hosts[0]: _http_error(401), hosts[1]: _http_error(401)})
+
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        connect_to_w2k2("192.168.0.", _config(tmp_path))
+
+    assert exc_info.value.code == 401
+
+
+def test_connect_to_w2k2_remembers_the_host_it_used(monkeypatch, tmp_path):
+    import nmea2log.w2k2_download as w2k2_download
+    from nmea2log.w2k2_download import connect_to_w2k2
+
+    hosts = ["http://192.168.0.3", "http://192.168.0.75"]
+    _scan_finds(monkeypatch, hosts)
+    _login_by_host(monkeypatch, {hosts[0]: _http_error(404), hosts[1]: "token-75"})
+
+    connect_to_w2k2("192.168.0.", _config(tmp_path))
+
+    assert w2k2_download._last_host == "http://192.168.0.75"
+
+
+def test_connect_to_w2k2_starts_with_the_remembered_host_and_does_not_scan_when_it_works(monkeypatch, tmp_path):
+    import nmea2log.w2k2_download as w2k2_download
+    from nmea2log.w2k2_download import connect_to_w2k2
+
+    monkeypatch.setattr(w2k2_download, "_last_host", "http://192.168.0.75")
+    scanned = _scan_finds(monkeypatch, ["http://192.168.0.3", "http://192.168.0.75"])
+    tried = _login_by_host(monkeypatch, {"http://192.168.0.75": "token-75"})
+    monkeypatch.setattr(w2k2_download, "_looks_like_w2k2", lambda ip: ip == "192.168.0.75")
+
+    host, session = connect_to_w2k2("192.168.0.", _config(tmp_path))
+
+    assert (host, session.token) == ("http://192.168.0.75", "token-75")
+    assert scanned == []  # nothing scanned
+    assert tried == ["http://192.168.0.75"]
+
+
+def test_connect_to_w2k2_scans_when_the_remembered_host_is_gone(monkeypatch, tmp_path):
+    import nmea2log.w2k2_download as w2k2_download
+    from nmea2log.w2k2_download import connect_to_w2k2
+
+    monkeypatch.setattr(w2k2_download, "_last_host", "http://192.168.0.75")
+    scanned = _scan_finds(monkeypatch, ["http://192.168.0.74"])
+    tried = _login_by_host(monkeypatch, {"http://192.168.0.74": "token-74"})
+    monkeypatch.setattr(w2k2_download, "_looks_like_w2k2", lambda ip: False)  # nothing answers at .75 any more
+
+    host, _session = connect_to_w2k2("192.168.0.", _config(tmp_path))
+
+    assert host == "http://192.168.0.74"
+    assert scanned == ["192.168.0."]
+    assert tried == ["http://192.168.0.74"]  # the gone one is not logged in on
+    assert w2k2_download._last_host == "http://192.168.0.74"
+
+
+def test_connect_to_w2k2_tries_the_rest_when_the_remembered_host_refuses_the_login(monkeypatch, tmp_path):
+    """The remembered host is not asked twice: it failed before the scan, the scan lists it again, and it is skipped."""
+    import nmea2log.w2k2_download as w2k2_download
+    from nmea2log.w2k2_download import connect_to_w2k2
+
+    monkeypatch.setattr(w2k2_download, "_last_host", "http://192.168.0.74")
+    hosts = ["http://192.168.0.3", "http://192.168.0.74", "http://192.168.0.75"]
+    _scan_finds(monkeypatch, hosts)
+    tried = _login_by_host(
+        monkeypatch,
+        {hosts[0]: _http_error(404), hosts[1]: _http_error(401), hosts[2]: "token-75"},
+    )
+    monkeypatch.setattr(w2k2_download, "_looks_like_w2k2", lambda ip: True)
+
+    host, _session = connect_to_w2k2("192.168.0.", _config(tmp_path))
+
+    assert host == "http://192.168.0.75"
+    assert tried == ["http://192.168.0.74", "http://192.168.0.3", "http://192.168.0.75"]  # .74 only once
+
+
+def test_connect_to_w2k2_ignores_a_remembered_host_on_another_subnet(monkeypatch, tmp_path):
+    import nmea2log.w2k2_download as w2k2_download
+    from nmea2log.w2k2_download import connect_to_w2k2
+
+    monkeypatch.setattr(w2k2_download, "_last_host", "http://10.109.124.223")
+
+    def _fail_if_asked(ip):
+        raise AssertionError("a host on another subnet must not be tried")
+
+    monkeypatch.setattr(w2k2_download, "_looks_like_w2k2", _fail_if_asked)
+    _scan_finds(monkeypatch, ["http://192.168.0.74"])
+    _login_by_host(monkeypatch, {"http://192.168.0.74": "token-74"})
+
+    host, _session = connect_to_w2k2("192.168.0.", _config(tmp_path))
+
+    assert host == "http://192.168.0.74"
+
+
+def test_connect_to_w2k2_does_not_remember_a_host_when_a_token_is_used(monkeypatch, tmp_path):
+    """A token is not checked by logging in, so nothing proves the host is the right one."""
+    import nmea2log.w2k2_download as w2k2_download
+    from nmea2log.w2k2_download import W2K2Config, connect_to_w2k2
+
+    config = W2K2Config(download_dir=tmp_path / "Actisense", token="t")
+    _scan_finds(monkeypatch, ["http://192.168.0.74"])
+    _login_by_host(monkeypatch, {"http://192.168.0.74": "t"})
+
+    connect_to_w2k2("192.168.0.", config)
+
+    assert w2k2_download._last_host is None
+
+
+def test_main_keeps_the_401_message_when_the_login_is_refused(monkeypatch, tmp_path):
+    """The login is inside connect_to_w2k2() now; an HTTPError is an OSError too, and must not end up as the generic
+    "network" message."""
+    import nmea2log.w2k2_download as w2k2_download
+
+    config_path = tmp_path / "w2k2.ini"
+    config_path.write_text(f"[w2k2]\nuser = skipper\npassword = geheim\ndownload_dir = {tmp_path / 'Actisense'}\n", encoding="utf-8")
+    _scan_finds(monkeypatch, ["http://10.164.231.101"])
+    _login_by_host(monkeypatch, {"http://10.164.231.101": _http_error(401)})
+
+    with pytest.raises(SystemExit) as exc_info:
+        w2k2_download.main(["--config", str(config_path)])
+
+    assert "401" in str(exc_info.value)
+    assert "credentials" in str(exc_info.value)
