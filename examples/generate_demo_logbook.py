@@ -43,7 +43,7 @@ for i in range(5):
     track = []
     total_legs = len(waypoints) - 1
     total_steps = total_legs * points_per_leg
-    # The depth under the transducer along the leg, between the leg's shallowest depth (min_depth, as in the demo files) and 7.5 m
+    # The depth of the water along the leg, between the leg's shallowest depth (min_depth, as in the demo files) and 7.5 m
     # deeper (what the demo files reach too, see generate_demo_ebl.py): a smooth wave, with the shallowest and the deepest sample
     # of the leg placed explicitly so the extremes are exactly those two numbers.
     shallowest_step, deepest_step = total_steps // 3, (2 * total_steps) // 3 + 1

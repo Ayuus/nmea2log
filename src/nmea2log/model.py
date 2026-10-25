@@ -72,7 +72,7 @@ class TripFuelSample:
 @dataclass(frozen=True, slots=True)
 class DepthSample:
     time: datetime
-    depth_m: Optional[float]  # water depth under the transducer (PGN 128267), in meters
+    depth_m: Optional[float]  # depth of the water from the surface (PGN 128267, with the transducer's offset), in meters
 
 
 @dataclass(frozen=True, slots=True)

@@ -1322,8 +1322,8 @@ def test_write_html_logbook_shows_the_shallowest_and_deepest_depth_in_the_table(
     assert 'data-i18n="header_max_depth">Max. diepte</span>' in html
     row = re.search(r'<tr class="trip-row".*?</tr>', html, re.S).group(0)
     assert "2,4 m" in row and "12,1 m" in row
-    assert "om 09:10, onder de transducer" in row  # when the shallowest point was measured
-    assert "om 09:20, onder de transducer" in row  # when the deepest point was measured
+    assert "om 09:10" in row  # when the shallowest point was measured
+    assert "om 09:20" in row  # when the deepest point was measured
     # the two columns come after the RPM column and before the route (map) button, in the header and in the row
     headers = [m.group(1) for m in re.finditer(r'<th><span[^>]*data-i18n="(header_[a-z_]+)"', html)]
     assert headers.index("header_rpm") + 1 == headers.index("header_min_depth")
@@ -1342,7 +1342,7 @@ def test_write_html_logbook_depth_cells_and_markers_are_empty_without_depth_read
     trip = _trips_json(html)["0"]
     assert trip["minDepth"] is None and trip["maxDepth"] is None
     row = re.search(r'<tr class="trip-row".*?</tr>', html, re.S).group(0)
-    assert "onder de transducer" not in row
+    assert "🌊" not in row  # no depth tooltip
 
 
 def test_write_html_logbook_marks_only_one_point_when_the_trip_has_a_single_depth(tmp_path: Path):

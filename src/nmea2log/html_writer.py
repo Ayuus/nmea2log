@@ -500,7 +500,7 @@ def _max_speed_marker(trip: TripLeg, offset_hours: float) -> Optional[dict]:
 
 def _depth_cell_html(sample: Optional[NavSample], offset_hours: float) -> str:
     """The trip's shallowest or deepest depth as a plain number in its cell; hovering shows when it was measured, like the
-    "Topsnelheid" cell. The depth is the one under the transducer (the sounder's offset is not added, see the README)."""
+    "Topsnelheid" cell. The depth is that of the water from the surface (the transducer's offset to the waterline is added, see decode_water_depth())."""
     if sample is None or sample.depth_m is None:
         return ""
     time_text = to_local(sample.time, offset_hours).strftime("%H:%M")
@@ -597,7 +597,7 @@ def _details_cell_html(
         # sensors already in this table, e.g. water temperature's own detail row).
         has_wind_instrument = any(e.wind_speed_ms is not None or e.wind_angle_deg is not None for e in entries)
         has_stw = any(e.stw_ms is not None for e in entries)
-        # The depth under the transducer, like the min/max depth of the trip (a boat without a depth sounder gets no column).
+        # The depth of the water, like the min/max depth of the trip (a boat without a depth sounder gets no column).
         has_depth = any(e.depth_m is not None for e in entries)
         for i, entry in enumerate(entries):
             # Same numbering as the map's own numbered markers (see _map_log_points/the

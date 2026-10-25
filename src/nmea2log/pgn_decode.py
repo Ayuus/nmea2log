@@ -181,11 +181,18 @@ def decode_engine_dynamic(data: bytes) -> Optional[dict]:
 
 
 def decode_water_depth(data: bytes) -> Optional[float]:
-    """PGN 128267: water depth under the transducer, in meters."""
+    """PGN 128267: the depth of the water from the surface, in meters: the depth under the transducer plus the transducer's offset
+    when that is positive (the distance from the transducer to the waterline), so it is what a display that adds the offset shows.
+    A negative offset (the distance to the keel: the depth is then measured under the keel) is not added, nor is an offset that is
+    not available: the draught is not known, so a depth under the keel cannot be turned into the depth of the water."""
     depth_raw = _extract(data, 8, 32, signed=False)
     if depth_raw is None:
         return None
-    return depth_raw * 0.01
+    depth_m = depth_raw * 0.01
+    offset_raw = _extract(data, 40, 16, signed=True)
+    if offset_raw is not None and offset_raw > 0:
+        depth_m += offset_raw * 0.001
+    return depth_m
 
 
 def decode_sea_temperature(data: bytes) -> Optional[float]:

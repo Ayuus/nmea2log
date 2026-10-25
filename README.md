@@ -55,7 +55,7 @@ the tests.
      frequently than PGN 127489's other fields, so decoded as its own sample stream.
    - **127497** (*Trip Parameters, Engine*) → optional: the trip-meter fuel reading the
      engine/ECU keeps itself (in liters), if the device sends this PGN.
-   - **128267** (*Water Depth*) → water depth under the transducer.
+   - **128267** (*Water Depth*) → the depth of the water (the depth under the transducer plus the transducer's offset to the waterline).
    - **129025** (*Position, Rapid Update*) → GPS position.
    - **129539** (*GNSS DOPs*) → the GPS receiver's own statement of whether its fix can be
      trusted (fix mode + HDOP). Position messages are ignored while it reports no valid fix:
@@ -623,13 +623,14 @@ Set `MYSAILINGLOGBOOK_ANDROID_RES` to the Android `res` directory and `pytest` a
   settles out over many refuels, not one trip. Future work: parse PGN 127505 as a *fallback* for
   when engine fuel-rate data is absent, clearly labeled as a rougher estimate rather than shown
   the same way as engine-derived figures.
-- **Water depth**: the app uses the raw "Depth" value from PGN 128267 (depth under the
-  transducer), without adding the transducer offset that the same message carries as a separate field
-  (the distance from the transducer to the waterline, or to the keel when negative). A display that adds
-  it shows that much more (or less) than this app. On the author's boat the sounder sends a fixed offset of
-  +0.30 m (checked in 55,000 readings over 18 folders), so the figures here are 0.30 m less than the depth
-  under the waterline; check this against your own depth-sounder settings. Adding the offset would mean
-  decoding all files again (the decoded samples are cached without it), so it has not been done.
+- **Water depth**: the depth of the water from the surface: the "Depth" value of PGN 128267 (the depth under the
+  transducer) plus the "Offset" the same message carries, when that is positive (the distance from the transducer to
+  the waterline), so it agrees with a display that adds it. A negative offset (the distance to the keel, which makes
+  the depth one under the keel) and an offset that is not available are not added: the draught is not known, so a
+  depth under the keel cannot be turned into the depth of the water. On the author's boat the sounder sends a fixed
+  offset of +0.30 m (checked in 55,000 readings over 18 folders). The decoded samples and the settled trips are cached
+  with the depth as it was decoded; the version of both caches was raised when the offset was added (1.1.18), so the
+  first run after that update decodes the whole archive again, once.
 - **Engine warnings**: the bit meanings (e.g. "Low Oil Pressure") come from the generic NMEA2000
   standard list (canboat's ENGINE_STATUS_1/2). Some manufacturers use deviating or additional
   proprietary status bits for this — check this against your own engine documentation if a

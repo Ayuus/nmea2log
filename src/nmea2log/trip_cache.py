@@ -32,7 +32,7 @@ from .tripbuilder import TripLeg
 # written by older code doesn't silently get served to code that no longer agrees with its shape
 # -- an unreadable/mismatched cache is simply treated as absent (see TripCache.load), never as an
 # error, since it costs nothing but one slower run to rebuild it from scratch.
-CACHE_FORMAT_VERSION = 1
+CACHE_FORMAT_VERSION = 2  # 2: the depths of the tracks have the transducer's offset added
 
 _COMPRESSION_LEVEL = 6
 

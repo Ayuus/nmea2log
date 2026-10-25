@@ -160,6 +160,27 @@ def test_decode_water_depth_not_available():
     assert decode_water_depth(data) is None
 
 
+def test_decode_water_depth_adds_a_positive_offset_to_the_waterline():
+    """The depth of the water from the surface: 2.50 m under a transducer that sits 0.30 m under the waterline is 2.80 m of
+    water (the offset of the author's own sounder is +0.300 m)."""
+    data = struct.pack("<BIhB", 0, 250, 300, 0xFF)
+
+    assert decode_water_depth(data) == pytest.approx(2.80)
+
+
+def test_decode_water_depth_does_not_add_a_negative_offset_to_the_keel():
+    """Negative: the depth is measured under the keel, and the draught is not known, so nothing is added."""
+    data = struct.pack("<BIhB", 0, 250, -450, 0xFF)
+
+    assert decode_water_depth(data) == pytest.approx(2.50)
+
+
+def test_decode_water_depth_does_not_add_an_offset_that_is_not_available():
+    data = struct.pack("<BIhB", 0, 250, 0x7FFF, 0xFF)  # 0x7FFF: "not available" for a signed 16 bit field
+
+    assert decode_water_depth(data) == pytest.approx(2.50)
+
+
 def test_decode_system_time():
     when = datetime(2026, 7, 15, 9, 30, 15, 500000)
     epoch_days = (when.date() - date(1970, 1, 1)).days
