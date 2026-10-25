@@ -44,7 +44,7 @@ from .logbook_writer import (
     typical_rpm_text,
 )
 from .translations import LANGUAGE_FLAGS, LANGUAGES, MONTH_ABBR, MONTH_ABBR_NL, NL as T
-from .tripbuilder import NavSample, TripLeg
+from .tripbuilder import NavSample, TripLeg, depth_extremes
 from .geocode import PREFIX_MOORING, PREFIX_WATER, NoGeocoder
 from .marine import NoMarine
 from .model import PositionFix
@@ -460,6 +460,7 @@ def _map_log_points(trip: TripLeg, offset_hours: float, interval_minutes: float)
                 "time": f"{local_time:%H:%M}",
                 "cog": f"{nl_num(entry.cog_deg, 0)}°" if entry.cog_deg is not None else None,
                 "sog": f"{nl_num(entry.sog_ms / _KNOT_IN_MS)} kn",
+                "depth": f"{nl_num(entry.depth_m)} m" if entry.depth_m is not None else None,
             }
         )
     return points
@@ -495,6 +496,39 @@ def _max_speed_marker(trip: TripLeg, offset_hours: float) -> Optional[dict]:
         "speed": f"{nl_num(trip.max_speed_kn)} kn",
         "rpm": rpm_text,
     }
+
+
+def _depth_cell_html(sample: Optional[NavSample], offset_hours: float) -> str:
+    """The trip's shallowest or deepest depth as a plain number in its cell; hovering shows when it was measured, like the
+    "Topsnelheid" cell. The depth is the one under the transducer (the sounder's offset is not added, see the README)."""
+    if sample is None or sample.depth_m is None:
+        return ""
+    time_text = to_local(sample.time, offset_hours).strftime("%H:%M")
+    return (
+        f'<span class="temp-hover">{nl_num(sample.depth_m)} m'
+        f'<span class="temp-tooltip" style="background:#eef4fb;color:#1a4a7a;">'
+        f'🌊 {_i18n_tpl_html("depth_tooltip", time=time_text)}</span></span>'
+    )
+
+
+def _depth_marker(sample: Optional[NavSample], offset_hours: float) -> Optional[dict]:
+    """Position + ready-made tooltip fields for a depth marker on the map: red for the shallowest point of the trip, dark blue
+    for the deepest (see the map code in write_html_logbook), next to the orange top speed marker. None without a depth."""
+    if sample is None or sample.depth_m is None:
+        return None
+    return {
+        "lat": round(sample.lat, 6),
+        "lon": round(sample.lon, 6),
+        "time": f"{to_local(sample.time, offset_hours):%H:%M}",
+        "depth": f"{nl_num(sample.depth_m)} m",
+    }
+
+
+def _depth_extremes_of(trip: TripLeg) -> Tuple[Optional[NavSample], Optional[NavSample]]:
+    """The shallowest and the deepest sample for the map; the deepest is dropped when it is the very same point as the
+    shallowest (a trip with a single depth reading), so two markers do not sit on top of each other."""
+    shallowest, deepest = depth_extremes(trip.track)
+    return shallowest, None if deepest is shallowest else deepest
 
 
 def _trip_title(trip: TripLeg, depart_local: datetime) -> str:
@@ -563,6 +597,8 @@ def _details_cell_html(
         # sensors already in this table, e.g. water temperature's own detail row).
         has_wind_instrument = any(e.wind_speed_ms is not None or e.wind_angle_deg is not None for e in entries)
         has_stw = any(e.stw_ms is not None for e in entries)
+        # The depth under the transducer, like the min/max depth of the trip (a boat without a depth sounder gets no column).
+        has_depth = any(e.depth_m is not None for e in entries)
         for i, entry in enumerate(entries):
             # Same numbering as the map's own numbered markers (see _map_log_points/the
             # log-marker JS, which number only the entries strictly between these two) -- the
@@ -578,6 +614,7 @@ def _details_cell_html(
             cog_text = f"{nl_num(entry.cog_deg, 0)}&deg;" if entry.cog_deg is not None else ""
             sog_text = f"{nl_num(entry.sog_ms / _KNOT_IN_MS)} kn"
             position_text = f"{entry.lat:.4f}, {entry.lon:.4f}"
+            depth_text = f"{nl_num(entry.depth_m)} m" if entry.depth_m is not None else ""
             # A real instrument reading from the boat itself (PGN 130306), not the regional
             # weather-model estimate the existing "Wind" column below already shows -- kept as a
             # clearly separate column (own header) so the two are never confused, see this
@@ -636,8 +673,9 @@ def _details_cell_html(
                 optional_cells += f"<td>{stw_text}</td>"
             if has_wind_instrument:
                 optional_cells += f"<td>{wind_instrument_text}</td>"
+            depth_cell = f"<td>{depth_text}</td>" if has_depth else ""
             rows.append(
-                f"<tr><td>{number_text}</td><td>{local_time:%H:%M}</td><td>{position_text}</td>"
+                f"<tr><td>{number_text}</td><td>{local_time:%H:%M}</td><td>{position_text}</td>{depth_cell}"
                 f"<td>{cog_text}</td><td>{sog_text}</td>{optional_cells}"
                 f"<td>{wind_text}</td><td>{precip_text}</td><td>{cloud_text}</td>"
                 f"<td>{wave_text}</td><td>{current_text}</td></tr>"
@@ -647,10 +685,11 @@ def _details_cell_html(
             optional_headers += f"<th>{_i18n_span('log_header_stw')}</th>"
         if has_wind_instrument:
             optional_headers += f"<th>{_i18n_span('log_header_wind_instrument')}</th>"
+        depth_header = f"<th>{_i18n_span('log_header_depth')}</th>" if has_depth else ""
         sections.append(
             "<table class=\"log-table\"><thead><tr>"
             f"<th>{_i18n_span('log_header_number')}</th>"
-            f"<th>{_i18n_span('log_header_time')}</th><th>{_i18n_span('log_header_position')}</th>"
+            f"<th>{_i18n_span('log_header_time')}</th><th>{_i18n_span('log_header_position')}</th>{depth_header}"
             f"<th>{_i18n_span('log_header_cog')}</th><th>{_i18n_span('log_header_sog')}</th>{optional_headers}"
             f"<th>{_i18n_span('log_header_wind')}</th><th>{_i18n_span('log_header_precip')}</th>"
             f"<th>{_i18n_span('log_header_cloud')}</th>"
@@ -788,6 +827,7 @@ def _trip_row_html(
     depart_local = to_local(trip.depart_time, offset)
     arrive_local = to_local(trip.arrive_time, offset)
     avg_consumption_nm = avg_consumption_l_per_nm(trip)
+    shallowest, deepest = depth_extremes(trip.track)
 
     map_cell = (
         f'<button class="show-map" data-trip="{idx}">{_i18n_span("map_button_show")}</button>'
@@ -818,6 +858,8 @@ def _trip_row_html(
         f"{nl_num(avg_consumption_nm, 2)} L/nm" if avg_consumption_nm is not None else "",
         engine_hours_cell,
         _typical_rpm_html(trip),
+        _depth_cell_html(shallowest, offset),
+        _depth_cell_html(deepest, offset),
         map_cell,
         _details_cell_html(trip, idx, log_interval_minutes, offset, weather, marine),
     ]
@@ -896,6 +938,8 @@ _HEADER_KEYS = [
     "header_l_per_nm",
     "header_engine_hours",
     "header_rpm",
+    "header_min_depth",
+    "header_max_depth",
     "header_route",
     "header_details",
 ]
@@ -1118,6 +1162,9 @@ def write_html_logbook(
                 trip, trip_utc_offset_hours(trip, utc_offset_hours), log_interval_minutes
             ),
             "maxSpeed": _max_speed_marker(trip, trip_utc_offset_hours(trip, utc_offset_hours)),
+            "minDepth": _depth_marker(_depth_extremes_of(trip)[0], trip_utc_offset_hours(trip, utc_offset_hours)),
+            # A trip whose depth never changes has one point that is both: one marker is enough there.
+            "maxDepth": _depth_marker(_depth_extremes_of(trip)[1], trip_utc_offset_hours(trip, utc_offset_hours)),
             # Only used by the "Overzicht" season map (see the <dialog id="overview-dialog">
             # further down) -- seq is the same 1-based per-year number as the table's own "Nr."
             # column (seq_by_index_all, built alongside year_trip_indices above).
@@ -1348,6 +1395,16 @@ def write_html_logbook(
     width: 16px; height: 16px; display: flex; align-items: center; justify-content: center;
     font-size: 10px;
   }}
+  /* Red for the shallowest point of a trip and dark blue for the deepest, next to the orange top speed marker; the white
+     border keeps the dark blue one visible against the blue route line. A triangle each (up: shallow, down: deep), so the
+     two also differ without the colors. */
+  .min-depth-marker, .max-depth-marker {{
+    color: white; border: 1px solid white; border-radius: 50%;
+    width: 16px; height: 16px; display: flex; align-items: center; justify-content: center;
+    font-size: 8px;
+  }}
+  .min-depth-marker {{ background: #d62728; }}
+  .max-depth-marker {{ background: #0b2a66; }}
   .noscript-warning {{
     background: #fff3cd; color: #664d03; border: 1px solid #ffe69c; border-radius: 8px;
     padding: 0.8em 1.2em; margin-bottom: 1.5em;
@@ -1576,6 +1633,7 @@ document.querySelectorAll('.show-map').forEach(function(btn) {{
         var parts = [label];
         if (entry) {{
           parts.push(entry.time, entry.lat.toFixed(4) + ', ' + entry.lon.toFixed(4));
+          if (entry.depth) parts.push(entry.depth);
           if (entry.cog) parts.push(entry.cog);
           parts.push(entry.sog);
         }}
@@ -1613,6 +1671,19 @@ document.querySelectorAll('.show-map').forEach(function(btn) {{
         L.marker([maxSpeed.lat, maxSpeed.lon], {{icon: maxSpeedIcon}}).addTo(map)
           .bindTooltip(maxSpeedParts.join(' &middot; '));
       }}
+      // Red (shallowest) and dark blue (deepest) markers, like the orange one above; absent when the trip has no depth
+      // reading (see _depth_marker in html_writer.py).
+      [['minDepth', 'min-depth-marker', '&#9650;', 'map_marker_min_depth'],
+       ['maxDepth', 'max-depth-marker', '&#9660;', 'map_marker_max_depth']].forEach(function(spec) {{
+        var depth = TRIPS[idx][spec[0]];
+        if (!depth) return;
+        var depthIcon = L.divIcon({{
+          className: spec[1], html: spec[2], iconSize: [16, 16], iconAnchor: [8, 8]
+        }});
+        // On top of the numbered log markers, which would otherwise cover them where they are at the same height.
+        L.marker([depth.lat, depth.lon], {{icon: depthIcon, zIndexOffset: 1000}}).addTo(map)
+          .bindTooltip([I18N[currentLang][spec[3]], depth.time, depth.depth].join(' &middot; '));
+      }});
       map.fitBounds(line.getBounds(), {{padding: [20, 20]}});
       setTimeout(function() {{ map.invalidateSize(); }}, 0);
     }}

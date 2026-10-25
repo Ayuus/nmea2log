@@ -51,7 +51,7 @@ html.cards table.trips > tbody > tr.trip-row {
 html.cards table.trips > tbody > tr.trip-row > td { display: block; padding: 0; border: 0; white-space: normal; min-width: 0; font-size: 0.95em; overflow-wrap: anywhere; }
 html.cards tr.trip-row > td::before { content: attr(data-label); display: block; font-size: 0.72em; color: #77818c; font-weight: 400; }
 html.cards tr.trip-row > td:nth-child(1)::before { content: "#"; display: inline; font-size: 1em; }
-html.cards tr.trip-row > td:nth-child(2)::before, html.cards tr.trip-row > td:nth-child(n+15)::before { display: none; }
+html.cards tr.trip-row > td:nth-child(2)::before, html.cards tr.trip-row > td:nth-child(n+17)::before { display: none; }
 html.cards tr.trip-row > td:nth-child(1)  { grid-area: 1 / 4; text-align: right; color: #77818c; }
 html.cards tr.trip-row > td:nth-child(2)  { grid-area: 1 / 1 / 2 / 4; font-weight: 700; font-size: 1.05em; }
 html.cards tr.trip-row > td:nth-child(4)  { grid-area: 2 / 1 / 3 / 3; font-weight: 600; }
@@ -66,16 +66,18 @@ html.cards tr.trip-row > td:nth-child(11) { grid-area: 4 / 3; }
 html.cards tr.trip-row > td:nth-child(12) { grid-area: 4 / 4; }
 html.cards tr.trip-row > td:nth-child(13) { grid-area: 5 / 1; }
 html.cards tr.trip-row > td:nth-child(14) { grid-area: 5 / 2; }
-html.cards tr.trip-row > td:nth-child(n+11):nth-child(-n+14) { color: #5d6670; }
-html.cards tr.trip-row > td:nth-child(15) { grid-area: 6 / 1 / 7 / 2; }
-html.cards tr.trip-row > td:nth-child(16) { grid-area: 6 / 2 / 7 / 3; }
-html.cards tr.trip-row > td:nth-child(17) { grid-area: 6 / 3 / 7 / 5; }
-html.cards tr.trip-row > td:nth-child(17):empty { display: none; }
+html.cards tr.trip-row > td:nth-child(15) { grid-area: 5 / 3; }
+html.cards tr.trip-row > td:nth-child(16) { grid-area: 5 / 4; }
+html.cards tr.trip-row > td:nth-child(n+11):nth-child(-n+16) { color: #5d6670; }
+html.cards tr.trip-row > td:nth-child(17) { grid-area: 6 / 1 / 7 / 2; }
+html.cards tr.trip-row > td:nth-child(18) { grid-area: 6 / 2 / 7 / 3; }
+html.cards tr.trip-row > td:nth-child(19) { grid-area: 6 / 3 / 7 / 5; }
+html.cards tr.trip-row > td:nth-child(19):empty { display: none; }
 html.cards tr.trip-row .show-map, html.cards tr.trip-row .show-log, html.cards tr.trip-row .show-remarks { width: 100%; padding: 0.5em 0.2em; font-size: 1em; }
 html.cards tr.trip-map-row { display: block; }
 html.cards tr.trip-map-row > td { display: block; max-width: none; padding: 0 0 0.8em; white-space: normal; }
 html.cards .map { width: 100%; position: static; height: 300px; }
 html.cards.dark table.trips > tbody > tr.trip-row { background: #1a1f26; box-shadow: none; border: 1px solid #262d36; }
 html.cards.dark tr.trip-row > td::before, html.cards.dark tr.trip-row > td:nth-child(1) { color: #8a94a0; }
-html.cards.dark tr.trip-row > td:nth-child(n+11):nth-child(-n+14) { color: #a3acb6; }
+html.cards.dark tr.trip-row > td:nth-child(n+11):nth-child(-n+16) { color: #a3acb6; }
 html.cards.dark table.trips > tbody > tr.week-row > td { border-left-color: #3b82d6; }

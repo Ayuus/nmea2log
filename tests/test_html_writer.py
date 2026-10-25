@@ -1281,3 +1281,122 @@ def test_write_html_logbook_has_no_buttons_for_theme_and_layout(tmp_path: Path):
 
     html = out_path.read_text(encoding="utf-8")
     assert "view-ctl" not in html and "layout_theme" not in html
+
+
+def _track_with_depths(depths):
+    """Samples every 10 minutes from 09:00 with the given depths (None = no reading), each at its own latitude."""
+    return [
+        NavSample(datetime(2026, 7, 15, 9, 0) + timedelta(minutes=10 * i), 52.30 + 0.001 * i, 4.90, 3.0, depth)
+        for i, depth in enumerate(depths)
+    ]
+
+
+def _trips_json(html: str) -> dict:
+    return json.loads(re.search(r"const TRIPS = (\{.*?\});", html).group(1))
+
+
+def test_write_html_logbook_embeds_the_shallowest_and_deepest_point_for_the_map(tmp_path: Path):
+    """The map marks the shallowest point (red) and the deepest (dark blue) of a trip, looked up from the track like the top
+    speed's place -- so a trip that was cached before the deepest point was shown has it too."""
+    track = _track_with_depths([8.0, 6.5, 2.4, 5.0, 12.1, 9.0])
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([_trip(track=track)], out_path, utc_offset_hours=0)
+
+    html = out_path.read_text(encoding="utf-8")
+    trip = _trips_json(html)["0"]
+    assert trip["minDepth"] == {"lat": round(52.302, 6), "lon": 4.9, "time": "09:20", "depth": "2,4 m"}
+    assert trip["maxDepth"] == {"lat": round(52.304, 6), "lon": 4.9, "time": "09:40", "depth": "12,1 m"}
+    assert "min-depth-marker" in html and "max-depth-marker" in html
+    assert "#d62728" in html and "#0b2a66" in html  # red and dark blue
+
+
+def test_write_html_logbook_shows_the_shallowest_and_deepest_depth_in_the_table(tmp_path: Path):
+    track = _track_with_depths([8.0, 2.4, 12.1])
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([_trip(track=track)], out_path, utc_offset_hours=0)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert 'data-i18n="header_min_depth">Min. diepte</span>' in html
+    assert 'data-i18n="header_max_depth">Max. diepte</span>' in html
+    row = re.search(r'<tr class="trip-row".*?</tr>', html, re.S).group(0)
+    assert "2,4 m" in row and "12,1 m" in row
+    assert "om 09:10, onder de transducer" in row  # when the shallowest point was measured
+    assert "om 09:20, onder de transducer" in row  # when the deepest point was measured
+    # the two columns come after the RPM column and before the route (map) button, in the header and in the row
+    headers = [m.group(1) for m in re.finditer(r'<th><span[^>]*data-i18n="(header_[a-z_]+)"', html)]
+    assert headers.index("header_rpm") + 1 == headers.index("header_min_depth")
+    assert headers.index("header_min_depth") + 1 == headers.index("header_max_depth")
+    assert headers.index("header_max_depth") + 1 == headers.index("header_route")
+    assert row.index("2,4 m") < row.index("12,1 m") < row.index('class="show-map"')
+
+
+def test_write_html_logbook_depth_cells_and_markers_are_empty_without_depth_readings(tmp_path: Path):
+    track = _track_with_depths([None, None, None])
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([_trip(track=track)], out_path, utc_offset_hours=0)
+
+    html = out_path.read_text(encoding="utf-8")
+    trip = _trips_json(html)["0"]
+    assert trip["minDepth"] is None and trip["maxDepth"] is None
+    row = re.search(r'<tr class="trip-row".*?</tr>', html, re.S).group(0)
+    assert "onder de transducer" not in row
+
+
+def test_write_html_logbook_marks_only_one_point_when_the_trip_has_a_single_depth(tmp_path: Path):
+    """A trip with one depth reading: that point is both the shallowest and the deepest, one marker is enough."""
+    track = _track_with_depths([None, 7.5, None])
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([_trip(track=track)], out_path, utc_offset_hours=0)
+
+    trip = _trips_json(out_path.read_text(encoding="utf-8"))["0"]
+    assert trip["minDepth"]["depth"] == "7,5 m"
+    assert trip["maxDepth"] is None
+
+
+def test_write_html_logbook_depth_texts_exist_in_every_language(tmp_path: Path):
+    from nmea2log.translations import LANGUAGES
+
+    for language, texts in LANGUAGES.items():
+        for key in ("header_min_depth", "header_max_depth", "depth_tooltip", "map_marker_min_depth", "map_marker_max_depth"):
+            assert texts.get(key), (language, key)
+        assert "{time}" in texts["depth_tooltip"], language
+
+
+def test_write_html_logbook_log_table_shows_the_depth_before_the_course(tmp_path: Path):
+    """The depth is the first sensor column of the Details log, between the position and the course."""
+    track = _track_with_depths([8.0, 6.5, 2.4, 5.0, 12.1, 9.0, 7.0, 6.0, 5.5, 4.0])
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([_trip(track=track)], out_path, utc_offset_hours=0, log_interval_minutes=30)
+
+    table = _log_table_html(out_path.read_text(encoding="utf-8"))
+    headers = re.findall(r'<th><span data-i18n="(log_header_[a-z_]+)"', table)
+    assert headers[:5] == ["log_header_number", "log_header_time", "log_header_position", "log_header_depth", "log_header_cog"]
+    first_row = re.search(r"<tbody><tr>(.*?)</tr>", table, re.S).group(1)
+    cells = re.findall(r"<td>(.*?)</td>", first_row)
+    assert cells[3] == "8,0 m"  # the departure entry's depth, right after the position cell
+
+
+def test_write_html_logbook_log_table_has_no_depth_column_without_depth_readings(tmp_path: Path):
+    track = _track_with_depths([None] * 10)
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([_trip(track=track)], out_path, utc_offset_hours=0, log_interval_minutes=30)
+
+    table = _log_table_html(out_path.read_text(encoding="utf-8"))
+    assert "log_header_depth" not in table
+
+
+def test_write_html_logbook_map_log_points_carry_the_depth(tmp_path: Path):
+    track = _track_with_depths([8.0, 6.5, 2.4, None, 12.1, 9.0, 7.0, 6.0, 5.5, 4.0])
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([_trip(track=track)], out_path, utc_offset_hours=0, log_interval_minutes=30)
+
+    log_points = _trips_json(out_path.read_text(encoding="utf-8"))["0"]["log"]
+    assert log_points[0]["depth"] == "8,0 m"
+    assert all("depth" in point for point in log_points)  # None where a point has no reading

@@ -2023,3 +2023,27 @@ def test_engine_hours_extension_splits_a_shared_stay_instead_of_double_counting(
     # accounting for the full 36-minute on-interval exactly once, not twice (18 + 18 = 36).
     assert trip_a.engine_hours[0] == pytest.approx(18 / 60, abs=0.01)
     assert trip_b.engine_hours[0] == pytest.approx(18 / 60, abs=0.01)
+
+
+def test_depth_extremes_are_the_shallowest_and_deepest_sample_with_a_depth():
+    from nmea2log.tripbuilder import NavSample, depth_extremes
+
+    track = [
+        NavSample(_dt(0), 52.0, 4.0, 3.0, None),
+        NavSample(_dt(1), 52.1, 4.0, 3.0, 6.0),
+        NavSample(_dt(2), 52.2, 4.0, 3.0, 2.5),
+        NavSample(_dt(3), 52.3, 4.0, 3.0, 9.0),
+        NavSample(_dt(4), 52.4, 4.0, 3.0, 2.5),  # equal to the shallowest: the first one counts
+    ]
+
+    shallowest, deepest = depth_extremes(track)
+
+    assert shallowest is track[2]
+    assert deepest is track[3]
+
+
+def test_depth_extremes_without_any_depth_is_none():
+    from nmea2log.tripbuilder import NavSample, depth_extremes
+
+    assert depth_extremes([]) == (None, None)
+    assert depth_extremes([NavSample(_dt(0), 52.0, 4.0, 3.0, None)]) == (None, None)

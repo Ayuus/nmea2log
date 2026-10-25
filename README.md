@@ -141,7 +141,11 @@ the tests.
      tooltip. Neither is an established metric like significant wave height (which needs an
      actual wave sensor this app doesn't have) — just relative indicators from whatever motion
      sensor is already on the network.
-   - **Minimum water depth**, including the position where it was measured.
+   - **Minimum and maximum water depth**, with the place and time they were measured. In the HTML logbook (and so
+     in the apps) each has its own column, with the time on hover, and the trip's map marks the shallowest point in
+     red (▲) and the deepest in dark blue (▼), next to the orange top speed marker. Both are taken from the trip's
+     GPS track, like the place of the top speed. The shallowest, with its position, is also in the CSV
+     (`min_depth_m`, `min_depth_position`) and the GPX.
 4. **Port names** (`geocode.py`): the GPS position of each port visit is turned into a place
    name via OpenStreetMap/Nominatim (reverse geocoding), with local caching so the same position
    is never looked up twice. If the nearest match is more than 250 m away (common when
@@ -617,8 +621,12 @@ Set `MYSAILINGLOGBOOK_ANDROID_RES` to the Android `res` directory and `pytest` a
   when engine fuel-rate data is absent, clearly labeled as a rougher estimate rather than shown
   the same way as engine-derived figures.
 - **Water depth**: the app uses the raw "Depth" value from PGN 128267 (depth under the
-  transducer), without adding the transducer offset — usually that's already the value
-  instruments show by default, but check this against your own depth-sounder settings.
+  transducer), without adding the transducer offset that the same message carries as a separate field
+  (the distance from the transducer to the waterline, or to the keel when negative). A display that adds
+  it shows that much more (or less) than this app. On the author's boat the sounder sends a fixed offset of
+  +0.30 m (checked in 55,000 readings over 18 folders), so the figures here are 0.30 m less than the depth
+  under the waterline; check this against your own depth-sounder settings. Adding the offset would mean
+  decoding all files again (the decoded samples are cached without it), so it has not been done.
 - **Engine warnings**: the bit meanings (e.g. "Low Oil Pressure") come from the generic NMEA2000
   standard list (canboat's ENGINE_STATUS_1/2). Some manufacturers use deviating or additional
   proprietary status bits for this — check this against your own engine documentation if a

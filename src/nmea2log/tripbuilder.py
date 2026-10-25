@@ -1229,12 +1229,21 @@ def _speed_stats_kn(track: List[NavSample]) -> Tuple[Optional[float], Optional[f
     return sum(speeds_kn) / len(speeds_kn), speeds_kn[max_idx], track[max_idx].time
 
 
-def _min_depth(track: List[NavSample]) -> Tuple[Optional[float], Optional[float], Optional[float]]:
-    """Returns (depth_m, lat, lon) of the shallowest measured point, or (None, None, None)."""
+def depth_extremes(track: List[NavSample]) -> Tuple[Optional[NavSample], Optional[NavSample]]:
+    """The shallowest and the deepest sample of the track that has a depth (the first one when several are equal), or
+    (None, None). The logbook marks both on the map and shows them in the table; they are taken from the track, like the
+    place of the top speed, so a trip that was cached before the deepest point was shown has it too."""
     candidates = [s for s in track if s.depth_m is not None]
     if not candidates:
+        return None, None
+    return min(candidates, key=lambda s: s.depth_m), max(candidates, key=lambda s: s.depth_m)
+
+
+def _min_depth(track: List[NavSample]) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+    """Returns (depth_m, lat, lon) of the shallowest measured point, or (None, None, None)."""
+    shallowest, _deepest = depth_extremes(track)
+    if shallowest is None:
         return None, None, None
-    shallowest = min(candidates, key=lambda s: s.depth_m)
     return shallowest.depth_m, shallowest.lat, shallowest.lon
 
 
