@@ -1576,3 +1576,22 @@ def test_write_html_logbook_log_gives_a_wind_direction_from_north_no_side(tmp_pa
     first_row = re.search(r"<tbody><tr>(.*?)</tr>", _log_table_html(out_path.read_text(encoding="utf-8")), re.S).group(1)
     assert "225&deg;" in first_row and "probe_side" not in first_row
 
+
+def test_write_html_logbook_map_code_lets_a_finger_drag_the_dot_along_the_route(tmp_path: Path):
+    """On a phone a finger that starts on or near the route takes the dot along instead of panning the map; the map's own dragging
+    is switched off for that finger and back on when it lifts, and a finger on a marker only does so once it has moved."""
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([_trip(track=_probe_track())], out_path, utc_offset_hours=0)
+
+    html = out_path.read_text(encoding="utf-8")
+    for expected in (
+        "container.addEventListener('touchstart'",
+        "container.addEventListener('touchmove'",
+        "{{capture: true, passive: false}}".replace("{{", "{").replace("}}", "}"),  # before Leaflet's own touch handling
+        "map.dragging.disable()",
+        "map.dragging.enable()",
+        "pending: onMarker",  # a tap on a numbered marker still shows that marker's tooltip
+    ):
+        assert expected in html, expected
+

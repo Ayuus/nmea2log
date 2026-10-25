@@ -181,7 +181,8 @@ the tests.
    Each trip with a track has a "Map" button that opens a zoomable Leaflet/OpenStreetMap map with
    the route line inline, embedded in the same page. The map marks the trip's top speed (orange), shallowest point
    (red, ▲) and deepest point (dark blue, ▼), and the table has a Min. depth and a Max. depth column, when the boat
-   measures the depth. Moving the mouse over the route (or tapping it, on a phone) puts a dot on the line, with the time, speed,
+   measures the depth. Moving the mouse over the route (or, on a phone, putting a finger on it and dragging: a finger that starts away from the line
+   pans the map as usual) puts a dot on the line, with the time, speed,
    depth and course at that spot, worked out between the two measured points around it, plus the wind when the boat has a wind
    instrument (PGN 130306; an apparent wind is an angle from the bow, with starboard or port): only what was measured, never the
    weather model's wind. Map tiles and the Leaflet library come from

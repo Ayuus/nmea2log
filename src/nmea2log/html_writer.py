@@ -1757,11 +1757,9 @@ document.querySelectorAll('.show-map').forEach(function(btn) {{
         var pad2 = function(n) {{ return (n < 10 ? '0' : '') + n; }};
         var num1 = function(v) {{ return v.toFixed(1).replace('.', ','); }};
         var between = function(a, b, f) {{ return a === null || b === null ? (f < 0.5 ? a : b) : a + (b - a) * f; }};
-        var showProbe = function(e) {{
-          // Over a marker or a map button the marker's own tooltip is what to see, not a second one on top of it.
-          var target = e.originalEvent && e.originalEvent.target;
-          if (target && target.closest && target.closest('.leaflet-marker-icon, .leaflet-control')) {{ hideProbe(); return; }}
-          var mouse = e.containerPoint;
+        // The spot of the route nearest to ``mouse`` (a point in the map's container): {{dist, i, f, x, y}}, the distance in pixels, the
+        // segment, the fraction along it and the point itself.
+        var nearestOnRoute = function(mouse) {{
           var pix = points.map(function(p) {{ return map.latLngToContainerPoint(p); }});
           var best = null;
           for (var i = 0; i + 1 < pix.length; i++) {{
@@ -1772,7 +1770,13 @@ document.querySelectorAll('.show-map').forEach(function(btn) {{
             var dist = Math.hypot(mouse.x - px, mouse.y - py);
             if (best === null || dist < best.dist) best = {{dist: dist, i: i, f: f, x: px, y: py}};
           }}
-          if (best === null || best.dist > 24) {{ hideProbe(); return; }}
+          return best;
+        }};
+        // Puts the dot on the route at the spot nearest to ``mouse`` when that is within ``reach`` pixels, and says so; else hides
+        // it. Used for the mouse (a small reach) and for a finger (a larger one).
+        var probeAt = function(mouse, reach) {{
+          var best = nearestOnRoute(mouse);
+          if (best === null || best.dist > reach) {{ hideProbe(); return false; }}
           var a = probe.rows[best.i], b = probe.rows[best.i + 1];
           var seconds = Math.round(probe.t0 + a[0] + (b[0] - a[0]) * best.f) % 86400;
           var parts = [pad2(Math.floor(seconds / 3600)) + ':' + pad2(Math.floor(seconds % 3600 / 60)) + ':' + pad2(seconds % 60)];
@@ -1802,10 +1806,64 @@ document.querySelectorAll('.show-map').forEach(function(btn) {{
           if (!probeShown) {{ probeDot.addTo(map); probeShown = true; }}
           probeDot.unbindTooltip();
           probeDot.bindTooltip(parts.join(' &middot; '), {{permanent: true, direction: 'top', offset: [0, -8]}}).openTooltip();
+          return true;
+        }};
+        var overMarkerOrControl = function(target) {{
+          return !!(target && target.closest && target.closest('.leaflet-marker-icon, .leaflet-control'));
+        }};
+        var showProbe = function(e) {{
+          // Over a marker or a map button the marker's own tooltip is what to see, not a second one on top of it.
+          if (overMarkerOrControl(e.originalEvent && e.originalEvent.target)) {{ hideProbe(); return; }}
+          probeAt(e.containerPoint, 24);
         }};
         map.on('mousemove', showProbe);
         map.on('click', showProbe);
         map.on('mouseout', hideProbe);
+        // A finger: one that starts on (or close to) the route drags the dot along it, instead of panning the map; one that starts
+        // further away pans the map as always. The listeners are on the map's container in the capture phase, so they come before
+        // Leaflet's own touch handling, and switch its dragging off for as long as the finger drags the dot. A finger that starts on a
+        // marker (every half hour along the route there is a numbered one) is first only "pending": a tap still shows the marker's
+        // tooltip, and the finger takes the dot along as soon as it has moved a few pixels.
+        var container = map.getContainer();
+        var fingerState = null; // null, or {{pending: true|false, x, y}}: where the finger started and whether it drags the dot yet
+        var fingerPoint = function(touch) {{
+          var rect = container.getBoundingClientRect();
+          return L.point(touch.clientX - rect.left, touch.clientY - rect.top);
+        }};
+        var endFingerDrag = function() {{
+          if (fingerState === null) return;
+          fingerState = null;
+          map.dragging.enable();
+        }};
+        container.addEventListener('touchstart', function(e) {{
+          endFingerDrag();
+          if (e.touches.length !== 1) return;
+          var target = e.target;
+          if (target && target.closest && target.closest('.leaflet-control')) return;
+          var point = fingerPoint(e.touches[0]);
+          var nearest = nearestOnRoute(point);
+          if (nearest === null || nearest.dist > 32) return;
+          var onMarker = overMarkerOrControl(target);
+          fingerState = {{pending: onMarker, x: point.x, y: point.y}};
+          map.dragging.disable();
+          if (!onMarker) {{
+            probeAt(point, 32);
+            e.preventDefault();
+          }}
+        }}, {{capture: true, passive: false}});
+        container.addEventListener('touchmove', function(e) {{
+          if (fingerState === null) return;
+          var point = fingerPoint(e.touches[0]);
+          if (fingerState.pending) {{
+            if (Math.hypot(point.x - fingerState.x, point.y - fingerState.y) < 8) return;
+            fingerState.pending = false;
+          }}
+          e.preventDefault();
+          // Keeps following the finger when it drifts off the line: the dot stays on the nearest spot of the route.
+          probeAt(point, 150);
+        }}, {{capture: true, passive: false}});
+        container.addEventListener('touchend', endFingerDrag, true);
+        container.addEventListener('touchcancel', endFingerDrag, true);
       }}
       map.fitBounds(line.getBounds(), {{padding: [20, 20]}});
       setTimeout(function() {{ map.invalidateSize(); }}, 0);
