@@ -204,12 +204,38 @@ def _week_label(iso_year: int, iso_week: int) -> str:
     return f"{_i18n_span('week_label_prefix')} {iso_week} ({_localized_date(monday)} - {_localized_date(sunday)})"
 
 
-def _decimated_points(trip: TripLeg) -> List[Tuple[float, float]]:
+def _decimated_samples(trip: TripLeg) -> List[NavSample]:
     stride = max(1, len(trip.track) // _MAX_MAP_POINTS)
     decimated = trip.track[::stride]
     if decimated and decimated[-1] is not trip.track[-1]:
         decimated.append(trip.track[-1])
-    return [(round(s.lat, 6), round(s.lon, 6)) for s in decimated]
+    return decimated
+
+
+def _decimated_points(trip: TripLeg) -> List[Tuple[float, float]]:
+    return [(round(s.lat, 6), round(s.lon, 6)) for s in _decimated_samples(trip)]
+
+
+def _probe_data(trip: TripLeg, offset_hours: float) -> Optional[dict]:
+    """What the dot that follows the pointer along the route shows (see the map code in write_html_logbook): one row per route
+    point, the same points as ``points`` and in the same order ([seconds since the first point, speed over ground in 0.1 kn, depth
+    in 0.1 m or null, course in degrees or null]), plus ``t0``, the local time of the first point in seconds since midnight.
+    Whole numbers, so a trip's 500 points stay small. None for a trip with no route line to follow."""
+    samples = _decimated_samples(trip)
+    if len(samples) < 2:
+        return None
+    first = samples[0]
+    first_local = to_local(first.time, offset_hours)
+    rows = [
+        [
+            int((sample.time - first.time).total_seconds()),
+            round(sample.sog_ms / _KNOT_IN_MS * 10),
+            None if sample.depth_m is None else round(sample.depth_m * 10),
+            None if sample.cog_deg is None else int(round(sample.cog_deg)) % 360,
+        ]
+        for sample in samples
+    ]
+    return {"t0": first_local.hour * 3600 + first_local.minute * 60 + first_local.second, "rows": rows}
 
 
 def _warnings_count(trip: TripLeg, battery_warning_voltage: Optional[float]) -> int:
@@ -1151,6 +1177,7 @@ def write_html_logbook(
     trip_data = {
         idx: {
             "points": _decimated_points(trip),
+            "probe": _probe_data(trip, trip_utc_offset_hours(trip, utc_offset_hours)),
             # The departure/arrival markers are placed from these, not points[0]/points[-1] --
             # the stay's own averaged position (see TripLeg.depart_lat/arrive_lat), not the single
             # GPS fix from the moment the boat started/stopped moving, which has real GPS jitter
@@ -1684,6 +1711,52 @@ document.querySelectorAll('.show-map').forEach(function(btn) {{
         L.marker([depth.lat, depth.lon], {{icon: depthIcon, zIndexOffset: 1000}}).addTo(map)
           .bindTooltip([I18N[currentLang][spec[3]], depth.time, depth.depth].join(' &middot; '));
       }});
+      // A dot that follows the pointer along the route (a tap on a phone): when the pointer is close to the line, the dot sits on the
+      // line at the nearest spot and its tooltip gives the time, speed, depth and course there, worked out between the two measured
+      // points around it (the rows of TRIPS[idx].probe are the route's own points, see _probe_data in html_writer.py).
+      var probe = TRIPS[idx].probe;
+      if (probe && probe.rows.length === points.length) {{
+        var probeDot = L.circleMarker(points[0], {{
+          radius: 6, weight: 3, color: '#1a6ecc', fillColor: 'white', fillOpacity: 1, interactive: false
+        }});
+        var probeShown = false;
+        var hideProbe = function() {{ if (probeShown) {{ map.removeLayer(probeDot); probeShown = false; }} }};
+        var pad2 = function(n) {{ return (n < 10 ? '0' : '') + n; }};
+        var num1 = function(v) {{ return v.toFixed(1).replace('.', ','); }};
+        var between = function(a, b, f) {{ return a === null || b === null ? (f < 0.5 ? a : b) : a + (b - a) * f; }};
+        var showProbe = function(e) {{
+          // Over a marker or a map button the marker's own tooltip is what to see, not a second one on top of it.
+          var target = e.originalEvent && e.originalEvent.target;
+          if (target && target.closest && target.closest('.leaflet-marker-icon, .leaflet-control')) {{ hideProbe(); return; }}
+          var mouse = e.containerPoint;
+          var pix = points.map(function(p) {{ return map.latLngToContainerPoint(p); }});
+          var best = null;
+          for (var i = 0; i + 1 < pix.length; i++) {{
+            var ax = pix[i].x, ay = pix[i].y, dx = pix[i + 1].x - ax, dy = pix[i + 1].y - ay;
+            var len2 = dx * dx + dy * dy;
+            var f = len2 === 0 ? 0 : Math.max(0, Math.min(1, ((mouse.x - ax) * dx + (mouse.y - ay) * dy) / len2));
+            var px = ax + f * dx, py = ay + f * dy;
+            var dist = Math.hypot(mouse.x - px, mouse.y - py);
+            if (best === null || dist < best.dist) best = {{dist: dist, i: i, f: f, x: px, y: py}};
+          }}
+          if (best === null || best.dist > 24) {{ hideProbe(); return; }}
+          var a = probe.rows[best.i], b = probe.rows[best.i + 1];
+          var seconds = Math.round(probe.t0 + a[0] + (b[0] - a[0]) * best.f) % 86400;
+          var parts = [pad2(Math.floor(seconds / 3600)) + ':' + pad2(Math.floor(seconds % 3600 / 60)) + ':' + pad2(seconds % 60)];
+          var labels = I18N[currentLang];
+          var speed = between(a[1], b[1], best.f), depth = between(a[2], b[2], best.f), course = best.f < 0.5 ? a[3] : b[3];
+          if (speed !== null) parts.push(labels.log_header_sog + ' ' + num1(speed / 10) + ' kn');
+          if (depth !== null) parts.push(labels.log_header_depth + ' ' + num1(depth / 10) + ' m');
+          if (course !== null) parts.push(labels.log_header_cog + ' ' + course + '&deg;');
+          probeDot.setLatLng(map.containerPointToLatLng([best.x, best.y]));
+          if (!probeShown) {{ probeDot.addTo(map); probeShown = true; }}
+          probeDot.unbindTooltip();
+          probeDot.bindTooltip(parts.join(' &middot; '), {{permanent: true, direction: 'top', offset: [0, -8]}}).openTooltip();
+        }};
+        map.on('mousemove', showProbe);
+        map.on('click', showProbe);
+        map.on('mouseout', hideProbe);
+      }}
       map.fitBounds(line.getBounds(), {{padding: [20, 20]}});
       setTimeout(function() {{ map.invalidateSize(); }}, 0);
     }}

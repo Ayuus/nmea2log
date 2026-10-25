@@ -1400,3 +1400,65 @@ def test_write_html_logbook_map_log_points_carry_the_depth(tmp_path: Path):
     log_points = _trips_json(out_path.read_text(encoding="utf-8"))["0"]["log"]
     assert log_points[0]["depth"] == "8,0 m"
     assert all("depth" in point for point in log_points)  # None where a point has no reading
+
+
+def _probe_track():
+    """Five points every 10 minutes from 09:00 local (UTC here): speed 3.0 m/s (about 5.8 kn), cog 200, with depths from 8.0 m."""
+    return [
+        NavSample(datetime(2026, 7, 15, 9, 0) + timedelta(minutes=10 * i), 52.30 + 0.001 * i, 4.90, 3.0,
+                  depth_m=[8.0, 6.5, None, 5.0, 12.1][i], cog_deg=[200.0, 199.6, 359.7, None, 10.0][i])
+        for i in range(5)
+    ]
+
+
+def test_write_html_logbook_embeds_the_values_for_the_dot_that_follows_the_pointer(tmp_path: Path):
+    """TRIPS[idx].probe has one row per route point, in the order of ``points``: seconds since the first point, speed in 0.1 kn, depth
+    in 0.1 m and course -- whole numbers, so 500 points per trip stay small -- and t0, the local time of the first point."""
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([_trip(track=_probe_track())], out_path, utc_offset_hours=2)
+
+    trip = _trips_json(out_path.read_text(encoding="utf-8"))["0"]
+    probe = trip["probe"]
+    assert len(probe["rows"]) == len(trip["points"]) == 5
+    assert probe["t0"] == 11 * 3600  # 09:00 UTC is 11:00 local with the offset of 2 hours
+    assert probe["rows"][0] == [0, 58, 80, 200]
+    assert probe["rows"][1] == [600, 58, 65, 200]
+    assert probe["rows"][2] == [1200, 58, None, 0]  # no depth reading there; 359.7 degrees is 0 on a compass, not 360
+    assert probe["rows"][3] == [1800, 58, 50, None]  # no course
+    assert probe["rows"][4] == [2400, 58, 121, 10]
+
+
+def test_write_html_logbook_probe_rows_follow_the_same_decimation_as_the_route(tmp_path: Path):
+    track = [
+        NavSample(datetime(2026, 7, 15, 9, 0) + timedelta(seconds=i), 52.30 + 0.00001 * i, 4.90, 3.0, depth_m=5.0, cog_deg=90.0)
+        for i in range(2500)
+    ]
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([_trip(track=track)], out_path, utc_offset_hours=0)
+
+    trip = _trips_json(out_path.read_text(encoding="utf-8"))["0"]
+    assert 400 < len(trip["points"]) <= 600
+    assert len(trip["probe"]["rows"]) == len(trip["points"])
+    assert trip["probe"]["rows"][-1][0] == 2499  # the very last point of the track is kept, as for the route
+
+
+def test_write_html_logbook_has_no_probe_for_a_trip_without_a_route(tmp_path: Path):
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([_trip(track=_probe_track()[:1])], out_path, utc_offset_hours=0)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert _trips_json(html)["0"]["probe"] is None
+
+
+def test_write_html_logbook_map_code_has_the_pointer_following_dot(tmp_path: Path):
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([_trip(track=_probe_track())], out_path, utc_offset_hours=0)
+
+    html = out_path.read_text(encoding="utf-8")
+    assert "var showProbe = function(e)" in html
+    assert "map.on('mousemove', showProbe)" in html and "map.on('click', showProbe)" in html  # pointer and a tap on a phone
+
