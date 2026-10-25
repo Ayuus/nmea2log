@@ -1506,45 +1506,27 @@ def test_write_html_logbook_probe_has_no_wind_lists_without_any_wind(tmp_path: P
     assert "wind" not in probe and "model" not in probe  # a boat without a wind instrument and without weather carries nothing
 
 
-def test_write_html_logbook_probe_has_the_weather_models_wind_when_a_weather_source_is_given(tmp_path: Path):
-    weather = _ModelWeather(wind_kn=12.3, wind_deg=224.6)
-    out_path = tmp_path / "logbook.html"
-
-    write_html_logbook([_trip(track=_track_with_depths([5.0, 5.0, 5.0]))], out_path, utc_offset_hours=0, weather=weather)
-
-    probe = _trips_json(out_path.read_text(encoding="utf-8"))["0"]["probe"]
-    assert probe["model"] == [[123, 225], [123, 225], [123, 225]]
-    assert "wind" not in probe  # the model's wind is never put in the instrument's list
-
-
-def test_write_html_logbook_probe_leaves_out_a_model_hour_without_wind(tmp_path: Path):
-    weather = _ModelWeather(wind_kn=None, wind_deg=None)
-    out_path = tmp_path / "logbook.html"
-
-    write_html_logbook([_trip(track=_track_with_depths([5.0, 5.0, 5.0]))], out_path, utc_offset_hours=0, weather=weather)
-
-    assert "model" not in _trips_json(out_path.read_text(encoding="utf-8"))["0"]["probe"]
-
-
 def test_write_html_logbook_wind_texts_exist_in_every_language():
     from nmea2log.translations import LANGUAGES
 
     for language, texts in LANGUAGES.items():
-        for key in ("probe_wind_apparent", "probe_wind_true", "probe_wind_model", "probe_side_starboard", "probe_side_port"):
+        for key in ("probe_wind_apparent", "probe_wind_true", "probe_side_starboard", "probe_side_port"):
             assert texts.get(key), (language, key)
 
 
-def test_write_html_logbook_probe_has_no_model_wind_when_the_boat_has_a_wind_instrument(tmp_path: Path):
-    """A boat with a wind instrument gets its own wind only -- not the model's, not even at the points where the instrument has
-    no reading (the 1st and the 4th sample here)."""
-    weather = _ModelWeather()
-    track = _wind_track(wind_speed_ms=6.0, wind_angle_deg=315.4, wind_reference=2)
-    out_path = tmp_path / "logbook.html"
+def test_write_html_logbook_probe_never_has_the_weather_models_wind(tmp_path: Path):
+    """The dot shows only what was measured: a weather source is not asked for it, whether or not the boat has a wind instrument,
+    and nothing of the model ends up in the dot's data."""
+    for track in (_wind_track(), _wind_track(wind_speed_ms=6.0, wind_angle_deg=315.4, wind_reference=2)):
+        weather = _ModelWeather(wind_kn=12.3, wind_deg=224.6)
+        out_path = tmp_path / "logbook.html"
 
-    write_html_logbook([_trip(track=track)], out_path, utc_offset_hours=0, weather=weather)
+        write_html_logbook([_trip(track=track)], out_path, utc_offset_hours=0, weather=weather)
 
-    probe = _trips_json(out_path.read_text(encoding="utf-8"))["0"]["probe"]
-    assert "wind" in probe and "model" not in probe
+        html = out_path.read_text(encoding="utf-8")
+        probe = _trips_json(html)["0"]["probe"]
+        assert "model" not in probe
+        assert "probe_wind_model" not in html and "labels.probe_wind_model" not in html  # not in the code either
 
 
 def _log_wind_headers(html: str):

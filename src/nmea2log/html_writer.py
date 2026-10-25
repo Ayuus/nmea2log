@@ -216,17 +216,15 @@ def _decimated_points(trip: TripLeg) -> List[Tuple[float, float]]:
     return [(round(s.lat, 6), round(s.lon, 6)) for s in _decimated_samples(trip)]
 
 
-def _probe_data(trip: TripLeg, offset_hours: float, weather=None) -> Optional[dict]:
+def _probe_data(trip: TripLeg, offset_hours: float) -> Optional[dict]:
     """What the dot that follows the pointer along the route shows (see the map code in write_html_logbook): one row per route
     point, the same points as ``points`` and in the same order ([seconds since the first point, speed over ground in 0.1 kn, depth
     in 0.1 m or null, course in degrees or null]), plus ``t0``, the local time of the first point in seconds since midnight.
     Whole numbers, so a trip's 500 points stay small. None for a trip with no route line to follow.
 
-    Wind, when it is known, comes in two lists next to ``rows`` (same order, null where unknown), present only when at least one
-    point has it: ``wind``, the boat's own instrument (PGN 130306: [speed in 0.1 kn, angle in degrees, WIND_REFERENCE code]), and
-    ``model``, the weather model's wind for that hour and place ([speed in 0.1 kn, direction in degrees the wind comes from]). A
-    boat with a wind instrument gets only its own wind (``wind``), never the model's, not even at a point where the instrument has no
-    reading; a boat without one gets the model's, which the map labels as such."""
+    The boat's own wind comes in a list next to ``rows`` (same order, null where there is no reading), present only when at least one
+    point has it: ``wind``, from the wind instrument (PGN 130306: [speed in 0.1 kn, angle in degrees, WIND_REFERENCE code]). Only what
+    was measured: the weather model's wind is not in here (the log has it, for a boat without an instrument)."""
     samples = _decimated_samples(trip)
     if len(samples) < 2:
         return None
@@ -254,14 +252,6 @@ def _probe_data(trip: TripLeg, offset_hours: float, weather=None) -> Optional[di
     ]
     if any(instrument):
         probe["wind"] = instrument
-    if weather is not None and "wind" not in probe:
-        model = []
-        for sample in samples:
-            hourly = weather.hour(sample.lat, sample.lon, sample.time)
-            usable = hourly is not None and hourly.wind_kn is not None and hourly.wind_deg is not None
-            model.append([round(hourly.wind_kn * 10), int(round(hourly.wind_deg)) % 360] if usable else None)
-        if any(model):
-            probe["model"] = model
     return probe
 
 
@@ -1220,7 +1210,7 @@ def write_html_logbook(
     trip_data = {
         idx: {
             "points": _decimated_points(trip),
-            "probe": _probe_data(trip, trip_utc_offset_hours(trip, utc_offset_hours), weather),
+            "probe": _probe_data(trip, trip_utc_offset_hours(trip, utc_offset_hours)),
             # The departure/arrival markers are placed from these, not points[0]/points[-1] --
             # the stay's own averaged position (see TripLeg.depart_lat/arrive_lat), not the single
             # GPS fix from the moment the boat started/stopped moving, which has real GPS jitter
@@ -1791,9 +1781,8 @@ document.querySelectorAll('.show-map').forEach(function(btn) {{
           if (speed !== null) parts.push(labels.log_header_sog + ' ' + num1(speed / 10) + ' kn');
           if (depth !== null) parts.push(labels.log_header_depth + ' ' + num1(depth / 10) + ' m');
           if (course !== null) parts.push(labels.log_header_cog + ' ' + course + '&deg;');
-          // The boat's own wind instrument when it sends one, else the weather model's wind (labelled as the model's).
+          // The boat's own wind instrument, when it sends one (never the weather model's wind: only what was measured).
           var wind = probe.wind && (best.f < 0.5 ? probe.wind[best.i] : probe.wind[best.i + 1]);
-          var model = probe.model && (best.f < 0.5 ? probe.model[best.i] : probe.model[best.i + 1]);
           if (wind && wind[0] !== null) {{
             var reference = wind[2];
             var relative = reference === 2 || reference === 3 || reference === 4; // an angle from the bow, not a direction from north
@@ -1808,8 +1797,6 @@ document.querySelectorAll('.show-map').forEach(function(btn) {{
               }}
             }}
             parts.push(windText);
-          }} else if (model) {{
-            parts.push(labels.probe_wind_model + ' ' + num1(model[0] / 10) + ' kn ' + model[1] + '&deg;');
           }}
           probeDot.setLatLng(map.containerPointToLatLng([best.x, best.y]));
           if (!probeShown) {{ probeDot.addTo(map); probeShown = true; }}
