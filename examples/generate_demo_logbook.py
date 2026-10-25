@@ -7,6 +7,7 @@ somewhere else and under another boat name with `--output` / `--boat-name`, e.g.
 `python examples/generate_demo_logbook.py --boat-name "Sea Swallow" --output /tmp/logbook.html`.
 """
 import argparse
+import math
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -42,18 +43,29 @@ for i in range(5):
     track = []
     total_legs = len(waypoints) - 1
     total_steps = total_legs * points_per_leg
+    # The depth under the transducer along the leg, between the leg's shallowest depth (min_depth, as in the demo files) and 7.5 m
+    # deeper (what the demo files reach too, see generate_demo_ebl.py): a smooth wave, with the shallowest and the deepest sample
+    # of the leg placed explicitly so the extremes are exactly those two numbers.
+    shallowest_step, deepest_step = total_steps // 3, (2 * total_steps) // 3 + 1
     for s in range(total_steps + 1):
         overall_frac = s / total_steps
         leg_idx = min(s // points_per_leg, total_legs - 1)
         leg_frac = (s - leg_idx * points_per_leg) / points_per_leg
         lat0, lon0 = waypoints[leg_idx]
         lat1, lon1 = waypoints[leg_idx + 1]
+        if s == shallowest_step:
+            depth = min_depth
+        elif s == deepest_step:
+            depth = min_depth + 7.5
+        else:
+            depth = min(min_depth + 7.4, max(min_depth + 0.1, min_depth + 3.75 + 3.6 * math.sin(overall_frac * 23.0 + i)))
         track.append(
             NavSample(
                 time=depart_time + timedelta(hours=dur_h * overall_frac),
                 lat=lat0 + (lat1 - lat0) * leg_frac,
                 lon=lon0 + (lon1 - lon0) * leg_frac,
                 sog_ms=avg_kn * 0.514444,
+                depth_m=round(depth, 1),
             )
         )
 
@@ -89,8 +101,8 @@ for i in range(5):
             typical_rpm_speed_kn={0: (avg_kn - 0.4, avg_kn + 0.4, avg_kn, fuel / dist)},
             battery_health={0: BatteryHealth(avg_voltage_v=12.8, min_voltage_v=12.4)},
             min_depth_m=min_depth,
-            min_depth_lat=(depart_lat + arrive_lat) / 2,
-            min_depth_lon=(depart_lon + arrive_lon) / 2,
+            min_depth_lat=track[shallowest_step].lat,
+            min_depth_lon=track[shallowest_step].lon,
             avg_water_temp_c=17.5,
             min_water_temp_c=16.8,
             max_water_temp_c=18.2,
