@@ -182,7 +182,9 @@ the tests.
    the route line inline, embedded in the same page. The map marks the trip's top speed (orange), shallowest point
    (red, ▲) and deepest point (dark blue, ▼), and the table has a Min. depth and a Max. depth column, when the boat
    measures the depth. Moving the mouse over the route (or tapping it, on a phone) puts a dot on the line, with the time, speed,
-   depth and course at that spot, worked out between the two measured points around it. Map tiles and the Leaflet library come from
+   depth and course at that spot, worked out between the two measured points around it, plus the wind when it is known: the
+   boat's own wind instrument (PGN 130306; an apparent wind is an angle from the bow, with starboard or port) or, without one,
+   the weather model's wind for that hour and place, marked "model". Map tiles and the Leaflet library come from
    a CDN, so **viewing** requires internet (generating doesn't). Trips with a logged water
    temperature also get a colored badge (blue → red by temperature). Each trip with a track also
    has a "Log" button — a traditional periodic logbook table (time, position, depth, course over ground,

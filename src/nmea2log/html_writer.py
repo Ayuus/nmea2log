@@ -216,11 +216,17 @@ def _decimated_points(trip: TripLeg) -> List[Tuple[float, float]]:
     return [(round(s.lat, 6), round(s.lon, 6)) for s in _decimated_samples(trip)]
 
 
-def _probe_data(trip: TripLeg, offset_hours: float) -> Optional[dict]:
+def _probe_data(trip: TripLeg, offset_hours: float, weather=None) -> Optional[dict]:
     """What the dot that follows the pointer along the route shows (see the map code in write_html_logbook): one row per route
     point, the same points as ``points`` and in the same order ([seconds since the first point, speed over ground in 0.1 kn, depth
     in 0.1 m or null, course in degrees or null]), plus ``t0``, the local time of the first point in seconds since midnight.
-    Whole numbers, so a trip's 500 points stay small. None for a trip with no route line to follow."""
+    Whole numbers, so a trip's 500 points stay small. None for a trip with no route line to follow.
+
+    Wind, when it is known, comes in two lists next to ``rows`` (same order, null where unknown), present only when at least one
+    point has it: ``wind``, the boat's own instrument (PGN 130306: [speed in 0.1 kn, angle in degrees, WIND_REFERENCE code]), and
+    ``model``, the weather model's wind for that hour and place ([speed in 0.1 kn, direction in degrees the wind comes from]). A
+    boat with a wind instrument gets only its own wind (``wind``), never the model's, not even at a point where the instrument has no
+    reading; a boat without one gets the model's, which the map labels as such."""
     samples = _decimated_samples(trip)
     if len(samples) < 2:
         return None
@@ -235,7 +241,28 @@ def _probe_data(trip: TripLeg, offset_hours: float) -> Optional[dict]:
         ]
         for sample in samples
     ]
-    return {"t0": first_local.hour * 3600 + first_local.minute * 60 + first_local.second, "rows": rows}
+    probe = {"t0": first_local.hour * 3600 + first_local.minute * 60 + first_local.second, "rows": rows}
+    instrument = [
+        None
+        if sample.wind_speed_ms is None and sample.wind_angle_deg is None
+        else [
+            None if sample.wind_speed_ms is None else round(sample.wind_speed_ms / _KNOT_IN_MS * 10),
+            None if sample.wind_angle_deg is None else int(round(sample.wind_angle_deg)) % 360,
+            sample.wind_reference,
+        ]
+        for sample in samples
+    ]
+    if any(instrument):
+        probe["wind"] = instrument
+    if weather is not None and "wind" not in probe:
+        model = []
+        for sample in samples:
+            hourly = weather.hour(sample.lat, sample.lon, sample.time)
+            usable = hourly is not None and hourly.wind_kn is not None and hourly.wind_deg is not None
+            model.append([round(hourly.wind_kn * 10), int(round(hourly.wind_deg)) % 360] if usable else None)
+        if any(model):
+            probe["model"] = model
+    return probe
 
 
 def _warnings_count(trip: TripLeg, battery_warning_voltage: Optional[float]) -> int:
@@ -584,6 +611,18 @@ _COMPASS_POINTS = (
 )
 
 
+def _instrument_wind_angle_html(angle_deg: float, reference: Optional[int]) -> str:
+    """The wind instrument's angle for the log. With the apparent wind (WIND_REFERENCE 2) and the true wind relative to the boat
+    (3, 4) it is an angle from the bow, so it gets the side (45 degrees starboard); with a direction from north or an unknown
+    reference it is shown as the number of degrees only (never guessing a side)."""
+    angle = angle_deg % 360
+    if reference in (2, 3, 4):
+        if angle > 180:
+            return f"{nl_num(360 - angle, 0)}&deg; {_i18n_span('probe_side_port')}"
+        return f"{nl_num(angle, 0)}&deg; {_i18n_span('probe_side_starboard')}"
+    return f"{nl_num(angle, 0)}&deg;"
+
+
 def _compass_abbr(deg: float) -> str:
     return _COMPASS_POINTS[round(deg / 22.5) % 16]
 
@@ -649,7 +688,7 @@ def _details_cell_html(
             if entry.wind_speed_ms is not None:
                 wind_instrument_parts.append(f"{nl_num(entry.wind_speed_ms / _KNOT_IN_MS)} kn")
             if entry.wind_angle_deg is not None:
-                wind_instrument_parts.append(f"{nl_num(entry.wind_angle_deg, 0)}&deg;")
+                wind_instrument_parts.append(_instrument_wind_angle_html(entry.wind_angle_deg, entry.wind_reference))
             wind_instrument_text = ", ".join(wind_instrument_parts)
             stw_text = f"{nl_num(entry.stw_ms / _KNOT_IN_MS)} kn" if entry.stw_ms is not None else ""
             # Not a measurement from the boat itself -- regional weather-model data for the
@@ -657,7 +696,9 @@ def _details_cell_html(
             # one per trip, since wind in particular can change a lot over a longer trip (found in
             # practice: 1.8 to 9.7 kn across a single ~4.5 hour trip).
             hourly = weather.hour(entry.lat, entry.lon, entry.time)
-            if hourly is not None and hourly.wind_kn is not None and hourly.wind_deg is not None:
+            if has_wind_instrument:
+                wind_text = ""  # the boat's own wind is in its own column; the model's would only disagree with it
+            elif hourly is not None and hourly.wind_kn is not None and hourly.wind_deg is not None:
                 wind_text = (
                     f"{nl_num(hourly.wind_kn)} kn {_compass_abbr(hourly.wind_deg)} "
                     f"(Bft {_beaufort(hourly.wind_kn)})"
@@ -700,10 +741,11 @@ def _details_cell_html(
             if has_wind_instrument:
                 optional_cells += f"<td>{wind_instrument_text}</td>"
             depth_cell = f"<td>{depth_text}</td>" if has_depth else ""
+            model_wind_cell = "" if has_wind_instrument else f"<td>{wind_text}</td>"
             rows.append(
                 f"<tr><td>{number_text}</td><td>{local_time:%H:%M}</td><td>{position_text}</td>{depth_cell}"
                 f"<td>{cog_text}</td><td>{sog_text}</td>{optional_cells}"
-                f"<td>{wind_text}</td><td>{precip_text}</td><td>{cloud_text}</td>"
+                f"{model_wind_cell}<td>{precip_text}</td><td>{cloud_text}</td>"
                 f"<td>{wave_text}</td><td>{current_text}</td></tr>"
             )
         optional_headers = ""
@@ -712,12 +754,13 @@ def _details_cell_html(
         if has_wind_instrument:
             optional_headers += f"<th>{_i18n_span('log_header_wind_instrument')}</th>"
         depth_header = f"<th>{_i18n_span('log_header_depth')}</th>" if has_depth else ""
+        model_wind_header = "" if has_wind_instrument else f"<th>{_i18n_span('log_header_wind')}</th>"
         sections.append(
             "<table class=\"log-table\"><thead><tr>"
             f"<th>{_i18n_span('log_header_number')}</th>"
             f"<th>{_i18n_span('log_header_time')}</th><th>{_i18n_span('log_header_position')}</th>{depth_header}"
             f"<th>{_i18n_span('log_header_cog')}</th><th>{_i18n_span('log_header_sog')}</th>{optional_headers}"
-            f"<th>{_i18n_span('log_header_wind')}</th><th>{_i18n_span('log_header_precip')}</th>"
+            f"{model_wind_header}<th>{_i18n_span('log_header_precip')}</th>"
             f"<th>{_i18n_span('log_header_cloud')}</th>"
             f"<th>{_i18n_span('log_header_wave')}</th><th>{_i18n_span('log_header_current')}</th>"
             f'</tr></thead><tbody>{"".join(rows)}</tbody></table>'
@@ -1177,7 +1220,7 @@ def write_html_logbook(
     trip_data = {
         idx: {
             "points": _decimated_points(trip),
-            "probe": _probe_data(trip, trip_utc_offset_hours(trip, utc_offset_hours)),
+            "probe": _probe_data(trip, trip_utc_offset_hours(trip, utc_offset_hours), weather),
             # The departure/arrival markers are placed from these, not points[0]/points[-1] --
             # the stay's own averaged position (see TripLeg.depart_lat/arrive_lat), not the single
             # GPS fix from the moment the boat started/stopped moving, which has real GPS jitter
@@ -1748,6 +1791,26 @@ document.querySelectorAll('.show-map').forEach(function(btn) {{
           if (speed !== null) parts.push(labels.log_header_sog + ' ' + num1(speed / 10) + ' kn');
           if (depth !== null) parts.push(labels.log_header_depth + ' ' + num1(depth / 10) + ' m');
           if (course !== null) parts.push(labels.log_header_cog + ' ' + course + '&deg;');
+          // The boat's own wind instrument when it sends one, else the weather model's wind (labelled as the model's).
+          var wind = probe.wind && (best.f < 0.5 ? probe.wind[best.i] : probe.wind[best.i + 1]);
+          var model = probe.model && (best.f < 0.5 ? probe.model[best.i] : probe.model[best.i + 1]);
+          if (wind && wind[0] !== null) {{
+            var reference = wind[2];
+            var relative = reference === 2 || reference === 3 || reference === 4; // an angle from the bow, not a direction from north
+            var windLabel = reference === 2 ? labels.probe_wind_apparent
+              : (reference === 0 || reference === 3 || reference === 4) ? labels.probe_wind_true : labels.log_header_wind;
+            var windText = windLabel + ' ' + num1(wind[0] / 10) + ' kn';
+            if (wind[1] !== null) {{
+              if (relative) {{
+                windText += ' ' + (wind[1] > 180 ? 360 - wind[1] : wind[1]) + '&deg; ' + (wind[1] > 180 ? labels.probe_side_port : labels.probe_side_starboard);
+              }} else {{
+                windText += ' ' + wind[1] + '&deg;';
+              }}
+            }}
+            parts.push(windText);
+          }} else if (model) {{
+            parts.push(labels.probe_wind_model + ' ' + num1(model[0] / 10) + ' kn ' + model[1] + '&deg;');
+          }}
           probeDot.setLatLng(map.containerPointToLatLng([best.x, best.y]));
           if (!probeShown) {{ probeDot.addTo(map); probeShown = true; }}
           probeDot.unbindTooltip();

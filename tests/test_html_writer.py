@@ -1462,3 +1462,135 @@ def test_write_html_logbook_map_code_has_the_pointer_following_dot(tmp_path: Pat
     assert "var showProbe = function(e)" in html
     assert "map.on('mousemove', showProbe)" in html and "map.on('click', showProbe)" in html  # pointer and a tap on a phone
 
+
+def _wind_track(**wind):
+    """Four samples every 10 minutes; ``wind`` is passed to the 2nd and 3rd sample (the 1st and 4th have no wind reading)."""
+    track = _track_with_depths([5.0, 5.0, 5.0, 5.0])
+    for i in (1, 2):
+        sample = track[i]
+        track[i] = NavSample(sample.time, sample.lat, sample.lon, sample.sog_ms, depth_m=sample.depth_m, **wind)
+    return track
+
+
+class _ModelWeather:
+    """A weather source that returns the same hour for every position, and records how often it was asked."""
+
+    def __init__(self, wind_kn=12.3, wind_deg=224.6):
+        self.calls = 0
+        self._hour = HourlyWeather(wind_kn=wind_kn, wind_deg=wind_deg, precip_mm=None, cloud_pct=None)
+
+    def hour(self, lat, lon, when):
+        self.calls += 1
+        return self._hour
+
+
+def test_write_html_logbook_probe_has_the_wind_instrument_with_its_reference(tmp_path: Path):
+    """The boat's own wind (PGN 130306): speed in 0.1 kn, the angle in whole degrees and the WIND_REFERENCE code (2 = apparent,
+    an angle from the bow); null where there is no reading."""
+    track = _wind_track(wind_speed_ms=6.0, wind_angle_deg=315.4, wind_reference=2)
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([_trip(track=track)], out_path, utc_offset_hours=0)
+
+    probe = _trips_json(out_path.read_text(encoding="utf-8"))["0"]["probe"]
+    assert probe["wind"] == [None, [117, 315, 2], [117, 315, 2], None]  # 6.0 m/s is 11.7 kn
+    assert "model" not in probe  # no weather source: nothing from a model
+
+
+def test_write_html_logbook_probe_has_no_wind_lists_without_any_wind(tmp_path: Path):
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([_trip(track=_wind_track())], out_path, utc_offset_hours=0)
+
+    probe = _trips_json(out_path.read_text(encoding="utf-8"))["0"]["probe"]
+    assert "wind" not in probe and "model" not in probe  # a boat without a wind instrument and without weather carries nothing
+
+
+def test_write_html_logbook_probe_has_the_weather_models_wind_when_a_weather_source_is_given(tmp_path: Path):
+    weather = _ModelWeather(wind_kn=12.3, wind_deg=224.6)
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([_trip(track=_track_with_depths([5.0, 5.0, 5.0]))], out_path, utc_offset_hours=0, weather=weather)
+
+    probe = _trips_json(out_path.read_text(encoding="utf-8"))["0"]["probe"]
+    assert probe["model"] == [[123, 225], [123, 225], [123, 225]]
+    assert "wind" not in probe  # the model's wind is never put in the instrument's list
+
+
+def test_write_html_logbook_probe_leaves_out_a_model_hour_without_wind(tmp_path: Path):
+    weather = _ModelWeather(wind_kn=None, wind_deg=None)
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([_trip(track=_track_with_depths([5.0, 5.0, 5.0]))], out_path, utc_offset_hours=0, weather=weather)
+
+    assert "model" not in _trips_json(out_path.read_text(encoding="utf-8"))["0"]["probe"]
+
+
+def test_write_html_logbook_wind_texts_exist_in_every_language():
+    from nmea2log.translations import LANGUAGES
+
+    for language, texts in LANGUAGES.items():
+        for key in ("probe_wind_apparent", "probe_wind_true", "probe_wind_model", "probe_side_starboard", "probe_side_port"):
+            assert texts.get(key), (language, key)
+
+
+def test_write_html_logbook_probe_has_no_model_wind_when_the_boat_has_a_wind_instrument(tmp_path: Path):
+    """A boat with a wind instrument gets its own wind only -- not the model's, not even at the points where the instrument has
+    no reading (the 1st and the 4th sample here)."""
+    weather = _ModelWeather()
+    track = _wind_track(wind_speed_ms=6.0, wind_angle_deg=315.4, wind_reference=2)
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([_trip(track=track)], out_path, utc_offset_hours=0, weather=weather)
+
+    probe = _trips_json(out_path.read_text(encoding="utf-8"))["0"]["probe"]
+    assert "wind" in probe and "model" not in probe
+
+
+def _log_wind_headers(html: str):
+    return [h for h in re.findall(r'<th><span data-i18n="(log_header_[a-z_]+)"', _log_table_html(html)) if "wind" in h]
+
+
+def test_write_html_logbook_log_has_the_model_wind_column_for_a_boat_without_a_wind_instrument(tmp_path: Path):
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook(
+        [_trip(track=_track_with_depths([5.0] * 10))], out_path, utc_offset_hours=0, log_interval_minutes=30, weather=_ModelWeather()
+    )
+
+    html = out_path.read_text(encoding="utf-8")
+    assert _log_wind_headers(html) == ["log_header_wind"]
+    assert "14,2 kn" not in html and "12,3 kn" in _log_table_html(html)  # the model's wind, in the log's own wind column
+
+
+def test_write_html_logbook_log_has_only_the_instruments_wind_for_a_boat_with_a_wind_instrument(tmp_path: Path):
+    track = _track_with_depths([5.0] * 10)
+    track = [
+        NavSample(s.time, s.lat, s.lon, s.sog_ms, depth_m=s.depth_m, wind_speed_ms=6.0, wind_angle_deg=315.4, wind_reference=2)
+        for s in track
+    ]
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([_trip(track=track)], out_path, utc_offset_hours=0, log_interval_minutes=30, weather=_ModelWeather())
+
+    table = _log_table_html(out_path.read_text(encoding="utf-8"))
+    assert _log_wind_headers(out_path.read_text(encoding="utf-8")) == ["log_header_wind_instrument"]  # no model wind column
+    assert "12,3 kn" not in table  # nothing of the model's wind
+    first_row = re.search(r"<tbody><tr>(.*?)</tr>", table, re.S).group(1)
+    assert "11,7 kn" in first_row  # the instrument's: 6.0 m/s
+    assert "45&deg;" in first_row and "probe_side_port" in first_row  # 315.4 degrees from the bow is 44.6, shown as 45, to port
+
+
+def test_write_html_logbook_log_gives_a_wind_direction_from_north_no_side(tmp_path: Path):
+    """WIND_REFERENCE 0 (true, from north) is a direction, not an angle from the bow: degrees only, no starboard or port."""
+    track = [
+        NavSample(s.time, s.lat, s.lon, s.sog_ms, depth_m=s.depth_m, wind_speed_ms=6.0, wind_angle_deg=225.0, wind_reference=0)
+        for s in _track_with_depths([5.0] * 10)
+    ]
+    out_path = tmp_path / "logbook.html"
+
+    write_html_logbook([_trip(track=track)], out_path, utc_offset_hours=0, log_interval_minutes=30)
+
+    first_row = re.search(r"<tbody><tr>(.*?)</tr>", _log_table_html(out_path.read_text(encoding="utf-8")), re.S).group(1)
+    assert "225&deg;" in first_row and "probe_side" not in first_row
+
