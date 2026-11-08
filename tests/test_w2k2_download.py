@@ -1248,3 +1248,186 @@ def test_main_keeps_the_401_message_when_the_login_is_refused(monkeypatch, tmp_p
 
     assert "401" in str(exc_info.value)
     assert "credentials" in str(exc_info.value)
+
+
+# --- a candidate must have the data logs, and says what it is -------------------------------------------------------
+
+from nmea2log import w2k2_download as _w2k2_download  # noqa: E402
+
+_REAL_CHECK_DATA_LOGS = _w2k2_download._check_data_logs  # captured before conftest puts a no-op in its place
+
+
+class _SessionWithLogs:
+    """A session whose list of data logs is ``reply`` (a value, or an exception to raise)."""
+
+    def __init__(self, reply):
+        self.reply = reply
+
+    def get_json(self, path, params=None):
+        assert path == "/api/data_logs"
+        if isinstance(self.reply, BaseException):
+            raise self.reply
+        return self.reply
+
+
+def test_check_data_logs_accepts_a_host_that_lists_them():
+    _REAL_CHECK_DATA_LOGS(_SessionWithLogs({"dataFolders": []}))
+
+
+def test_check_data_logs_lets_a_501_through_as_an_oserror():
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        _REAL_CHECK_DATA_LOGS(_SessionWithLogs(_http_error(501)))
+
+    assert exc_info.value.code == 501
+
+
+def test_check_data_logs_turns_a_reply_that_is_not_json_into_an_oserror():
+    with pytest.raises(OSError, match="no list of data logs"):
+        _REAL_CHECK_DATA_LOGS(_SessionWithLogs(ValueError("Expecting value")))
+
+
+def _data_logs_by_host(monkeypatch, replies):
+    """_check_data_logs() as a fake: ``replies`` maps a host (from the session's token) to an exception to raise, or
+    nothing. A session made by _login_by_host() carries its host as ``base_url``."""
+    import nmea2log.w2k2_download as w2k2_download
+
+    def fake_check(session):
+        reply = replies.get(session.base_url)
+        if isinstance(reply, BaseException):
+            raise reply
+
+    monkeypatch.setattr(w2k2_download, "_check_data_logs", fake_check)
+
+
+def test_connect_to_w2k2_skips_a_host_that_accepts_the_login_but_has_no_data_logs(monkeypatch, tmp_path, log_lines):
+    """The tester's case: .27 answered the login with a token and then said "501 Not Implemented" to the list of data
+    logs (it is not a W2K-2 that logs data); the next one is the W2K-2."""
+    from nmea2log.w2k2_download import connect_to_w2k2
+
+    hosts = ["http://192.168.0.27", "http://192.168.0.29"]
+    _scan_finds(monkeypatch, hosts)
+    tried = _login_by_host(monkeypatch, {hosts[0]: "token-27", hosts[1]: "token-29"})
+    _data_logs_by_host(monkeypatch, {hosts[0]: _http_error(501)})
+
+    host, session = connect_to_w2k2("192.168.0.", _config(tmp_path))
+
+    assert host == hosts[1] and session.token == "token-29"
+    assert tried == hosts
+    assert any("192.168.0.27: not usable" in line and "501" in line for line in log_lines)
+    assert any("Using the W2K-2 at 192.168.0.29" in line for line in log_lines)
+
+
+def test_connect_to_w2k2_with_one_host_without_data_logs_raises_that_error(monkeypatch, tmp_path):
+    from nmea2log.w2k2_download import connect_to_w2k2
+
+    _scan_finds(monkeypatch, ["http://10.0.0.5"])
+    _login_by_host(monkeypatch, {"http://10.0.0.5": "token"})
+    _data_logs_by_host(monkeypatch, {"http://10.0.0.5": _http_error(501)})
+
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        connect_to_w2k2("10.0.0.", _config(tmp_path))
+
+    assert exc_info.value.code == 501
+
+
+def test_connect_to_w2k2_scans_on_when_the_remembered_host_has_no_data_logs(monkeypatch, tmp_path):
+    import nmea2log.w2k2_download as w2k2_download
+    from nmea2log.w2k2_download import connect_to_w2k2
+
+    monkeypatch.setattr(w2k2_download, "_last_host", "http://192.168.0.27")
+    hosts = ["http://192.168.0.27", "http://192.168.0.29"]
+    _scan_finds(monkeypatch, hosts)
+    _login_by_host(monkeypatch, {hosts[0]: "token-27", hosts[1]: "token-29"})
+    _data_logs_by_host(monkeypatch, {hosts[0]: _http_error(501)})
+    monkeypatch.setattr(w2k2_download, "_looks_like_w2k2", lambda ip: True)
+
+    host, _session = connect_to_w2k2("192.168.0.", _config(tmp_path))
+
+    assert host == hosts[1]
+
+
+def test_connect_to_w2k2_says_what_each_candidate_is(monkeypatch, tmp_path, log_lines):
+    import nmea2log.w2k2_download as w2k2_download
+    from nmea2log.w2k2_download import connect_to_w2k2
+
+    hosts = ["http://192.168.0.27", "http://192.168.0.29"]
+    monkeypatch.setattr(w2k2_download, "_host_titles", {"192.168.0.27": "Actisense W2K-1"})
+    _scan_finds(monkeypatch, hosts)
+    _login_by_host(monkeypatch, {hosts[0]: _http_error(401), hosts[1]: "token-29"})
+
+    connect_to_w2k2("192.168.0.", _config(tmp_path))
+
+    assert any("Found 2 possible W2K-2 devices (192.168.0.27, 192.168.0.29)" in line for line in log_lines)
+    assert any('Trying 192.168.0.27 ("Actisense W2K-1")' in line for line in log_lines)
+    assert any(line.endswith("Trying 192.168.0.29") for line in log_lines)  # no title seen: just the address
+
+
+def _page_replies(monkeypatch, pages):
+    """The scan's HTTP requests answered from ``pages`` (ip -> html); an ip that is not in it has the port closed."""
+    def fake_create_connection(address, timeout=None):
+        if address[0] not in pages:
+            raise OSError("connection refused")
+        return _FakeConnection()
+
+    class _FakeResponse:
+        def __init__(self, body):
+            self.body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, n=None):
+            return self.body.encode("utf-8")
+
+    def fake_urlopen(request, timeout=None):
+        ip = request.full_url.split("//", 1)[1].rstrip("/")
+        return _FakeResponse(pages[ip])
+
+    monkeypatch.setattr(socket, "create_connection", fake_create_connection)
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+
+def test_looks_like_w2k2_remembers_the_title_and_how_sure_the_match_is(monkeypatch):
+    import nmea2log.w2k2_download as w2k2_download
+
+    monkeypatch.setattr(w2k2_download, "_host_titles", {})
+    monkeypatch.setattr(w2k2_download, "_host_certainty", {})
+    _page_replies(
+        monkeypatch,
+        {
+            "10.0.0.1": "<title> Actisense  W2K-2 </title>",
+            "10.0.0.2": "<title>Actisense gateway</title>",
+            "10.0.0.3": "<html>Zm9vYmFyW2sK w2k</html>",
+        },
+    )
+
+    assert all(_looks_like_w2k2(ip) for ip in ("10.0.0.1", "10.0.0.2", "10.0.0.3"))
+
+    assert w2k2_download._host_titles == {"10.0.0.1": "Actisense W2K-2", "10.0.0.2": "Actisense gateway", "10.0.0.3": ""}
+    assert w2k2_download._host_certainty == {"10.0.0.1": 0, "10.0.0.2": 1, "10.0.0.3": 2}
+
+
+def test_discover_w2k2_hosts_puts_the_sure_matches_first_in_address_order(monkeypatch):
+    import nmea2log.w2k2_download as w2k2_download
+
+    monkeypatch.setattr(w2k2_download, "_host_titles", {})
+    monkeypatch.setattr(w2k2_download, "_host_certainty", {})
+    _page_replies(
+        monkeypatch,
+        {
+            "192.168.0.10": "<html>blob w2k blob</html>",  # only "w2k" by chance
+            "192.168.0.20": "<title>Actisense</title>",
+            "192.168.0.30": "<title>W2K-2</title>",
+            "192.168.0.40": "<title>Actisense W2K-2</title>",
+        },
+    )
+
+    assert discover_w2k2_hosts(subnet_prefix="192.168.0.") == [
+        "http://192.168.0.30",
+        "http://192.168.0.40",
+        "http://192.168.0.20",
+        "http://192.168.0.10",
+    ]

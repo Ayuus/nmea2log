@@ -31,6 +31,13 @@ def _forget_the_last_w2k2_host(monkeypatch):
     monkeypatch.setattr("nmea2log.w2k2_download._last_host", None)
 
 
+@pytest.fixture(autouse=True)
+def _no_data_log_check_on_a_w2k2_candidate(monkeypatch):
+    """connect_to_w2k2() asks a host that accepted the login for its list of data logs too; the tests that put a fake
+    session or a fake login in its place have nothing to ask. test_w2k2_download.py has the tests of that check."""
+    monkeypatch.setattr("nmea2log.w2k2_download._check_data_logs", lambda session: None)
+
+
 @pytest.fixture
 def log_lines():
     """Every line nmea2log.log.log() emits while the test runs (capsys can't see them: log()

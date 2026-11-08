@@ -43,6 +43,7 @@ import concurrent.futures
 import getpass
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -246,6 +247,15 @@ def _local_subnet_prefix() -> str:
     )
 
 
+# What the start page of every host that looked like a W2K-2 said: the title (or "") and how sure the match is (0 = names
+# the W2K-2, 1 = names Actisense, 2 = only has "w2k" somewhere, which any page can by chance). Only for the log and for
+# the order the candidates are tried in; written by the scan, from its threads.
+_host_titles: Dict[str, str] = {}
+_host_certainty: Dict[str, int] = {}
+
+_TITLE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+
+
 def _looks_like_w2k2(ip: str) -> bool:
     try:
         with socket.create_connection((ip, _DISCOVERY_PORT), timeout=_DISCOVERY_CONNECT_TIMEOUT):
@@ -260,7 +270,13 @@ def _looks_like_w2k2(ip: str) -> bool:
             body = response.read(4096).decode("utf-8", errors="replace")
     except (urllib.error.URLError, OSError, ValueError):
         return False
-    return "actisense" in body.lower() or "w2k" in body.lower()
+    lowered = body.lower()
+    if "actisense" not in lowered and "w2k" not in lowered:
+        return False
+    title = _TITLE.search(body)
+    _host_titles[ip] = " ".join(title.group(1).split())[:60] if title else ""
+    _host_certainty[ip] = 0 if ("w2k-2" in lowered or "w2k2" in lowered) else 1 if "actisense" in lowered else 2
+    return True
 
 
 def _candidate_subnet_prefixes() -> List[str]:
@@ -294,9 +310,10 @@ def discover_w2k2_hosts(subnet_prefix: Optional[str] = None) -> List[str]:
             log(f"[info] Scanning {prefix}1-254 for a W2K-2...", file=sys.stderr)
         hosts = [f"{prefix}{i}" for i in range(1, 255)]
         with concurrent.futures.ThreadPoolExecutor(max_workers=_DISCOVERY_MAX_WORKERS) as executor:
-            found = [f"http://{ip}" for ip, ok in zip(hosts, executor.map(_looks_like_w2k2, hosts)) if ok]
+            found = [ip for ip, ok in zip(hosts, executor.map(_looks_like_w2k2, hosts)) if ok]
         if found:
-            return found
+            found.sort(key=lambda ip: _host_certainty.get(ip, 1))  # stable: address order stays within a certainty
+            return [f"http://{ip}" for ip in found]
     return []
 
 
@@ -440,6 +457,22 @@ def _short_host(host: str) -> str:
     return host[len("http://"):] if host.startswith("http://") else host
 
 
+def _check_data_logs(session: _Session) -> None:
+    """Raises when the host does not serve the data logs. A device can accept the login of a W2K-2 without having them (an
+    Actisense W2K-1 has the same web login but no data logging: its list of logs is "501 Not Implemented"), and then
+    it is not the one to use. Raises an OSError, like a refused login does, so the next candidate is tried."""
+    try:
+        session.get_json("/api/data_logs")
+    except ValueError as exc:  # a reply that is not JSON
+        raise OSError(f"no list of data logs ({exc})") from exc
+
+
+def _title_suffix(host: str) -> str:
+    """What the host's start page called itself when the scan saw that, for after its address: `` ("W2K-1")``."""
+    title = _host_titles.get(_short_host(host))
+    return f' ("{title}")' if title else ""
+
+
 # The W2K-2 that was used last time, kept for as long as the process lives: the next connect_to_w2k2() tries it first
 # (one request instead of a scan of 254 addresses, and the right one when there are several W2K-2). The boat mode, a
 # long-lived service, profits most; once the app has been closed the first search starts from scratch.
@@ -459,32 +492,37 @@ def _remember_host(config: W2K2Config, host: str) -> None:
 def _login_on_one_of(
     hosts: List[str], config: W2K2Config, failed: Dict[str, BaseException]
 ) -> Tuple[str, _Session]:
-    """Logs in on the first of ``hosts`` that accepts the login. ``failed`` holds the hosts that were already tried and
-    why they failed. With one host that is the one, and a failed login raises as it always did. With several (each W2K-2
-    has its own username and password, the login of the device itself) they are tried in address order with the login
-    from Settings and the first that accepts it is used -- the others are somebody else's. If none accepts it, the
-    last error is raised, so the usual messages (invalid credentials, network error) still apply."""
+    """Logs in on the first of ``hosts`` that accepts the login and has the data logs. ``failed`` holds the hosts that
+    were already tried and why they failed. With one host that is the one, and a failure raises as it always did. With
+    several (each W2K-2 has its own username and password, the login of the device itself, and what looks like a W2K-2
+    to the scan can be any device with a web page that mentions it) they are tried in order with the login from
+    Settings and the first that accepts it and serves the data logs is used -- the others are somebody else's, or not a
+    W2K-2. If none does, the last error is raised, so the usual messages (invalid credentials, network error) still apply."""
     if len(hosts) == 1:
         host = hosts[0]
         if host in failed:
             raise failed[host]
-        log(f"[info] Found W2K-2 at {host}")
-        return host, make_session(host, config)
+        log(f"[info] Found W2K-2 at {host}{_title_suffix(host)}")
+        session = make_session(host, config)
+        _check_data_logs(session)
+        return host, session
 
     names = ", ".join(_short_host(host) for host in hosts)
-    log(f"[info] Found {len(hosts)} W2K-2 devices ({names}) -- trying the login from Settings on each")
+    log(f"[info] Found {len(hosts)} possible W2K-2 devices ({names}) -- trying the login from Settings on each")
     last_error: Optional[BaseException] = None
     for host in hosts:
         error = failed.get(host)
         if error is None:
+            log(f"[info] Trying {_short_host(host)}{_title_suffix(host)}")
             try:
                 session = make_session(host, config)
+                _check_data_logs(session)
             except LOGIN_ERRORS as exc:
                 error = exc
             else:
                 log(f"[info] Using the W2K-2 at {_short_host(host)}")
                 return host, session
-        log(f"[info] {_short_host(host)}: login not accepted ({error})")
+        log(f"[info] {_short_host(host)}: not usable ({error})")
         last_error = error
     raise last_error if last_error is not None else ValueError("no W2K-2 to connect to")
 
@@ -496,7 +534,9 @@ def _try_last_host(host: str, config: W2K2Config) -> Tuple[Optional[_Session], O
         return None, None
     log(f"[info] Found W2K-2 at {host} (the one used last time)")  # before the login, as with a W2K-2 found by the scan
     try:
-        return make_session(host, config), None
+        session = make_session(host, config)
+        _check_data_logs(session)
+        return session, None
     except LOGIN_ERRORS as exc:
         return None, exc
 
