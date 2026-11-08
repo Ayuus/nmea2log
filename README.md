@@ -244,8 +244,8 @@ home wifi router both are joined to as clients). The scan only looks at the star
 it can list hosts that are no W2K-2 (any page that happens to contain "w2k"); the log says what each candidate is (the
 title of its page). When several answer, each has a login of its own: the one from `[w2k2]` is tried on each, the ones
 whose page names the W2K-2 first and then by address, and the first that accepts it *and* serves the list of data logs is
-used (an Actisense device without data logging, such as a W2K-1, accepts the login but answers the list with "501 Not
-Implemented", so it is skipped). The address that was used is remembered while the program runs (the boat mode of the
+used (a device that accepts the login but has no data logs, answering the list with "501 Not Implemented", is
+skipped). The address that was used is remembered while the program runs (the boat mode of the
 apps, a long-running service, profits) and tried first next time, without a scan.
 
 Every setting in `[nmea2log]` can also be passed as a command-line flag instead (see "Useful
