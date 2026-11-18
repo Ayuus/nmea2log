@@ -241,12 +241,15 @@ run by scanning this machine's own local subnet for a host whose web interface i
 as Actisense/W2K-2 (see `discover_w2k2_hosts` in `w2k2_download.py`). This only works while this
 machine is on the same wifi network as the W2K-2 (either its own access point, or a shared boat/
 home wifi router both are joined to as clients). The scan only looks at the start page, so on a network with many devices
-it can list hosts that are no W2K-2 (any page that happens to contain "w2k"); the log says what each candidate is (the
-title of its page). When several answer, each has a login of its own: the one from `[w2k2]` is tried on each, the ones
-whose page names the W2K-2 first and then by address, and the first that accepts it *and* serves the list of data logs is
-used (a device that accepts the login but has no data logs, answering the list with "501 Not Implemented", is
-skipped). The address that was used is remembered while the program runs (the boat mode of the
-apps, a long-running service, profits) and tried first next time, without a scan.
+it can list hosts that are no W2K-2 (any page that happens to contain "w2k"); each candidate is then asked for its model
+(`GET /api/about?object=about&dynamic=true`, answered without a login with `{"about": {"modelName": "W2K-2", ...}}`),
+and the log says what each is (that model, or the title of its page when it does not say). A W2K-1 has the same web
+interface, the same login and the same data logs, so the model is the only thing that tells it from a W2K-2. When several
+answer, each has a login of its own: the one from `[w2k2]` is tried on each, the ones that say they are a W2K-2 first and
+then the others by address (a device of another model is not left out, only tried later), and the first that accepts the
+login *and* serves the list of data logs is used (a device that accepts the login but has no data logs, answering the list
+with "501 Not Implemented", is skipped). The address that was used is remembered while the program runs (the boat mode of
+the apps, a long-running service, profits) and tried first next time, without a scan.
 
 Every setting in `[nmea2log]` can also be passed as a command-line flag instead (see "Useful
 options" below); an explicit flag always overrides what's in the config file. `[w2k2]` only has

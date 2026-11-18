@@ -1,10 +1,12 @@
 import json
 import socket
+import urllib.error
 import urllib.request
 from pathlib import Path
 
 import pytest
 
+from nmea2log import w2k2_download
 from nmea2log.w2k2_download import (
     _candidate_subnet_prefixes,
     _local_subnet_prefix,
@@ -1252,9 +1254,7 @@ def test_main_keeps_the_401_message_when_the_login_is_refused(monkeypatch, tmp_p
 
 # --- a candidate must have the data logs, and says what it is -------------------------------------------------------
 
-from nmea2log import w2k2_download as _w2k2_download  # noqa: E402
-
-_REAL_CHECK_DATA_LOGS = _w2k2_download._check_data_logs  # captured before conftest puts a no-op in its place
+_REAL_CHECK_DATA_LOGS = w2k2_download._check_data_logs  # captured before conftest puts a no-op in its place
 
 
 class _SessionWithLogs:
@@ -1289,7 +1289,6 @@ def test_check_data_logs_turns_a_reply_that_is_not_json_into_an_oserror():
 def _data_logs_by_host(monkeypatch, replies):
     """_check_data_logs() as a fake: ``replies`` maps a host (from the session's token) to an exception to raise, or
     nothing. A session made by _login_by_host() carries its host as ``base_url``."""
-    import nmea2log.w2k2_download as w2k2_download
 
     def fake_check(session):
         reply = replies.get(session.base_url)
@@ -1331,7 +1330,6 @@ def test_connect_to_w2k2_with_one_host_without_data_logs_raises_that_error(monke
 
 
 def test_connect_to_w2k2_scans_on_when_the_remembered_host_has_no_data_logs(monkeypatch, tmp_path):
-    import nmea2log.w2k2_download as w2k2_download
     from nmea2log.w2k2_download import connect_to_w2k2
 
     monkeypatch.setattr(w2k2_download, "_last_host", "http://192.168.0.27")
@@ -1347,23 +1345,26 @@ def test_connect_to_w2k2_scans_on_when_the_remembered_host_has_no_data_logs(monk
 
 
 def test_connect_to_w2k2_says_what_each_candidate_is(monkeypatch, tmp_path, log_lines):
-    import nmea2log.w2k2_download as w2k2_download
     from nmea2log.w2k2_download import connect_to_w2k2
 
     hosts = ["http://192.168.0.27", "http://192.168.0.29"]
-    monkeypatch.setattr(w2k2_download, "_host_titles", {"192.168.0.27": "Actisense W2K-1"})
+    monkeypatch.setattr(w2k2_download, "_host_names", {"192.168.0.27": "W2K-1"})
     _scan_finds(monkeypatch, hosts)
     _login_by_host(monkeypatch, {hosts[0]: _http_error(401), hosts[1]: "token-29"})
 
     connect_to_w2k2("192.168.0.", _config(tmp_path))
 
     assert any("Found 2 possible W2K-2 devices (192.168.0.27, 192.168.0.29)" in line for line in log_lines)
-    assert any('Trying 192.168.0.27 ("Actisense W2K-1")' in line for line in log_lines)
-    assert any(line.endswith("Trying 192.168.0.29") for line in log_lines)  # no title seen: just the address
+    assert any('Trying 192.168.0.27 ("W2K-1")' in line for line in log_lines)
+    assert any(line.endswith("Trying 192.168.0.29") for line in log_lines)  # no name seen: just the address
 
 
-def _page_replies(monkeypatch, pages):
-    """The scan's HTTP requests answered from ``pages`` (ip -> html); an ip that is not in it has the port closed."""
+def _page_replies(monkeypatch, pages, abouts=None):
+    """The scan's HTTP requests answered from ``pages`` (ip -> html); an ip that is not in it has the port closed.
+    ``abouts`` (ip -> the reply to the request for the model, as text) answers those; an ip that is not in it gives an
+    error, as a device without that page does. Returns the list the requests are added to."""
+    requests = []
+
     def fake_create_connection(address, timeout=None):
         if address[0] not in pages:
             raise OSError("connection refused")
@@ -1383,51 +1384,87 @@ def _page_replies(monkeypatch, pages):
             return self.body.encode("utf-8")
 
     def fake_urlopen(request, timeout=None):
-        ip = request.full_url.split("//", 1)[1].rstrip("/")
-        return _FakeResponse(pages[ip])
+        requests.append(request)
+        rest = request.full_url.split("//", 1)[1]
+        if "/api/about" in rest:
+            ip = rest.split("/", 1)[0]
+            if ip not in (abouts or {}):
+                raise urllib.error.HTTPError(request.full_url, 404, "Not Found", {}, None)
+            return _FakeResponse(abouts[ip])
+        return _FakeResponse(pages[rest.rstrip("/")])
 
     monkeypatch.setattr(socket, "create_connection", fake_create_connection)
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    return requests
 
 
-def test_looks_like_w2k2_remembers_the_title_and_how_sure_the_match_is(monkeypatch):
-    import nmea2log.w2k2_download as w2k2_download
+# --- the model the device says it is ---------------------------------------------------------------------------------
 
-    monkeypatch.setattr(w2k2_download, "_host_titles", {})
-    monkeypatch.setattr(w2k2_download, "_host_certainty", {})
+_ABOUT_W2K2 = '{"version": "1.7.5", "post": "allowed", "about": {"modelName": "W2K-2", "loggedIn": false}}'
+_ABOUT_W2K1 = '{"version": "1.7.5", "about": {"modelName": "W2K-1", "loggedIn": false}}'
+
+
+def test_device_model_reads_the_model_name_from_the_about_reply(monkeypatch):
+    _page_replies(monkeypatch, {}, {"10.0.0.1": _ABOUT_W2K2, "10.0.0.2": _ABOUT_W2K1})
+
+    assert w2k2_download._device_model("10.0.0.1") == "W2K-2"
+    assert w2k2_download._device_model("10.0.0.2") == "W2K-1"
+
+
+def test_device_model_asks_for_the_about_page_without_a_login(monkeypatch):
+    requests = _page_replies(monkeypatch, {}, {"10.0.0.1": _ABOUT_W2K2})
+
+    w2k2_download._device_model("10.0.0.1")
+
+    assert [request.full_url for request in requests] == ["http://10.0.0.1/api/about?object=about&dynamic=true"]
+    assert not requests[0].has_header("Authorization")
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [None, "<html>no json</html>", "{}", '{"about": {}}', '{"about": null}', "[1, 2]", '{"about": {"modelName": 7}}'],
+)
+def test_device_model_is_empty_when_the_device_does_not_say(monkeypatch, reply):
+    _page_replies(monkeypatch, {}, {} if reply is None else {"10.0.0.1": reply})
+
+    assert w2k2_download._device_model("10.0.0.1") == ""
+
+
+def test_looks_like_w2k2_names_a_host_by_its_model_else_by_its_title(monkeypatch):
+    monkeypatch.setattr(w2k2_download, "_host_names", {})
     _page_replies(
         monkeypatch,
         {
-            "10.0.0.1": "<title> Actisense  W2K-2 </title>",
-            "10.0.0.2": "<title>Actisense gateway</title>",
+            "10.0.0.1": "<title>Actisense</title>",
+            "10.0.0.2": "<title> Actisense  DMX-1 </title>",
             "10.0.0.3": "<html>Zm9vYmFyW2sK w2k</html>",
         },
+        {"10.0.0.1": _ABOUT_W2K1},
     )
 
     assert all(_looks_like_w2k2(ip) for ip in ("10.0.0.1", "10.0.0.2", "10.0.0.3"))
 
-    assert w2k2_download._host_titles == {"10.0.0.1": "Actisense W2K-2", "10.0.0.2": "Actisense gateway", "10.0.0.3": ""}
-    assert w2k2_download._host_certainty == {"10.0.0.1": 0, "10.0.0.2": 1, "10.0.0.3": 2}
+    assert w2k2_download._host_names == {"10.0.0.1": "W2K-1", "10.0.0.2": "Actisense DMX-1", "10.0.0.3": ""}
 
 
-def test_discover_w2k2_hosts_puts_the_sure_matches_first_in_address_order(monkeypatch):
-    import nmea2log.w2k2_download as w2k2_download
-
-    monkeypatch.setattr(w2k2_download, "_host_titles", {})
-    monkeypatch.setattr(w2k2_download, "_host_certainty", {})
+def test_discover_w2k2_hosts_tries_the_device_that_says_it_is_a_w2k2_first(monkeypatch):
+    """The tester's network: a W2K-1 on .73 and the W2K-2 on .75, both with the page title "Actisense", the same login
+    and both with data logs. Only the model tells them apart. The others keep their address order."""
+    monkeypatch.setattr(w2k2_download, "_host_names", {})
     _page_replies(
         monkeypatch,
         {
-            "192.168.0.10": "<html>blob w2k blob</html>",  # only "w2k" by chance
-            "192.168.0.20": "<title>Actisense</title>",
-            "192.168.0.30": "<title>W2K-2</title>",
-            "192.168.0.40": "<title>Actisense W2K-2</title>",
+            "192.168.0.51": "<title>Actisense</title>",  # does not say what it is
+            "192.168.0.73": "<title>Actisense</title>",
+            "192.168.0.75": "<title>Actisense</title>",
+            "192.168.0.80": "<title>Actisense W2K-2</title>",  # no model to ask for, but its page says it
         },
+        {"192.168.0.73": _ABOUT_W2K1, "192.168.0.75": _ABOUT_W2K2},
     )
 
     assert discover_w2k2_hosts(subnet_prefix="192.168.0.") == [
-        "http://192.168.0.30",
-        "http://192.168.0.40",
-        "http://192.168.0.20",
-        "http://192.168.0.10",
+        "http://192.168.0.75",
+        "http://192.168.0.80",
+        "http://192.168.0.51",
+        "http://192.168.0.73",
     ]

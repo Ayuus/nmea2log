@@ -247,16 +247,37 @@ def _local_subnet_prefix() -> str:
     )
 
 
-# What the start page of every host that looked like a W2K-2 said: the title (or "") and how sure the match is (0 = names
-# the W2K-2, 1 = names Actisense, 2 = only has "w2k" somewhere, which any page can by chance). Only for the log and for
-# the order the candidates are tried in; written by the scan, from its threads.
-_host_titles: Dict[str, str] = {}
-_host_certainty: Dict[str, int] = {}
+# What every host that looked like a W2K-2 calls itself: the model it names when asked (``_device_model``), else the
+# title of its start page, else "". For the log, and so that the ones that say they are a W2K-2 are tried first.
+# Written by the scan, from its threads.
+_host_names: Dict[str, str] = {}
 
 _TITLE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 
+# The device tells its model without a login: the Information page of its web interface asks for this, and the reply
+# is {"version": ..., "about": {"modelName": "W2K-2", ...}}. A W2K-1 has the same web interface, the same login and the
+# same data logs, so this is the one thing that tells the two apart.
+_ABOUT_PATH = "/api/about"
+_ABOUT_PARAMS = {"object": "about", "dynamic": "true"}
+
+
+def _device_model(ip: str) -> str:
+    """The model the device at ``ip`` says it is ("W2K-2", "W2K-1", ...), or "" when it does not say (the request
+    fails, or the reply is not what the W2K-2's web interface gets)."""
+    try:
+        request = urllib.request.Request(
+            f"http://{ip}{_ABOUT_PATH}?{urllib.parse.urlencode(_ABOUT_PARAMS)}",
+            headers={"User-Agent": "nmea2log-discovery/0.1", "Accept": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=_DISCOVERY_HTTP_TIMEOUT) as response:
+            model = json.loads(response.read(16384).decode("utf-8", errors="replace"))["about"]["modelName"]
+    except (OSError, ValueError, LookupError, TypeError):  # no answer, not JSON, or without the model
+        return ""
+    return " ".join(model.split())[:30] if isinstance(model, str) else ""
+
 
 def _looks_like_w2k2(ip: str) -> bool:
+    """Whether the host at ``ip`` has a web page that mentions Actisense or a W2K; remembers what it calls itself."""
     try:
         with socket.create_connection((ip, _DISCOVERY_PORT), timeout=_DISCOVERY_CONNECT_TIMEOUT):
             pass
@@ -268,15 +289,19 @@ def _looks_like_w2k2(ip: str) -> bool:
         )
         with urllib.request.urlopen(request, timeout=_DISCOVERY_HTTP_TIMEOUT) as response:
             body = response.read(4096).decode("utf-8", errors="replace")
-    except (urllib.error.URLError, OSError, ValueError):
+    except (OSError, ValueError):  # URLError and HTTPError are OSErrors
         return False
     lowered = body.lower()
     if "actisense" not in lowered and "w2k" not in lowered:
         return False
     title = _TITLE.search(body)
-    _host_titles[ip] = " ".join(title.group(1).split())[:60] if title else ""
-    _host_certainty[ip] = 0 if ("w2k-2" in lowered or "w2k2" in lowered) else 1 if "actisense" in lowered else 2
+    _host_names[ip] = _device_model(ip) or (" ".join(title.group(1).split())[:60] if title else "")
     return True
+
+
+def _says_it_is_a_w2k2(ip: str) -> bool:
+    """Whether the host named itself a W2K-2, by its model or else by the title of its page."""
+    return "w2k2" in _host_names.get(ip, "").lower().replace("-", "")
 
 
 def _candidate_subnet_prefixes() -> List[str]:
@@ -290,10 +315,10 @@ def _candidate_subnet_prefixes() -> List[str]:
 
 def discover_w2k2_hosts(subnet_prefix: Optional[str] = None) -> List[str]:
     """Finds every W2K-2 on the local network by scanning a /24 subnet (addresses 1 to 254) for hosts
-    whose web interface identifies itself as Actisense/W2K-2. Returns their base URLs in address order
-    (e.g. ["http://10.169.127.101"]), or an empty list if nothing matched anywhere. More than one can answer
-    on one network (a marina, a boatyard, a router several boats are joined to): each has a login of its
-    own, see connect_to_w2k2().
+    whose web interface identifies itself as Actisense/W2K-2. Returns their base URLs, those that say they are a W2K-2
+    first and the others after them, each group in address order (e.g. ["http://10.169.127.101"]), or an empty list if
+    nothing matched anywhere. More than one can answer on one network (a marina, a boatyard, a router several boats are
+    joined to): each has a login of its own, see connect_to_w2k2().
 
     By default (subnet_prefix=None) every subnet this machine currently has a private IPv4
     address on gets tried in turn (see _candidate_subnet_prefixes()) until one has a W2K-2 -- found in
@@ -312,7 +337,7 @@ def discover_w2k2_hosts(subnet_prefix: Optional[str] = None) -> List[str]:
         with concurrent.futures.ThreadPoolExecutor(max_workers=_DISCOVERY_MAX_WORKERS) as executor:
             found = [ip for ip, ok in zip(hosts, executor.map(_looks_like_w2k2, hosts)) if ok]
         if found:
-            found.sort(key=lambda ip: _host_certainty.get(ip, 1))  # stable: address order stays within a certainty
+            found.sort(key=lambda ip: not _says_it_is_a_w2k2(ip))  # stable: the others stay in address order
             return [f"http://{ip}" for ip in found]
     return []
 
@@ -334,7 +359,7 @@ class _Session:
     def get_json(self, path: str, params: Optional[Dict[str, str]] = None) -> Any:
         url = self.base_url + path
         if params:
-            url += "?" + _urlencode(params)
+            url += "?" + urllib.parse.urlencode(params)
         request = urllib.request.Request(url, headers=self._headers())
         with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
             return json.loads(response.read().decode("utf-8"))
@@ -371,7 +396,7 @@ class _Session:
         Falls back to a full restart if the server doesn't actually honor the Range request (some
         HTTP status other than 206 Partial Content) rather than assuming it did -- appending fresh
         full-file content after an existing partial would otherwise silently corrupt the file."""
-        url = self.base_url + path + "?" + _urlencode(params)
+        url = self.base_url + path + "?" + urllib.parse.urlencode(params)
         resume_from = target.stat().st_size if target.exists() else 0
         headers = self._headers()
         if resume_from:
@@ -429,10 +454,6 @@ class _Session:
                     received += len(chunk)
 
 
-def _urlencode(params: Dict[str, str]) -> str:
-    return urllib.parse.urlencode(params)
-
-
 def make_session(host: str, config: W2K2Config) -> _Session:
     session = _Session(host)
     if config.token:
@@ -458,19 +479,26 @@ def _short_host(host: str) -> str:
 
 
 def _check_data_logs(session: _Session) -> None:
-    """Raises when the host does not serve the data logs. A device can accept the login of a W2K-2 without having them (an
-    Actisense W2K-1 has the same web login but no data logging: its list of logs is "501 Not Implemented"), and then
-    it is not the one to use. Raises an OSError, like a refused login does, so the next candidate is tried."""
+    """Raises when the host does not serve the data logs. A device can accept the login of a W2K-2 without having them
+    (seen: its list of logs answers "501 Not Implemented"), and then it is not the one to use. Raises an OSError, like
+    a refused login does, so the next candidate is tried."""
     try:
         session.get_json("/api/data_logs")
     except ValueError as exc:  # a reply that is not JSON
         raise OSError(f"no list of data logs ({exc})") from exc
 
 
-def _title_suffix(host: str) -> str:
-    """What the host's start page called itself when the scan saw that, for after its address: `` ("W2K-1")``."""
-    title = _host_titles.get(_short_host(host))
-    return f' ("{title}")' if title else ""
+def _name_suffix(host: str) -> str:
+    """What the host called itself when the scan saw that, for after its address: `` ("W2K-1")``."""
+    name = _host_names.get(_short_host(host))
+    return f' ("{name}")' if name else ""
+
+
+def _log_in(host: str, config: W2K2Config) -> _Session:
+    """A session on ``host``, logged in, once the host also serves the data logs."""
+    session = make_session(host, config)
+    _check_data_logs(session)
+    return session
 
 
 # The W2K-2 that was used last time, kept for as long as the process lives: the next connect_to_w2k2() tries it first
@@ -483,7 +511,7 @@ _last_host: Optional[str] = None
 LOGIN_ERRORS = (OSError, SystemExit)
 
 
-def _remember_host(config: W2K2Config, host: str) -> None:
+def _remember_host(host: str, config: W2K2Config) -> None:
     global _last_host
     if not config.token:  # a token is not checked by logging in, so nothing proves this is the right host
         _last_host = host
@@ -502,10 +530,8 @@ def _login_on_one_of(
         host = hosts[0]
         if host in failed:
             raise failed[host]
-        log(f"[info] Found W2K-2 at {host}{_title_suffix(host)}")
-        session = make_session(host, config)
-        _check_data_logs(session)
-        return host, session
+        log(f"[info] Found W2K-2 at {host}{_name_suffix(host)}")
+        return host, _log_in(host, config)
 
     names = ", ".join(_short_host(host) for host in hosts)
     log(f"[info] Found {len(hosts)} possible W2K-2 devices ({names}) -- trying the login from Settings on each")
@@ -513,10 +539,9 @@ def _login_on_one_of(
     for host in hosts:
         error = failed.get(host)
         if error is None:
-            log(f"[info] Trying {_short_host(host)}{_title_suffix(host)}")
+            log(f"[info] Trying {_short_host(host)}{_name_suffix(host)}")
             try:
-                session = make_session(host, config)
-                _check_data_logs(session)
+                session = _log_in(host, config)
             except LOGIN_ERRORS as exc:
                 error = exc
             else:
@@ -534,9 +559,7 @@ def _try_last_host(host: str, config: W2K2Config) -> Tuple[Optional[_Session], O
         return None, None
     log(f"[info] Found W2K-2 at {host} (the one used last time)")  # before the login, as with a W2K-2 found by the scan
     try:
-        session = make_session(host, config)
-        _check_data_logs(session)
-        return session, None
+        return _log_in(host, config), None
     except LOGIN_ERRORS as exc:
         return None, exc
 
@@ -560,7 +583,7 @@ def connect_to_w2k2(subnet_prefix: Optional[str], config: W2K2Config) -> Optiona
     if not hosts:
         return None
     host, session = _login_on_one_of(hosts, config, failed)
-    _remember_host(config, host)
+    _remember_host(host, config)
     return host, session
 
 
