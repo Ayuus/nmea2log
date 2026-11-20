@@ -532,7 +532,8 @@ Set `MYSAILINGLOGBOOK_ANDROID_RES` to the Android `res` directory and `pytest` a
   firmware updates. In particular, the field name the login token comes back under isn't 100%
   confirmed (`w2k2_download.py` tries a number of common names, see `_TOKEN_KEYS`); if login
   succeeds but no token is found, the command shows the raw response so the right name can be
-  added.
+  added. A login the device refuses (it answers `"success": false` with an error code) is reported
+  as refused, not as a missing token.
 - **W2K-2 discovery**: `discover_w2k2_hosts` scans this machine's own /24 subnet (up to 254 addresses,
   ~1 second with concurrent connections) for a host answering on port 80 whose page identifies
   itself as Actisense/W2K-2. This assumes a /24 network (true for basically every home/boat

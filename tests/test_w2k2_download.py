@@ -1468,3 +1468,38 @@ def test_discover_w2k2_hosts_tries_the_device_that_says_it_is_a_w2k2_first(monke
         "http://192.168.0.51",
         "http://192.168.0.73",
     ]
+
+
+# --- the login itself ------------------------------------------------------------------------------------------------
+
+
+def _login_reply(monkeypatch, reply):
+    monkeypatch.setattr(w2k2_download._Session, "post_json", lambda self, path, body: reply)
+    return w2k2_download.W2K2Config(download_dir=Path("."), user="u", password="p")
+
+
+def test_make_session_says_so_when_the_device_refuses_the_login(monkeypatch):
+    """Seen on a device with another login: the reply is a normal 200 with success false, not an HTTP error."""
+    config = _login_reply(monkeypatch, {"version": "1.7.5", "success": False, "error": 2, "timeout": 300})
+
+    with pytest.raises(SystemExit) as exc:
+        w2k2_download.make_session("http://10.0.0.1", config)
+
+    assert "refused" in str(exc.value)
+    assert "error 2" in str(exc.value)
+    assert "_TOKEN_KEYS" not in str(exc.value)
+
+
+def test_make_session_still_names_the_token_keys_when_a_reply_has_no_token(monkeypatch):
+    config = _login_reply(monkeypatch, {"version": "1.7.5", "success": True})
+
+    with pytest.raises(SystemExit) as exc:
+        w2k2_download.make_session("http://10.0.0.1", config)
+
+    assert "_TOKEN_KEYS" in str(exc.value)
+
+
+def test_make_session_takes_the_token_from_the_reply(monkeypatch):
+    config = _login_reply(monkeypatch, {"success": True, "token": "abc"})
+
+    assert w2k2_download.make_session("http://10.0.0.1", config).token == "abc"

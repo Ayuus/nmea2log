@@ -464,6 +464,9 @@ def make_session(host: str, config: W2K2Config) -> _Session:
     password = config.password or getpass.getpass("Password: ")
     body = session.post_json("/api/login", {"user": user, "password": password})
     token = next((body[k] for k in _TOKEN_KEYS if body.get(k)), None)
+    if isinstance(body, dict) and body.get("success") is False:
+        # A refused login is answered with a normal reply, not an HTTP error: {"success": false, "error": 2, ...}.
+        sys.exit(f"[error] login refused by the device (error {body.get('error', '?')}); check the user name and password")
     if not token:
         sys.exit(
             "[error] login succeeded but no token found in the response; add the correct "
